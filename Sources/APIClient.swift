@@ -16,6 +16,8 @@ actor APIClient {
     func restoreTokens() throws -> Bool {
         tokens = try keychain.load()
         tokenGeneration += 1
+        refreshTask?.cancel()
+        refreshTask = nil
         return tokens != nil
     }
 
@@ -140,17 +142,21 @@ actor APIClient {
         if tokens.accessTokenExpiresAt.timeIntervalSinceNow > 30 {
             return tokens.accessToken
         }
+        let generation = tokenGeneration
         if let refreshTask {
-            return try await refreshTask.value.accessToken
+            let pair = try await refreshTask.value
+            guard generation == tokenGeneration else { throw AppError.unauthorized }
+            return pair.accessToken
         }
 
-        let generation = tokenGeneration
         let task = Task { try await refresh(tokens.refreshToken, generation: generation) }
         refreshTask = task
         defer {
             if generation == tokenGeneration { refreshTask = nil }
         }
-        return try await task.value.accessToken
+        let pair = try await task.value
+        guard generation == tokenGeneration else { throw AppError.unauthorized }
+        return pair.accessToken
     }
 
     private func refresh(_ refreshToken: String, generation: Int) async throws -> TokenPair {

@@ -102,7 +102,10 @@ enum TestFixtures {
     }
 
     static func session(for scenario: String, resetsRecorder: Bool = true) -> URLSession {
-        if resetsRecorder { StubRequestRecorder.shared.reset(scenario: scenario) }
+        if resetsRecorder {
+            StubRequestRecorder.shared.reset(scenario: scenario)
+            StubScenarioGate.shared.reset(scenario: scenario)
+        }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         configuration.httpAdditionalHeaders = ["X-Pomodorough-Test-Scenario": scenario]
@@ -111,6 +114,24 @@ enum TestFixtures {
 
     static func recordedRequests(for scenario: String) -> [RecordedRequest] {
         StubRequestRecorder.shared.requests(for: scenario)
+    }
+
+    static func waitForRequest(
+        in scenario: String,
+        path: String,
+        count: Int = 1,
+        timeout: Duration = .seconds(5)
+    ) async -> Bool {
+        await StubRequestRecorder.shared.waitForRequest(
+            in: scenario,
+            path: path,
+            count: count,
+            timeout: timeout
+        )
+    }
+
+    static func releaseScenario(_ scenario: String) {
+        StubScenarioGate.shared.release(scenario: scenario)
     }
 }
 
@@ -131,6 +152,72 @@ struct StaticTokenStore: TokenStoring {
     func load() throws -> TokenPair? { tokens }
     func save(_ tokens: TokenPair) throws {}
     func delete() throws {}
+}
+
+enum RecordingTokenStoreFailure: Error, Equatable, Hashable, Sendable {
+    case load
+    case save
+    case delete
+}
+
+enum RecordedTokenStoreOperation: Equatable, Sendable {
+    case load
+    case save(accessToken: String, refreshToken: String)
+    case delete
+}
+
+final class RecordingTokenStore: TokenStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private let failures: Set<RecordingTokenStoreFailure>
+    private var storedTokens: TokenPair?
+    private var recordedOperations: [RecordedTokenStoreOperation] = []
+
+    init(
+        tokens: TokenPair? = nil,
+        failures: Set<RecordingTokenStoreFailure> = []
+    ) {
+        storedTokens = tokens
+        self.failures = failures
+    }
+
+    var tokens: TokenPair? {
+        lock.withLock { storedTokens }
+    }
+
+    var operations: [RecordedTokenStoreOperation] {
+        lock.withLock { recordedOperations }
+    }
+
+    func replaceTokens(_ tokens: TokenPair?) {
+        lock.withLock { storedTokens = tokens }
+    }
+
+    func load() throws -> TokenPair? {
+        try lock.withLock {
+            recordedOperations.append(.load)
+            if failures.contains(.load) { throw RecordingTokenStoreFailure.load }
+            return storedTokens
+        }
+    }
+
+    func save(_ tokens: TokenPair) throws {
+        try lock.withLock {
+            recordedOperations.append(.save(
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken
+            ))
+            if failures.contains(.save) { throw RecordingTokenStoreFailure.save }
+            storedTokens = tokens
+        }
+    }
+
+    func delete() throws {
+        try lock.withLock {
+            recordedOperations.append(.delete)
+            if failures.contains(.delete) { throw RecordingTokenStoreFailure.delete }
+            storedTokens = nil
+        }
+    }
 }
 
 final class RecordingUserDefaults: UserDefaults {
@@ -189,38 +276,138 @@ final class RecordingAlarmScheduler: TimerAlarmScheduling {
 
 struct RecordedRequest: Sendable {
     let method: String
+    let url: String
     let path: String
     let body: Data?
+    let accept: String?
+    let contentType: String?
+    let authorization: String?
 }
 
 final class StubRequestRecorder: @unchecked Sendable {
     static let shared = StubRequestRecorder()
 
+    private struct Waiter {
+        let id: UUID
+        let path: String
+        let count: Int
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
     private let lock = NSLock()
     private var storage: [String: [RecordedRequest]] = [:]
+    private var waiters: [String: [Waiter]] = [:]
 
     func reset(scenario: String) {
-        lock.withLock { storage[scenario] = [] }
+        let continuations = lock.withLock {
+            storage[scenario] = []
+            return waiters.removeValue(forKey: scenario)?.map(\.continuation) ?? []
+        }
+        continuations.forEach { $0.resume(returning: false) }
     }
 
     func record(_ request: URLRequest, body: Data?, scenario: String) -> Int {
-        lock.withLock {
+        let result = lock.withLock {
             let recorded = RecordedRequest(
                 method: request.httpMethod ?? "GET",
+                url: request.url?.absoluteString ?? "",
                 path: request.url?.path ?? "",
-                body: body
+                body: body,
+                accept: request.value(forHTTPHeaderField: "Accept"),
+                contentType: request.value(forHTTPHeaderField: "Content-Type"),
+                authorization: request.value(forHTTPHeaderField: "Authorization")
             )
             storage[scenario, default: []].append(recorded)
-            return storage[scenario, default: []].count { $0.path == recorded.path }
+            let pathCount = storage[scenario, default: []].count { $0.path == recorded.path }
+            let ready = waiters[scenario, default: []].filter {
+                $0.path == recorded.path && pathCount >= $0.count
+            }
+            waiters[scenario, default: []].removeAll {
+                $0.path == recorded.path && pathCount >= $0.count
+            }
+            return (pathCount, ready.map(\.continuation))
         }
+        result.1.forEach { $0.resume(returning: true) }
+        return result.0
     }
 
     func requests(for scenario: String) -> [RecordedRequest] {
         lock.withLock { storage[scenario] ?? [] }
     }
+
+    func waitForRequest(
+        in scenario: String,
+        path: String,
+        count: Int,
+        timeout: Duration
+    ) async -> Bool {
+        let id = UUID()
+        return await withCheckedContinuation { continuation in
+            let isReady = lock.withLock {
+                if storage[scenario, default: []].count(where: { $0.path == path }) >= count {
+                    return true
+                }
+                waiters[scenario, default: []].append(Waiter(
+                    id: id,
+                    path: path,
+                    count: count,
+                    continuation: continuation
+                ))
+                return false
+            }
+            if isReady {
+                continuation.resume(returning: true)
+                return
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                let timedOut: CheckedContinuation<Bool, Never>? = self.lock.withLock {
+                    guard let index = self.waiters[scenario, default: []].firstIndex(where: {
+                        $0.id == id
+                    }) else { return nil }
+                    return self.waiters[scenario, default: []].remove(at: index).continuation
+                }
+                timedOut?.resume(returning: false)
+            }
+        }
+    }
+}
+
+final class StubScenarioGate: @unchecked Sendable {
+    static let shared = StubScenarioGate()
+
+    private let condition = NSCondition()
+    private var releasedScenarios = Set<String>()
+
+    func reset(scenario: String) {
+        condition.withLock { _ = releasedScenarios.remove(scenario) }
+    }
+
+    func wait(scenario: String, isCancelled: () -> Bool) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        while !releasedScenarios.contains(scenario), !isCancelled() {
+            condition.wait()
+        }
+        return !isCancelled()
+    }
+
+    func release(scenario: String) {
+        condition.withLock {
+            releasedScenarios.insert(scenario)
+            condition.broadcast()
+        }
+    }
+
+    func wakeWaiters() {
+        condition.withLock { condition.broadcast() }
+    }
 }
 
 final class StubURLProtocol: URLProtocol {
+    private let loadingLock = NSRecursiveLock()
+    private var loadingStopped = false
+
     override class func canInit(with request: URLRequest) -> Bool {
         request.value(forHTTPHeaderField: "X-Pomodorough-Test-Scenario") != nil
     }
@@ -250,6 +437,16 @@ final class StubURLProtocol: URLProtocol {
         let statusCode: Int
         let body: Data
         let path = request.url?.path
+
+        if let scenario, scenario.hasPrefix("apple-api-coverage-") {
+            loadAPICoverageResponse(
+                scenario: scenario,
+                path: path,
+                pathAttempt: pathAttempt,
+                requestBody: requestBody
+            )
+            return
+        }
 
         switch scenario {
         case "challenge-success"
@@ -438,7 +635,146 @@ final class StubURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        loadingLock.withLock { loadingStopped = true }
+        StubScenarioGate.shared.wakeWaiters()
+    }
+
+    private func loadAPICoverageResponse(
+        scenario: String,
+        path: String?,
+        pathAttempt: Int,
+        requestBody: Data?
+    ) {
+        let statusCode: Int
+        let body: Data
+
+        switch (scenario, path) {
+        case ("apple-api-coverage-expired-refresh-me", "/api/v1/auth/refresh"):
+            statusCode = 200
+            body = Self.tokenPairBody(accessToken: "refreshed-access", refreshToken: "refreshed-refresh")
+        case ("apple-api-coverage-concurrent-refresh-single-flight", "/api/v1/auth/refresh"):
+            guard StubScenarioGate.shared.wait(
+                scenario: scenario,
+                isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+            ) else { return }
+            statusCode = 200
+            body = Self.tokenPairBody(accessToken: "concurrent-access", refreshToken: "concurrent-refresh")
+        case ("apple-api-coverage-stale-refresh-generation", "/api/v1/auth/refresh"):
+            if pathAttempt == 1 {
+                guard StubScenarioGate.shared.wait(
+                    scenario: scenario,
+                    isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+                ) else { return }
+            }
+            let refreshToken = (Self.requestObject(requestBody)?["refreshToken"] as? String) ?? ""
+            statusCode = 200
+            body = refreshToken == "replacement-expired-refresh"
+                ? Self.tokenPairBody(accessToken: "replacement-access", refreshToken: "replacement-refresh")
+                : Self.tokenPairBody(accessToken: "stale-access", refreshToken: "stale-refresh")
+        case ("apple-api-coverage-expired-refresh-me", "/api/v1/me"),
+             ("apple-api-coverage-concurrent-refresh-single-flight", "/api/v1/me"),
+             ("apple-api-coverage-stale-refresh-generation", "/api/v1/me"),
+             ("apple-api-coverage-exchange-save-me", "/api/v1/me"):
+            statusCode = 200
+            body = Self.meBody
+        case ("apple-api-coverage-exchange-save-me", "/api/v1/auth/google/exchange"),
+             ("apple-api-coverage-exchange-save-failure", "/api/v1/auth/google/exchange"):
+            statusCode = 200
+            body = Self.tokenPairBody(accessToken: "exchange-access", refreshToken: "exchange-refresh")
+        case ("apple-api-coverage-logout-success", "/api/v1/auth/logout"),
+             ("apple-api-coverage-logout-delete-failure", "/api/v1/auth/logout"):
+            statusCode = 204
+            body = Data()
+        case ("apple-api-coverage-logout-server-failure", "/api/v1/auth/logout"):
+            statusCode = 503
+            body = Data(#"{"error":"Logout unavailable."}"#.utf8)
+        case ("apple-api-coverage-bootstrap-nonempty-timer-ack", "/api/v1/bootstrap"),
+             ("apple-api-coverage-bootstrap-nonempty-task-ack", "/api/v1/bootstrap"),
+             ("apple-api-coverage-bootstrap-nonempty-duration-ack", "/api/v1/bootstrap"),
+             ("apple-api-coverage-bootstrap-nonempty-auto-start-ack", "/api/v1/bootstrap"):
+            statusCode = 200
+            body = Self.bootstrapResponseWithAcknowledgement(for: scenario)
+        case ("apple-api-coverage-bootstrap-malformed-2xx", "/api/v1/bootstrap"),
+             ("apple-api-coverage-bootstrap-resolve-malformed-2xx", "/api/v1/bootstrap/resolve"),
+             ("apple-api-coverage-sync-malformed-2xx", "/api/v1/sync"):
+            statusCode = 200
+            body = Data("{".utf8)
+        default:
+            statusCode = 400
+            body = Data(#"{"error":"Unexpected Apple coverage request."}"#.utf8)
+        }
+
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        guard deliverIfLoading({
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        }) else { return }
+        guard deliverIfLoading({ client?.urlProtocol(self, didLoad: body) }) else { return }
+        _ = deliverIfLoading({ client?.urlProtocolDidFinishLoading(self) })
+    }
+
+    private func deliverIfLoading(_ callback: () -> Void) -> Bool {
+        loadingLock.withLock {
+            guard !loadingStopped else { return false }
+            callback()
+            return true
+        }
+    }
+
+    private static func tokenPairBody(accessToken: String, refreshToken: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "accessToken": accessToken,
+            "accessTokenExpiresAt": "2099-01-01T00:00:00.000Z",
+            "refreshToken": refreshToken,
+            "refreshTokenExpiresAt": "2099-01-01T00:00:00.000Z"
+        ])
+    }
+
+    private static func bootstrapResponseWithAcknowledgement(for scenario: String) -> Data {
+        var response = syncResponseObject(
+            revision: 1,
+            history: [],
+            acknowledgements: [],
+            taskAcknowledgements: [],
+            durationAcknowledgements: [],
+            autoStartAcknowledgements: [],
+            tasks: []
+        )
+        switch scenario {
+        case "apple-api-coverage-bootstrap-nonempty-timer-ack":
+            response["acknowledgements"] = [[
+                "commandId": "coverage-command",
+                "outcome": "applied",
+                "reason": ""
+            ]]
+        case "apple-api-coverage-bootstrap-nonempty-task-ack":
+            response["taskAcknowledgements"] = [[
+                "operationId": "coverage-task-operation",
+                "outcome": "applied",
+                "reason": ""
+            ]]
+        case "apple-api-coverage-bootstrap-nonempty-duration-ack":
+            response["durationAcknowledgements"] = [[
+                "operationId": "coverage-duration-operation",
+                "outcome": "applied",
+                "reason": ""
+            ]]
+        case "apple-api-coverage-bootstrap-nonempty-auto-start-ack":
+            response["autoStartAcknowledgements"] = [[
+                "operationId": "00000000-0000-4000-8000-000000000001",
+                "outcome": "applied",
+                "reason": ""
+            ]]
+        default:
+            break
+        }
+        return try! JSONSerialization.data(withJSONObject: response)
+    }
 
     private static let meBody = Data(
         #"{"user":{"id":"user-duration-sync","email":"sync@example.com","name":"Sync","avatarUrl":""},"csrfToken":"csrf"}"#.utf8

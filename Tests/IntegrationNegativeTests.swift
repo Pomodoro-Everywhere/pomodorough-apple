@@ -286,6 +286,157 @@ struct IntegrationNegativeTests {
         }
     }
 
+    @Test func exchangeSaveFailureStopsBeforeProfileAndKeepsStoreUnchanged() async throws {
+        let scenario = "apple-api-coverage-exchange-save-failure"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(failures: [.save])
+        let client = APIClient(session: session, keychain: store)
+
+        do {
+            _ = try await client.exchange(NativeExchangeRequest(
+                idToken: "google-id-token",
+                challenge: "challenge-value",
+                deviceId: "device-coverage",
+                platform: "ios"
+            ))
+            Issue.record("Expected token save failure")
+        } catch RecordingTokenStoreFailure.save {
+            // Expected error.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(store.operations == [
+            .save(accessToken: "exchange-access", refreshToken: "exchange-refresh")
+        ])
+        #expect(store.tokens == nil)
+        #expect(TestFixtures.recordedRequests(for: scenario).map(\.path) == [
+            "/api/v1/auth/google/exchange"
+        ])
+    }
+
+    @Test func logoutServerFailurePreservesTokensWithoutDeletingStore() async throws {
+        let scenario = "apple-api-coverage-logout-server-failure"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let tokens = TokenPair(
+            accessToken: "logout-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "logout-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        )
+        let store = RecordingTokenStore(tokens: tokens)
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        do {
+            try await client.logout()
+            Issue.record("Expected logout server failure")
+        } catch AppError.server(let message) {
+            #expect(message == "Logout unavailable.")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(store.operations == [.load])
+        #expect(store.tokens?.accessToken == tokens.accessToken)
+    }
+
+    @Test func logoutDeleteFailureOccursAfterSuccessfulServerRequest() async throws {
+        let scenario = "apple-api-coverage-logout-delete-failure"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(
+            tokens: TokenPair(
+                accessToken: "logout-access",
+                accessTokenExpiresAt: .distantFuture,
+                refreshToken: "logout-refresh",
+                refreshTokenExpiresAt: .distantFuture
+            ),
+            failures: [.delete]
+        )
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        do {
+            try await client.logout()
+            Issue.record("Expected token delete failure")
+        } catch RecordingTokenStoreFailure.delete {
+            // Expected error.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(store.operations == [.load, .delete])
+        #expect(store.tokens?.accessToken == "logout-access")
+        #expect(TestFixtures.recordedRequests(for: scenario).map(\.path) == [
+            "/api/v1/auth/logout"
+        ])
+    }
+
+    @Test(
+        arguments: [
+            "apple-api-coverage-bootstrap-nonempty-timer-ack",
+            "apple-api-coverage-bootstrap-nonempty-task-ack",
+            "apple-api-coverage-bootstrap-nonempty-duration-ack",
+            "apple-api-coverage-bootstrap-nonempty-auto-start-ack"
+        ]
+    )
+    func bootstrapRejectsEveryNonemptyAcknowledgementList(_ scenario: String) async throws {
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let client = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await client.restoreTokens())
+
+        do {
+            _ = try await client.bootstrap(emptySyncRequest())
+            Issue.record("Expected invalid bootstrap acknowledgement")
+        } catch AppError.invalidResponse {
+            // Expected error.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test(
+        arguments: [
+            "apple-api-coverage-bootstrap-malformed-2xx",
+            "apple-api-coverage-bootstrap-resolve-malformed-2xx",
+            "apple-api-coverage-sync-malformed-2xx"
+        ]
+    )
+    func malformedSuccessfulSyncPayloadsTranslateToInvalidResponse(_ scenario: String) async throws {
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let client = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await client.restoreTokens())
+
+        do {
+            if scenario.contains("bootstrap-resolve") {
+                _ = try await client.resolveBootstrap(BootstrapResolveRequest(
+                    requestId: "coverage-resolution",
+                    deviceId: "coverage-device",
+                    expectedRevision: 1,
+                    strategy: .keepRemote,
+                    commands: [],
+                    taskOperations: [],
+                    durationOperations: [],
+                    autoStartOperations: []
+                ))
+            } else if scenario.contains("bootstrap-malformed") {
+                _ = try await client.bootstrap(emptySyncRequest())
+            } else {
+                _ = try await client.sync(emptySyncRequest())
+            }
+            Issue.record("Expected invalid response")
+        } catch AppError.invalidResponse {
+            // Expected error.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test @MainActor
     func bootstrapRevisionConflictPreservesLocalDataAndReturnsToChooser() async throws {
         let scenario = "bootstrap-cas-conflict"
@@ -832,5 +983,16 @@ struct IntegrationNegativeTests {
     private func decodedResolutionRequest(_ request: RecordedRequest) throws -> BootstrapResolveRequest {
         let data = try #require(request.body)
         return try JSONDecoder.api.decode(BootstrapResolveRequest.self, from: data)
+    }
+
+    private func emptySyncRequest() -> SyncRequest {
+        SyncRequest(
+            deviceId: "coverage-device",
+            lastRevision: 0,
+            commands: [],
+            taskOperations: [],
+            durationOperations: [],
+            autoStartOperations: []
+        )
     }
 }

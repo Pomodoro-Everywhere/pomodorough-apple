@@ -424,6 +424,220 @@ struct IntegrationPositiveTests {
         #expect(challenge.expiresAt == Date(timeIntervalSince1970: 1_784_550_896.789))
     }
 
+    @Test func expiredTokenRefreshesBeforeExactProfileRequestAndSavesTokens() async throws {
+        let scenario = "apple-api-coverage-expired-refresh-me"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "expired-access",
+            accessTokenExpiresAt: .distantPast,
+            refreshToken: "expired-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        let response = try await client.me()
+
+        #expect(response.user == TestFixtures.user)
+        #expect(store.operations == [
+            .load,
+            .save(accessToken: "refreshed-access", refreshToken: "refreshed-refresh")
+        ])
+        #expect(store.tokens?.accessToken == "refreshed-access")
+        let requests = TestFixtures.recordedRequests(for: scenario)
+        #expect(requests.map { $0.path } == [
+            "/api/v1/auth/refresh",
+            "/api/v1/me"
+        ])
+        let refresh = try #require(requests.first)
+        #expect(refresh.url == "https://pomodorough.egigoka.me/api/v1/auth/refresh")
+        #expect(refresh.method == "POST")
+        #expect(refresh.accept == "application/json")
+        #expect(refresh.contentType == "application/json")
+        #expect(refresh.authorization == nil)
+        #expect(refresh.body == Data(#"{"refreshToken":"expired-refresh"}"#.utf8))
+        let profile = try #require(requests.last)
+        #expect(profile.url == "https://pomodorough.egigoka.me/api/v1/me")
+        #expect(profile.method == "GET")
+        #expect(profile.accept == "application/json")
+        #expect(profile.contentType == nil)
+        #expect(profile.authorization == "Bearer refreshed-access")
+        #expect(profile.body == nil)
+    }
+
+    @Test func restoringNewGenerationDiscardsInFlightRefresh() async throws {
+        let scenario = "apple-api-coverage-stale-refresh-generation"
+        defer { TestFixtures.releaseScenario(scenario) }
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "original-expired-access",
+            accessTokenExpiresAt: .distantPast,
+            refreshToken: "original-expired-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+        let staleRequest = Task { try await client.me() }
+        let receivedStaleRefresh = await TestFixtures.waitForRequest(
+            in: scenario,
+            path: "/api/v1/auth/refresh"
+        )
+        try #require(receivedStaleRefresh, "Timed out waiting for stale refresh request")
+
+        store.replaceTokens(TokenPair(
+            accessToken: "replacement-expired-access",
+            accessTokenExpiresAt: .distantPast,
+            refreshToken: "replacement-expired-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        #expect(try await client.restoreTokens())
+        TestFixtures.releaseScenario(scenario)
+        switch await staleRequest.result {
+        case .success:
+            Issue.record("Expected stale request to fail")
+        case .failure(let error):
+            let isUnauthorized: Bool
+            if let appError = error as? AppError, case .unauthorized = appError {
+                isUnauthorized = true
+            } else {
+                isUnauthorized = false
+            }
+            let isCancelled = error is CancellationError
+                || (error as? URLError)?.code == .cancelled
+            #expect(
+                isUnauthorized || isCancelled,
+                "Expected unauthorized or cancellation, got \(error)"
+            )
+        }
+
+        let response = try await client.me()
+
+        #expect(response.user == TestFixtures.user)
+        let requests = TestFixtures.recordedRequests(for: scenario)
+        let refreshes = requests.filter {
+            $0.path == "/api/v1/auth/refresh"
+        }
+        #expect(refreshes.count == 2)
+        #expect(refreshes.first?.body == Data(
+            #"{"refreshToken":"original-expired-refresh"}"#.utf8
+        ))
+        #expect(refreshes.last?.body == Data(
+            #"{"refreshToken":"replacement-expired-refresh"}"#.utf8
+        ))
+        let profiles = requests.filter { $0.path == "/api/v1/me" }
+        #expect(profiles.count == 1)
+        #expect(profiles.first?.authorization == "Bearer replacement-access")
+        #expect(requests.allSatisfy { $0.authorization != "Bearer stale-access" })
+        #expect(!store.operations.contains(
+            .save(accessToken: "stale-access", refreshToken: "stale-refresh")
+        ))
+        #expect(store.operations == [
+            .load,
+            .load,
+            .save(accessToken: "replacement-access", refreshToken: "replacement-refresh")
+        ])
+        #expect(store.tokens?.accessToken == "replacement-access")
+    }
+
+    @Test func concurrentProfileRequestsShareSingleRefresh() async throws {
+        let scenario = "apple-api-coverage-concurrent-refresh-single-flight"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "expired-access",
+            accessTokenExpiresAt: .distantPast,
+            refreshToken: "expired-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        let requests = (0..<8).map { _ in Task { try await client.me() } }
+        let receivedRefresh = await TestFixtures.waitForRequest(
+            in: scenario,
+            path: "/api/v1/auth/refresh"
+        )
+        try #require(receivedRefresh, "Timed out waiting for concurrent refresh request")
+        TestFixtures.releaseScenario(scenario)
+        var responses: [MeResponse] = []
+        for request in requests {
+            responses.append(try await request.value)
+        }
+
+        #expect(responses.allSatisfy { $0.user == TestFixtures.user })
+        let recorded = TestFixtures.recordedRequests(for: scenario)
+        #expect(recorded.count { $0.path == "/api/v1/auth/refresh" } == 1)
+        #expect(recorded.count { $0.path == "/api/v1/me" } == 8)
+        #expect(store.operations == [
+            .load,
+            .save(accessToken: "concurrent-access", refreshToken: "concurrent-refresh")
+        ])
+    }
+
+    @Test func exchangeSendsExactPayloadSavesTokensThenLoadsProfile() async throws {
+        let scenario = "apple-api-coverage-exchange-save-me"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore()
+        let client = APIClient(session: session, keychain: store)
+
+        let response = try await client.exchange(NativeExchangeRequest(
+            idToken: "google-id-token",
+            challenge: "challenge-value",
+            deviceId: "device-coverage",
+            platform: "ios"
+        ))
+
+        #expect(response.user == TestFixtures.user)
+        #expect(store.operations == [
+            .save(accessToken: "exchange-access", refreshToken: "exchange-refresh")
+        ])
+        let requests = TestFixtures.recordedRequests(for: scenario)
+        #expect(requests.map { $0.path } == [
+            "/api/v1/auth/google/exchange",
+            "/api/v1/me"
+        ])
+        let exchange = try #require(requests.first)
+        #expect(exchange.url == "https://pomodorough.egigoka.me/api/v1/auth/google/exchange")
+        #expect(exchange.method == "POST")
+        #expect(exchange.accept == "application/json")
+        #expect(exchange.contentType == "application/json")
+        #expect(exchange.authorization == nil)
+        #expect(exchange.body == Data(
+            #"{"challenge":"challenge-value","deviceId":"device-coverage","idToken":"google-id-token","platform":"ios"}"#.utf8
+        ))
+        let profile = try #require(requests.last)
+        #expect(profile.authorization == "Bearer exchange-access")
+    }
+
+    @Test func logoutDeletesTokensOnlyAfterServerSuccess() async throws {
+        let scenario = "apple-api-coverage-logout-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "logout-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "logout-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        try await client.logout()
+
+        #expect(store.operations == [.load, .delete])
+        #expect(store.tokens == nil)
+        let request = try #require(TestFixtures.recordedRequests(for: scenario).first)
+        #expect(request.url == "https://pomodorough.egigoka.me/api/v1/auth/logout")
+        #expect(request.method == "POST")
+        #expect(request.accept == "application/json")
+        #expect(request.contentType == nil)
+        #expect(request.authorization == "Bearer logout-access")
+        #expect(request.body == nil)
+    }
+
     @Test @MainActor
     func timerControlsUpdateSystemAlarmInOrder() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
