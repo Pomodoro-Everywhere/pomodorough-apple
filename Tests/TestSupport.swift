@@ -1,4 +1,6 @@
 import Foundation
+import Network
+import Security
 @testable import Pomodorough
 
 enum TestFixtures {
@@ -10,14 +12,15 @@ enum TestFixtures {
         elapsed: Int64,
         phase: TimerPhase = .focus,
         timerID: String = "timer-test0001",
-        taskID: String? = nil
+        taskID: String? = nil,
+        durationMs: Int64 = 60_000
     ) -> CanonicalTimer {
         CanonicalTimer(
             id: timerID,
             taskId: taskID,
             phase: phase,
             status: status,
-            plannedDurationMs: 60_000,
+            plannedDurationMs: durationMs,
             elapsedAtAnchorMs: elapsed,
             anchorAt: anchor,
             lastIntent: nil
@@ -72,13 +75,17 @@ enum TestFixtures {
         phase: TimerPhase,
         durationMs: Int64,
         wallMs: Int64,
-        counter: Int64 = 0
+        counter: Int64 = 0,
+        occurredAt: Date? = nil
     ) -> DurationOperation {
-        DurationOperation(
+        let defaultOccurredAt = wallMs == 0 && counter == 0
+            ? Date(timeIntervalSince1970: 0)
+            : Date(timeIntervalSince1970: TimeInterval(max(1, wallMs / 1_000)))
+        return DurationOperation(
             id: id,
             phase: phase,
             durationMs: durationMs,
-            occurredAt: anchor,
+            occurredAt: occurredAt ?? defaultOccurredAt,
             hlcWallMs: wallMs,
             hlcCounter: counter
         )
@@ -89,16 +96,84 @@ enum TestFixtures {
         deviceID: String = "device-test",
         enabled: Bool,
         wallMs: Int64,
-        counter: Int64 = 0
+        counter: Int64 = 0,
+        occurredAt: Date? = nil
     ) -> AutoStartOperation {
-        AutoStartOperation(
+        let defaultOccurredAt = wallMs == 0 && counter == 0
+            ? Date(timeIntervalSince1970: 0)
+            : Date(timeIntervalSince1970: TimeInterval(max(1, wallMs / 1_000)))
+        return AutoStartOperation(
             id: id,
             deviceId: deviceID,
             enabled: enabled,
-            occurredAt: anchor,
+            occurredAt: occurredAt ?? defaultOccurredAt,
             hlcWallMs: wallMs,
             hlcCounter: counter
         )
+    }
+
+    static func permutations<Value>(of values: [Value]) -> [[Value]] {
+        guard !values.isEmpty else { return [[]] }
+        return values.indices.flatMap { index in
+            var remaining = values
+            let value = remaining.remove(at: index)
+            return permutations(of: remaining).map { [value] + $0 }
+        }
+    }
+
+    static func syncContractState(revision: Int64 = 10, includesPendingOperations: Bool) -> PersistedTimerState {
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = user
+        state.revision = revision
+        let localTask = FocusTask(title: "Local canonical task")!
+        state.tasks = [localTask]
+        state.knownTasks = [localTask]
+        state.canonicalTimer = timer(status: .completed, elapsed: 60_000, timerID: "local-canonical-timer")
+        state.history = [history(
+            id: "local-canonical-history",
+            durationMs: 60_000,
+            date: anchor
+        )]
+        guard includesPendingOperations else { return state }
+
+        state.pendingCommands = [
+            command(.start, sequence: 1, elapsed: 0, timerID: "pending-timer"),
+            command(.pause, sequence: 2, elapsed: 10_000, timerID: "pending-timer"),
+            command(.finish, sequence: 3, elapsed: 10_000, timerID: "pending-timer")
+        ]
+        let pendingTasks = (0..<3).map { FocusTask(title: "Pending task \($0)")! }
+        state.knownTasks.append(contentsOf: pendingTasks)
+        state.pendingTaskOperations = pendingTasks.enumerated().map { index, task in
+            return TaskOperation(
+                id: "pending-task-operation-\(index)",
+                taskId: task.id.uuidString.lowercased(),
+                type: .upsert,
+                title: task.title,
+                occurredAt: anchor,
+                hlcWallMs: Int64(anchor.timeIntervalSince1970 * 1_000) + Int64(index + 1),
+                hlcCounter: 0
+            )
+        }
+        state.pendingDurationOperations = zip(TimerPhase.allCases, [30, 10, 20]).enumerated().map { index, value in
+            durationOperation(
+                id: "pending-duration-operation-\(index)",
+                phase: value.0,
+                durationMs: Int64(value.1 * 60_000),
+                wallMs: Int64(index + 4)
+            )
+        }
+        state.settings.durationsMs = DurationReducer.applying(
+            state.pendingDurationOperations,
+            to: state.settings.durationsMs
+        )
+        state.pendingAutoStartOperations = (0..<3).map { index in
+            autoStartOperation(
+                deviceID: state.deviceId,
+                enabled: index.isMultiple(of: 2),
+                wallMs: Int64(index + 7)
+            )
+        }
+        return state
     }
 
     static func session(for scenario: String, resetsRecorder: Bool = true) -> URLSession {
@@ -132,6 +207,54 @@ enum TestFixtures {
 
     static func releaseScenario(_ scenario: String) {
         StubScenarioGate.shared.release(scenario: scenario)
+    }
+}
+
+final class LockedTestValue<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Value
+
+    init(_ value: Value) {
+        storedValue = value
+    }
+
+    var value: Value {
+        get { lock.withLock { storedValue } }
+        set { lock.withLock { storedValue = newValue } }
+    }
+}
+
+final class ScriptedWallClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dates: [Date]
+
+    init(_ dates: [Date]) {
+        precondition(!dates.isEmpty)
+        self.dates = dates
+    }
+
+    func now() -> Date {
+        lock.withLock {
+            guard dates.count > 1 else { return dates[0] }
+            return dates.removeFirst()
+        }
+    }
+}
+
+final class ScriptedUptimeClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [TimeInterval]
+
+    init(_ values: [TimeInterval]) {
+        precondition(!values.isEmpty)
+        self.values = values
+    }
+
+    func now() -> TimeInterval {
+        lock.withLock {
+            guard values.count > 1 else { return values[0] }
+            return values.removeFirst()
+        }
     }
 }
 
@@ -220,6 +343,111 @@ final class RecordingTokenStore: TokenStoring, @unchecked Sendable {
     }
 }
 
+struct KeychainQuerySnapshot: Equatable, Sendable {
+    let itemClass: String?
+    let service: String?
+    let account: String?
+    let accessible: String?
+    let returnsData: Bool?
+    let matchLimit: String?
+    let valueData: Data?
+
+    init(_ query: [String: Any]) {
+        itemClass = query[kSecClass as String] as? String
+        service = query[kSecAttrService as String] as? String
+        account = query[kSecAttrAccount as String] as? String
+        accessible = query[kSecAttrAccessible as String] as? String
+        returnsData = query[kSecReturnData as String] as? Bool
+        matchLimit = query[kSecMatchLimit as String] as? String
+        valueData = query[kSecValueData as String] as? Data
+    }
+}
+
+struct RecordedKeychainUpdate: Equatable, Sendable {
+    let query: KeychainQuerySnapshot
+    let attributes: KeychainQuerySnapshot
+}
+
+final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sendable {
+    private let lock = NSLock()
+    private let copyStatus: OSStatus
+    private let copyData: Data?
+    private let updateStatus: OSStatus
+    private let addStatus: OSStatus
+    private let deleteStatus: OSStatus
+    private var storedCopyQueries: [KeychainQuerySnapshot] = []
+    private var storedUpdates: [RecordedKeychainUpdate] = []
+    private var storedAddQueries: [KeychainQuerySnapshot] = []
+    private var storedDeleteQueries: [KeychainQuerySnapshot] = []
+
+    init(
+        copyStatus: OSStatus = errSecItemNotFound,
+        copyData: Data? = nil,
+        updateStatus: OSStatus = errSecSuccess,
+        addStatus: OSStatus = errSecSuccess,
+        deleteStatus: OSStatus = errSecSuccess
+    ) {
+        self.copyStatus = copyStatus
+        self.copyData = copyData
+        self.updateStatus = updateStatus
+        self.addStatus = addStatus
+        self.deleteStatus = deleteStatus
+    }
+
+    var copyQueries: [KeychainQuerySnapshot] { lock.withLock { storedCopyQueries } }
+    var updates: [RecordedKeychainUpdate] { lock.withLock { storedUpdates } }
+    var addQueries: [KeychainQuerySnapshot] { lock.withLock { storedAddQueries } }
+    var deleteQueries: [KeychainQuerySnapshot] { lock.withLock { storedDeleteQueries } }
+
+    func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?) {
+        lock.withLock { storedCopyQueries.append(KeychainQuerySnapshot(query)) }
+        return (copyStatus, copyData)
+    }
+
+    func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus {
+        lock.withLock {
+            storedUpdates.append(RecordedKeychainUpdate(
+                query: KeychainQuerySnapshot(query),
+                attributes: KeychainQuerySnapshot(attributes)
+            ))
+        }
+        return updateStatus
+    }
+
+    func add(_ query: [String: Any]) -> OSStatus {
+        lock.withLock { storedAddQueries.append(KeychainQuerySnapshot(query)) }
+        return addStatus
+    }
+
+    func delete(_ query: [String: Any]) -> OSStatus {
+        lock.withLock { storedDeleteQueries.append(KeychainQuerySnapshot(query)) }
+        return deleteStatus
+    }
+
+    func errorMessage(for status: OSStatus) -> String? { "test status \(status)" }
+}
+
+#if os(macOS)
+final class RecordingGoogleOAuthTransport: GoogleOAuthTokenExchangeTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private let data: Data
+    private let response: URLResponse
+    private var storedRequests: [URLRequest] = []
+
+    init(data: Data, response: URLResponse) {
+        self.data = data
+        self.response = response
+    }
+
+    var requests: [URLRequest] { lock.withLock { storedRequests } }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        lock.withLock { storedRequests.append(request) }
+        return (data, response)
+    }
+}
+#endif
+
 final class RecordingUserDefaults: UserDefaults {
     private(set) var timerStateWrites: [Data] = []
 
@@ -260,7 +488,7 @@ final class RecordingAlarmScheduler: TimerAlarmScheduling {
         if let schedulingError { throw schedulingError }
     }
 
-    func pause(timerID: String) throws {
+    func pause(timerID: String) async throws {
         operations.append(.pause(timerID: timerID))
     }
 
@@ -268,9 +496,138 @@ final class RecordingAlarmScheduler: TimerAlarmScheduling {
         operations.append(.resume(timerID: timerID, phase: phase, duration: duration))
     }
 
-    func cancel(timerID: String) throws {
+    func cancel(timerID: String) async throws {
         operations.append(.cancel(timerID: timerID))
         if let cancellationError { throw cancellationError }
+    }
+}
+
+@MainActor
+final class RecordingGoogleIdentityProvider: GoogleIdentityProviding {
+    var identityTokenResult: Result<String, Error> = .success("google-identity-token")
+    var handledURLs: [URL] = []
+    private(set) var nonces: [String] = []
+    private(set) var signOutCount = 0
+
+    func identityToken(nonce: String) async throws -> String {
+        nonces.append(nonce)
+        return try identityTokenResult.get()
+    }
+
+    func handle(_ url: URL) -> Bool {
+        handledURLs.append(url)
+        return true
+    }
+
+    func signOut() {
+        signOutCount += 1
+    }
+}
+
+enum RecordedNotificationBackendOperation: Equatable {
+    case requestAuthorization
+    case canSchedule
+    case schedule(identifier: String, phase: TimerPhase, duration: TimeInterval)
+    case remove(identifier: String)
+}
+
+@MainActor
+final class RecordingNotificationBackend: TimerNotificationBackend {
+    var isSupported = true
+    var authorizationResult = false
+    var canScheduleResult = false
+    var authorizationError: Error?
+    var schedulingError: Error?
+    var suspendsScheduling = false
+    private(set) var operations: [RecordedNotificationBackendOperation] = []
+    private var schedulingContinuation: CheckedContinuation<Void, Never>?
+    private var suspendedContinuation: CheckedContinuation<Void, Never>?
+
+    func requestAuthorization() async throws -> Bool {
+        operations.append(.requestAuthorization)
+        if let authorizationError { throw authorizationError }
+        return authorizationResult
+    }
+
+    func canSchedule() async -> Bool {
+        operations.append(.canSchedule)
+        return canScheduleResult
+    }
+
+    func schedule(identifier: String, phase: TimerPhase, duration: TimeInterval) async throws {
+        operations.append(.schedule(identifier: identifier, phase: phase, duration: duration))
+        if suspendsScheduling {
+            await withCheckedContinuation {
+                schedulingContinuation = $0
+                suspendedContinuation?.resume()
+                suspendedContinuation = nil
+            }
+        }
+        if let schedulingError { throw schedulingError }
+    }
+
+    func remove(identifier: String) {
+        operations.append(.remove(identifier: identifier))
+    }
+
+    func releaseScheduling() {
+        schedulingContinuation?.resume()
+        schedulingContinuation = nil
+    }
+
+    func waitUntilSchedulingSuspends() async {
+        guard schedulingContinuation == nil else { return }
+        await withCheckedContinuation { suspendedContinuation = $0 }
+    }
+}
+
+enum RecordedSystemAlarmBackendOperation: Equatable {
+    case requestAuthorization
+    case schedule(id: UUID, timerID: String, phase: TimerPhase, duration: TimeInterval)
+    case pause(id: UUID)
+    case resume(id: UUID)
+    case cancel(id: UUID)
+}
+
+@MainActor
+final class RecordingSystemAlarmBackend: TimerSystemAlarmBackend {
+    var authorizationState: TimerSystemAlarmAuthorizationState = .unsupported
+    var authorizationResult = false
+    var authorizationError: Error?
+    var operationError: Error?
+    private(set) var operations: [RecordedSystemAlarmBackendOperation] = []
+    private var scheduledIDs: Set<UUID> = []
+
+    func requestAuthorization() async throws -> Bool {
+        operations.append(.requestAuthorization)
+        if let authorizationError { throw authorizationError }
+        return authorizationResult
+    }
+
+    func schedule(id: UUID, timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
+        operations.append(.schedule(id: id, timerID: timerID, phase: phase, duration: duration))
+        if let operationError { throw operationError }
+        scheduledIDs.insert(id)
+    }
+
+    func pause(id: UUID) throws {
+        guard scheduledIDs.contains(id) else { return }
+        operations.append(.pause(id: id))
+        if let operationError { throw operationError }
+    }
+
+    func resume(id: UUID) throws -> Bool {
+        guard scheduledIDs.contains(id) else { return false }
+        operations.append(.resume(id: id))
+        if let operationError { throw operationError }
+        return true
+    }
+
+    func cancel(id: UUID) throws {
+        guard scheduledIDs.contains(id) else { return }
+        operations.append(.cancel(id: id))
+        if let operationError { throw operationError }
+        scheduledIDs.remove(id)
     }
 }
 
@@ -282,6 +639,101 @@ struct RecordedRequest: Sendable {
     let accept: String?
     let contentType: String?
     let authorization: String?
+}
+
+final class LoopbackHTTPServer: @unchecked Sendable {
+    private final class StartupState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedPort: UInt16?
+        private var storedError: Error?
+
+        func succeed(port: UInt16?) {
+            lock.withLock { storedPort = port }
+        }
+
+        func fail(_ error: Error) {
+            lock.withLock { storedError = error }
+        }
+
+        var result: (port: UInt16?, error: Error?) {
+            lock.withLock { (storedPort, storedError) }
+        }
+    }
+
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "PomodoroughTests.LoopbackHTTPServer")
+    private let lock = NSLock()
+    private var recordedRequest = Data()
+
+    private(set) var baseURL = URL(string: "http://127.0.0.1")!
+
+    init(statusCode: Int = 200, contentType: String, body: Data) throws {
+        listener = try NWListener(using: .tcp, on: .any)
+        let started = DispatchSemaphore(value: 0)
+        let startup = StartupState()
+
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                startup.succeed(port: self.listener.port?.rawValue)
+                started.signal()
+            case .failed(let error):
+                startup.fail(error)
+                started.signal()
+            default:
+                break
+            }
+        }
+        let reason = HTTPURLResponse.localizedString(forStatusCode: statusCode)
+        let headers = Data((
+            "HTTP/1.1 \(statusCode) \(reason)\r\n"
+                + "Content-Type: \(contentType)\r\n"
+                + "Content-Length: \(body.count)\r\n"
+                + "Connection: close\r\n\r\n"
+        ).utf8)
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self else { return }
+            connection.start(queue: self.queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1_024) {
+                data, _, _, _ in
+                if let data {
+                    self.lock.withLock { self.recordedRequest.append(data) }
+                }
+                connection.send(
+                    content: headers + body,
+                    completion: .contentProcessed { _ in
+                        self.queue.asyncAfter(deadline: .now() + 1) {
+                            connection.cancel()
+                        }
+                    }
+                )
+            }
+        }
+        listener.start(queue: queue)
+        guard started.wait(timeout: .now() + 5) == .success else {
+            listener.cancel()
+            throw URLError(.timedOut)
+        }
+        let startupResult = startup.result
+        if let startupError = startupResult.error {
+            listener.cancel()
+            throw startupError
+        }
+        guard let port = startupResult.port,
+              let url = URL(string: "http://127.0.0.1:\(port)") else {
+            listener.cancel()
+            throw URLError(.cannotConnectToHost)
+        }
+        baseURL = url
+    }
+
+    deinit {
+        listener.cancel()
+    }
+
+    var request: String {
+        lock.withLock { String(decoding: recordedRequest, as: UTF8.self) }
+    }
 }
 
 final class StubRequestRecorder: @unchecked Sendable {
@@ -433,6 +885,10 @@ final class StubURLProtocol: URLProtocol {
             client?.urlProtocolDidFinishLoading(self)
             return
         }
+        if scenario == "apple-api-coverage-stream-transport" {
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
+        }
 
         let statusCode: Int
         let body: Data
@@ -497,7 +953,8 @@ final class StubURLProtocol: URLProtocol {
             body = Self.syncResponse(
                 revision: history.isEmpty ? 5 : 8,
                 history: history,
-                autoStartBreaks: scenario?.contains("auto-start-remote-true") == true
+                autoStartBreaks: scenario?.contains("auto-start-remote-true") == true,
+                tasks: scenario == "bootstrap-local-history-remote-task" ? [Self.remoteTask] : []
             )
         case "bootstrap-network-retry"
             where request.httpMethod == "POST"
@@ -580,6 +1037,48 @@ final class StubURLProtocol: URLProtocol {
             && path == "/api/v1/me":
             statusCode = 200
             body = Self.meBody
+        case _ where scenario?.hasPrefix("sync-contract-") == true && path == "/api/v1/me":
+            statusCode = 200
+            body = Self.meBody
+        case "sync-restart-checkpoints" where path == "/api/v1/me":
+            statusCode = 200
+            body = Self.meBody
+        case "sync-restart-checkpoints"
+            where request.httpMethod == "POST" && path == "/api/v1/sync":
+            if pathAttempt == 1 {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
+            statusCode = 200
+            body = Self.timerCycleResponse(
+                scenario: scenario!,
+                request: Self.requestObject(requestBody)
+            )
+        case "sync-account-switch-stale" where path == "/api/v1/me":
+            statusCode = 200
+            body = Self.meBody
+        case "sync-account-switch-stale"
+            where request.httpMethod == "POST" && path == "/api/v1/sync":
+            guard StubScenarioGate.shared.wait(
+                scenario: scenario!,
+                isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+            ) else { return }
+            statusCode = 200
+            body = Self.timerCycleResponse(
+                scenario: scenario!,
+                request: Self.requestObject(requestBody)
+            )
+        case "sync-account-switch-stale"
+            where request.httpMethod == "POST" && path == "/api/v1/auth/logout":
+            statusCode = 204
+            body = Data()
+        case _ where scenario?.hasPrefix("auto-start-matrix-") == true
+            && scenario?.contains("-lost-") == true
+            && request.httpMethod == "POST"
+            && path == "/api/v1/sync"
+            && pathAttempt == 1:
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
         case _ where (scenario?.hasPrefix("auto-start-") == true || scenario == "timer-cycle")
             && request.httpMethod == "POST"
             && path == "/api/v1/sync":
@@ -598,6 +1097,14 @@ final class StubURLProtocol: URLProtocol {
             body = Self.taskSyncResponse(
                 scenario: scenario,
                 pathAttempt: pathAttempt,
+                request: Self.requestObject(requestBody)
+            )
+        case _ where scenario?.hasPrefix("sync-contract-") == true
+            && request.httpMethod == "POST"
+            && path == "/api/v1/sync":
+            statusCode = 200
+            body = Self.syncContractResponse(
+                scenario: scenario!,
                 request: Self.requestObject(requestBody)
             )
         case "task-missing-ack" where path == "/api/v1/me":
@@ -648,8 +1155,20 @@ final class StubURLProtocol: URLProtocol {
     ) {
         let statusCode: Int
         let body: Data
+        var contentType = "application/json"
 
         switch (scenario, path) {
+        case ("apple-api-coverage-stream-unauthorized", "/api/v1/stream"):
+            statusCode = 401
+            contentType = "text/event-stream"
+            body = Data()
+        case ("apple-api-coverage-stream-json", "/api/v1/stream"):
+            statusCode = 200
+            body = Data(#"{"revision":42}"#.utf8)
+        case ("apple-api-coverage-stream-server-error", "/api/v1/stream"):
+            statusCode = 503
+            contentType = "text/event-stream"
+            body = Data()
         case ("apple-api-coverage-expired-refresh-me", "/api/v1/auth/refresh"):
             statusCode = 200
             body = Self.tokenPairBody(accessToken: "refreshed-access", refreshToken: "refreshed-refresh")
@@ -675,9 +1194,23 @@ final class StubURLProtocol: URLProtocol {
         case ("apple-api-coverage-expired-refresh-me", "/api/v1/me"),
              ("apple-api-coverage-concurrent-refresh-single-flight", "/api/v1/me"),
              ("apple-api-coverage-stale-refresh-generation", "/api/v1/me"),
-             ("apple-api-coverage-exchange-save-me", "/api/v1/me"):
+             ("apple-api-coverage-exchange-save-me", "/api/v1/me"),
+             ("apple-api-coverage-model-sign-in", "/api/v1/me"):
             statusCode = 200
             body = Self.meBody
+        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/challenge"),
+             ("apple-api-coverage-model-identity-failure", "/api/v1/auth/google/challenge"):
+            statusCode = 200
+            body = Data(#"{"challenge":"model-challenge","nonce":"model-nonce","expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
+        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/exchange"):
+            statusCode = 200
+            body = Self.tokenPairBody(accessToken: "model-access", refreshToken: "model-refresh")
+        case ("apple-api-coverage-model-sign-in", "/api/v1/sync"):
+            statusCode = 200
+            body = Self.syncResponse(revision: 0, history: [])
+        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/logout"):
+            statusCode = 204
+            body = Data()
         case ("apple-api-coverage-exchange-save-me", "/api/v1/auth/google/exchange"),
              ("apple-api-coverage-exchange-save-failure", "/api/v1/auth/google/exchange"):
             statusCode = 200
@@ -709,7 +1242,7 @@ final class StubURLProtocol: URLProtocol {
             url: request.url!,
             statusCode: statusCode,
             httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: ["Content-Type": contentType]
         )!
         guard deliverIfLoading({
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -822,7 +1355,7 @@ final class StubURLProtocol: URLProtocol {
 
     private static var remoteTask: [String: Any] {
         [
-            "id": "00000000-0000-8000-8000-000000000001",
+            "id": "53bef65b-b59f-8614-9a1c-68951ad20089",
             "title": "Remote task"
         ]
     }
@@ -859,6 +1392,7 @@ final class StubURLProtocol: URLProtocol {
 
     private static func hasRemoteBootstrapHistory(_ scenario: String?) -> Bool {
         scenario != "bootstrap-local-only"
+            && scenario != "bootstrap-local-history-remote-task"
             && scenario != "bootstrap-resolve-race-404"
             && scenario?.hasPrefix("bootstrap-empty-") != true
     }
@@ -968,6 +1502,8 @@ final class StubURLProtocol: URLProtocol {
         case "auto-start-finish-rejected-no-previous":
             return rejectedFinishRestoreResponse(request: request)
         case "auto-start-provisional-finish-rejected",
+             "auto-start-provisional-finish-ignored-exact",
+             "auto-start-provisional-finish-ignored-mismatch",
              "auto-start-provisional-start-rejected",
              "auto-start-provisional-superseded",
              "auto-start-stale-fourth",
@@ -980,6 +1516,13 @@ final class StubURLProtocol: URLProtocol {
         default:
             break
         }
+        if scenario.hasPrefix("auto-start-matrix-") {
+            return provisionalMatrixResponse(
+                scenario: scenario,
+                pathAttempt: pathAttempt,
+                request: request
+            )
+        }
         if scenario == "auto-start-in-flight-rebase", pathAttempt == 1 {
             Thread.sleep(forTimeInterval: 0.5)
         }
@@ -989,7 +1532,7 @@ final class StubURLProtocol: URLProtocol {
             idKey: "operationId"
         )
         var response = syncResponseObject(
-            revision: 20 + pathAttempt,
+            revision: Int64(20 + pathAttempt),
             history: scenario == "auto-start-remote-completed"
                 ? [remoteHistory]
                 : [],
@@ -1039,6 +1582,70 @@ final class StubURLProtocol: URLProtocol {
             break
         }
         return try! JSONSerialization.data(withJSONObject: response)
+    }
+
+    private static func provisionalMatrixResponse(
+        scenario: String,
+        pathAttempt: Int,
+        request: [String: Any]?
+    ) -> Data {
+        let commands = request?["commands"] as? [[String: Any]] ?? []
+        let allCommands = StubRequestRecorder.shared.requests(for: scenario)
+            .filter { $0.path == "/api/v1/sync" }
+            .flatMap { requestObject($0.body)?["commands"] as? [[String: Any]] ?? [] }
+        let focusStart = allCommands.first {
+            $0["type"] as? String == "start" && $0["phase"] as? String == "focus"
+        }
+        let focusFinish = allCommands.first {
+            $0["type"] as? String == "finish" && $0["phase"] as? String == "focus"
+        }
+        let breakStart = allCommands.first {
+            $0["type"] as? String == "start" && $0["phase"] as? String != "focus"
+        }
+        let finishOutcome = scenario.contains("-ignored-")
+            ? "ignored"
+            : scenario.contains("-rejected-") ? "rejected" : "applied"
+        let acknowledgements = commands.compactMap { command -> [String: Any]? in
+            guard let id = command["id"] as? String else { return nil }
+            let outcome = id == focusFinish?["id"] as? String ? finishOutcome : "applied"
+            return [
+                "commandId": id,
+                "outcome": outcome,
+                "reason": outcome == "applied" ? "" : "matrix outcome"
+            ]
+        }
+        var history: [[String: Any]] = []
+        if scenario.contains("-long-") {
+            for index in 1...3 {
+                history.append([
+                    "id": "matrix-prior-\(index)",
+                    "timerId": "matrix-prior-\(index)",
+                    "commandId": "matrix-prior-command-\(index)",
+                    "phase": "focus",
+                    "status": "completed",
+                    "plannedDurationMs": 60_000,
+                    "completedAt": "1970-01-01T00:0\(index):00.000Z"
+                ])
+            }
+        }
+        if let focusFinish {
+            history.append(completedHistory(finish: focusFinish, start: focusStart))
+        }
+        let canonicalTimer: Any
+        if let breakStart {
+            canonicalTimer = runningTimer(from: breakStart)
+        } else if let focusFinish {
+            canonicalTimer = completedTimer(finish: focusFinish, start: focusStart)
+        } else {
+            canonicalTimer = NSNull()
+        }
+        return syncResponse(
+            revision: Int64(100 + pathAttempt),
+            history: history,
+            acknowledgements: acknowledgements,
+            autoStartBreaks: true,
+            canonicalTimer: canonicalTimer
+        )
     }
 
     private static func legacyOwnershipResponse(
@@ -1131,21 +1738,32 @@ final class StubURLProtocol: URLProtocol {
             $0["type"] as? String == "start" && $0["phase"] as? String != "focus"
         }
         let rejectsFinish = scenario == "auto-start-provisional-finish-rejected"
+        let ignoresFinish = scenario.hasPrefix(
+            "auto-start-provisional-finish-ignored-"
+        )
         let rejectsBreakStart = scenario == "auto-start-provisional-start-rejected"
         let acknowledgements = commands.compactMap { command -> [String: Any]? in
             guard let id = command["id"] as? String else { return nil }
             let isFinish = command["type"] as? String == "finish"
             let isBreakStart = command["type"] as? String == "start"
                 && command["phase"] as? String != "focus"
-            let outcome = rejectsFinish && isFinish || rejectsBreakStart && isBreakStart
-                ? "rejected"
-                : "applied"
+            let outcome = if ignoresFinish && isFinish {
+                "ignored"
+            } else if rejectsFinish && isFinish || rejectsBreakStart && isBreakStart {
+                "rejected"
+            } else {
+                "applied"
+            }
             return ["commandId": id, "outcome": outcome, "reason": outcome == "applied" ? "" : "lost race"]
         }
 
         var history: [[String: Any]] = []
         if !rejectsFinish, let focusFinish {
-            history.append(completedHistory(finish: focusFinish, start: focusStart))
+            var completion = completedHistory(finish: focusFinish, start: focusStart)
+            if scenario == "auto-start-provisional-finish-ignored-mismatch" {
+                completion["timerId"] = "timer-mismatched-completion"
+            }
+            history.append(completion)
         }
         if scenario == "auto-start-stale-fourth" {
             for index in 1...3 {
@@ -1183,7 +1801,7 @@ final class StubURLProtocol: URLProtocol {
             canonicalTimer = NSNull()
         }
         return syncResponse(
-            revision: 40 + pathAttempt,
+            revision: Int64(40 + pathAttempt),
             history: history,
             acknowledgements: acknowledgements,
             autoStartBreaks: true,
@@ -1243,7 +1861,7 @@ final class StubURLProtocol: URLProtocol {
         let state = timerState(for: scenario)
         let syncCount = StubRequestRecorder.shared.requests(for: scenario).count { $0.path == "/api/v1/sync" }
         var response = syncResponseObject(
-            revision: 30 + syncCount,
+            revision: Int64(30 + syncCount),
             history: state.history,
             acknowledgements: acknowledgements(from: request, key: "commands", idKey: "commandId"),
             taskAcknowledgements: acknowledgements(from: request, key: "taskOperations", idKey: "operationId"),
@@ -1361,7 +1979,7 @@ final class StubURLProtocol: URLProtocol {
             )
         case "task-sync-remote-lifecycle":
             return syncResponse(
-                revision: 11 + pathAttempt,
+                revision: Int64(11 + pathAttempt),
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
                 tasks: pathAttempt == 1 ? [remoteTask] : []
@@ -1369,14 +1987,14 @@ final class StubURLProtocol: URLProtocol {
         case "task-sync-in-flight-rebase":
             if pathAttempt == 1 { Thread.sleep(forTimeInterval: 0.5) }
             return syncResponse(
-                revision: 11 + pathAttempt,
+                revision: Int64(11 + pathAttempt),
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
                 tasks: [remoteTask] + cumulativeTasks(for: scenario)
             )
-        case "task-sync-batching":
+        case _ where scenario?.hasPrefix("task-sync-batching-") == true:
             return syncResponse(
-                revision: 11 + pathAttempt,
+                revision: Int64(11 + pathAttempt),
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
                 tasks: cumulativeTasks(for: scenario)
@@ -1397,6 +2015,136 @@ final class StubURLProtocol: URLProtocol {
                 tasks: [remoteTask]
             )
         }
+    }
+
+    private static func syncContractResponse(
+        scenario: String,
+        request: [String: Any]?
+    ) -> Data {
+        if scenario.hasPrefix("sync-contract-alarm-") {
+            let status = scenario == "sync-contract-alarm-status"
+                ? "paused"
+                : "running"
+            let elapsed = scenario == "sync-contract-alarm-elapsed"
+                ? 20_000
+                : 10_000
+            return syncResponse(
+                revision: 11,
+                history: [],
+                tasks: [],
+                canonicalTimer: [
+                    "id": "alarm-correction-timer",
+                    "taskId": NSNull(),
+                    "phase": "focus",
+                    "status": status,
+                    "plannedDurationMs": 60_000,
+                    "elapsedAtAnchorMs": elapsed,
+                    "anchorAt": "2026-07-21T08:00:00.000Z",
+                    "lastIntent": NSNull()
+                ]
+            )
+        }
+        if scenario == "sync-contract-canonical-invalid" {
+            var invalidTimer = associatedTimer
+            invalidTimer["elapsedAtAnchorMs"] = 1_500_001
+            return syncResponse(
+                revision: 11,
+                history: [],
+                tasks: [remoteTask],
+                canonicalTimer: invalidTimer
+            )
+        }
+        if scenario.hasPrefix("sync-contract-revision-") {
+            let revision: Int64 = switch scenario {
+            case "sync-contract-revision-lower": 9
+            case "sync-contract-revision-unsafe": WireBounds.maxSafeInteger + 1
+            case "sync-contract-revision-equal": 10
+            default: 11
+            }
+            var response = syncResponseObject(
+                revision: revision,
+                history: [remoteHistory],
+                acknowledgements: [],
+                taskAcknowledgements: [],
+                durationAcknowledgements: [],
+                autoStartAcknowledgements: [],
+                autoStartBreaks: true,
+                tasks: [remoteTask],
+                canonicalTimer: associatedTimer
+            )
+            response["durationsMs"] = [
+                "focus": 40 * 60_000,
+                "short_break": 10 * 60_000,
+                "long_break": 20 * 60_000
+            ]
+            return try! JSONSerialization.data(withJSONObject: response)
+        }
+
+        var timerAcknowledgements = acknowledgements(from: request, key: "commands", idKey: "commandId")
+        var taskAcknowledgements = acknowledgements(from: request, key: "taskOperations", idKey: "operationId")
+        var durationAcknowledgements = acknowledgements(from: request, key: "durationOperations", idKey: "operationId")
+        var autoStartAcknowledgements = acknowledgements(from: request, key: "autoStartOperations", idKey: "operationId")
+        let outcome = String(scenario.dropFirst("sync-contract-ack-".count))
+        if ["applied", "ignored", "rejected"].contains(outcome) {
+            for index in timerAcknowledgements.indices {
+                timerAcknowledgements[index]["outcome"] = outcome
+                timerAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+            for index in taskAcknowledgements.indices {
+                taskAcknowledgements[index]["outcome"] = outcome
+                taskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+            for index in durationAcknowledgements.indices {
+                durationAcknowledgements[index]["outcome"] = outcome
+                durationAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+            for index in autoStartAcknowledgements.indices {
+                autoStartAcknowledgements[index]["outcome"] = outcome
+                autoStartAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+        } else if scenario == "sync-contract-ack-reordered" {
+            timerAcknowledgements.reverse()
+            taskAcknowledgements.reverse()
+            durationAcknowledgements.reverse()
+            autoStartAcknowledgements.reverse()
+            let outcomes = ["applied", "ignored", "rejected"]
+            for index in timerAcknowledgements.indices {
+                let outcome = outcomes[index % 3]
+                timerAcknowledgements[index]["outcome"] = outcome
+                timerAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+            for index in taskAcknowledgements.indices {
+                let outcome = outcomes[(index + 1) % 3]
+                taskAcknowledgements[index]["outcome"] = outcome
+                taskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+            for index in durationAcknowledgements.indices {
+                let outcome = outcomes[(index + 2) % 3]
+                durationAcknowledgements[index]["outcome"] = outcome
+                durationAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+            for index in autoStartAcknowledgements.indices {
+                let outcome = outcomes[index % 3]
+                autoStartAcknowledgements[index]["outcome"] = outcome
+                autoStartAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
+        } else if scenario.hasPrefix("sync-contract-unknown-") {
+            switch scenario {
+            case "sync-contract-unknown-timer": timerAcknowledgements[0]["outcome"] = "unknown"
+            case "sync-contract-unknown-task": taskAcknowledgements[0]["outcome"] = "unknown"
+            case "sync-contract-unknown-duration": durationAcknowledgements[0]["outcome"] = "unknown"
+            default: break
+            }
+        }
+        return syncResponse(
+            revision: 11,
+            history: [],
+            acknowledgements: timerAcknowledgements,
+            taskAcknowledgements: taskAcknowledgements,
+            durationAcknowledgements: durationAcknowledgements,
+            autoStartAcknowledgements: autoStartAcknowledgements,
+            tasks: []
+        )
     }
 
     private static func cumulativeTasks(for scenario: String?) -> [[String: Any]] {
@@ -1533,7 +2281,7 @@ final class StubURLProtocol: URLProtocol {
     }
 
     private static func syncResponse(
-        revision: Int,
+        revision: Int64,
         history: [[String: Any]],
         acknowledgements: [[String: Any]] = [],
         taskAcknowledgements: [[String: Any]] = [],
@@ -1557,7 +2305,7 @@ final class StubURLProtocol: URLProtocol {
     }
 
     private static func syncResponseObject(
-        revision: Int,
+        revision: Int64,
         history: [[String: Any]],
         acknowledgements: [[String: Any]],
         taskAcknowledgements: [[String: Any]],

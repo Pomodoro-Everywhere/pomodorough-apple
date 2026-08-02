@@ -1,16 +1,403 @@
 import Foundation
+import Security
 import Testing
 @testable import Pomodorough
 
 @Suite("Unit Negative")
 struct UnitNegativeTests {
+    @Test func keychainLoadRejectsSecurityFailureMissingDataAndMalformedData() throws {
+        let failedSecurity = RecordingKeychainSecurity(copyStatus: errSecAuthFailed)
+        do {
+            _ = try KeychainStore(security: failedSecurity).load()
+            Issue.record("Expected keychain load failure")
+        } catch let error as KeychainError {
+            #expect(error.operation == "load")
+            #expect(error.status == errSecAuthFailed)
+            #expect(error.message == "test status \(errSecAuthFailed)")
+        }
+
+        #expect(throws: KeychainError.self) {
+            _ = try KeychainStore(security: RecordingKeychainSecurity(
+                copyStatus: errSecSuccess,
+                copyData: nil
+            )).load()
+        }
+        #expect(throws: DecodingError.self) {
+            _ = try KeychainStore(security: RecordingKeychainSecurity(
+                copyStatus: errSecSuccess,
+                copyData: Data("not-json".utf8)
+            )).load()
+        }
+    }
+
+    @Test func keychainSaveSurfacesUpdateAndAddFailuresWithoutFallbackWrites() {
+        let updateFailure = RecordingKeychainSecurity(updateStatus: errSecInteractionNotAllowed)
+        do {
+            try KeychainStore(security: updateFailure).save(keychainFailureTokens)
+            Issue.record("Expected keychain update failure")
+        } catch let error as KeychainError {
+            #expect(error.operation == "save (update)")
+            #expect(error.status == errSecInteractionNotAllowed)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(updateFailure.addQueries.isEmpty)
+
+        let addFailure = RecordingKeychainSecurity(
+            updateStatus: errSecItemNotFound,
+            addStatus: errSecAuthFailed
+        )
+        do {
+            try KeychainStore(security: addFailure).save(keychainFailureTokens)
+            Issue.record("Expected keychain add failure")
+        } catch let error as KeychainError {
+            #expect(error.operation == "save (add)")
+            #expect(error.status == errSecAuthFailed)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(addFailure.updates.count == 1)
+        #expect(addFailure.addQueries.count == 1)
+    }
+
+    @Test func keychainDeleteSurfacesSecurityFailure() {
+        let security = RecordingKeychainSecurity(deleteStatus: errSecInteractionNotAllowed)
+        do {
+            try KeychainStore(security: security).delete()
+            Issue.record("Expected keychain delete failure")
+        } catch let error as KeychainError {
+            #expect(error.operation == "delete")
+            #expect(error.status == errSecInteractionNotAllowed)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(security.deleteQueries.count == 1)
+    }
+
+    @Test func checkedSequenceAndCounterOverflowRejectWithoutMutation() {
+        let occurrence = Date(timeIntervalSince1970: 1_000)
+        var sequenceState = PersistedTimerState.fresh()
+        sequenceState.nextSequence = WireBounds.maxSafeInteger
+        sequenceState.sequenceExhausted = true
+        let originalSequenceState = sequenceState
+
+        #expect(throws: AppError.self) {
+            try sequenceState.reserveDeviceSequence()
+        }
+        #expect(sequenceState == originalSequenceState)
+
+        var clockState = PersistedTimerState.fresh()
+        clockState.hlcWallMs = 1_000_000
+        clockState.hlcCounter = WireBounds.maxSafeInteger
+        let originalClockState = clockState
+
+        #expect(throws: AppError.self) {
+            try clockState.advanceClock(at: occurrence)
+        }
+        #expect(clockState == originalClockState)
+    }
+
+    @Test func uuidV7RejectsMalformedPersistedCursorWithoutMutation() {
+        var state = PersistedTimerState.fresh()
+        state.hlcWallMs = 1_000
+        state.lastUuidV7 = UUID()
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.reserveUuidV7()
+        }
+        #expect(state == original)
+    }
+
+    @Test func uuidV7RejectsStalePersistedCursorWithoutMutation() throws {
+        let stored = try UUIDv7.make(timestampMs: 1_000, randomHigh: 0, randomLow: 1)
+        let queued = try UUIDv7.make(timestampMs: 1_000, randomHigh: 0, randomLow: 2)
+        var state = PersistedTimerState.fresh()
+        state.hlcWallMs = 1_000
+        state.lastUuidV7 = stored
+        state.pendingDurationOperations = [TestFixtures.durationOperation(
+            id: "duration-operation-\(queued.uuidString.lowercased())",
+            phase: .focus,
+            durationMs: 60_000,
+            wallMs: 1_000
+        )]
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.reserveUuidV7()
+        }
+        #expect(state == original)
+    }
+
+    @Test func uuidV7RejectsTimestampAndTailOverflowWithoutMutation() throws {
+        var unsafeTimestamp = PersistedTimerState.fresh()
+        unsafeTimestamp.hlcWallMs = UUIDv7.maxTimestampMs + 1
+        let originalTimestamp = unsafeTimestamp
+
+        #expect(throws: AppError.self) {
+            try unsafeTimestamp.reserveUuidV7()
+        }
+        #expect(unsafeTimestamp == originalTimestamp)
+
+        var exhaustedTail = PersistedTimerState.fresh()
+        exhaustedTail.hlcWallMs = 1_000
+        exhaustedTail.lastUuidV7 = try UUIDv7.make(
+            timestampMs: 1_000,
+            randomHigh: UUIDv7.maxRandomHigh,
+            randomLow: UUIDv7.maxRandomLow
+        )
+        let originalTail = exhaustedTail
+
+        #expect(throws: AppError.self) {
+            try exhaustedTail.reserveUuidV7()
+        }
+        #expect(exhaustedTail == originalTail)
+    }
+
+    @Test func trustedTimeRejectsMoreThanFiveMinutesSkewWithoutMutation() {
+        let occurrence = Date(timeIntervalSince1970: 1_000)
+        var state = PersistedTimerState.fresh()
+        state.hlcWallMs = 1_300_001
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.advanceClock(at: occurrence)
+        }
+        #expect(state == original)
+    }
+
+    @Test func normalOperationsRejectZeroClockAndLegacySentinelRequiresEpoch() {
+        let nonEpoch = Date(timeIntervalSince1970: 1)
+        let task = TaskOperation(
+            id: "task-zero-clock",
+            taskId: "aaf83054-24b2-8c0e-901f-a974147bfe82",
+            type: .delete,
+            title: nil,
+            occurredAt: nonEpoch,
+            hlcWallMs: 0,
+            hlcCounter: 0
+        )
+        let duration = TestFixtures.durationOperation(
+            id: "duration-zero-clock-non-epoch",
+            phase: .focus,
+            durationMs: 60_000,
+            wallMs: 0,
+            occurredAt: nonEpoch
+        )
+        let autoStart = TestFixtures.autoStartOperation(
+            enabled: true,
+            wallMs: 0,
+            occurredAt: nonEpoch
+        )
+
+        #expect(!task.isValid)
+        #expect(!duration.isValid)
+        #expect(!autoStart.isValid)
+    }
+
+    @Test func serverClockSampleRejectsHLCOutsideServerTimeSkewWithoutMutation() {
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        var state = PersistedTimerState.fresh()
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.mergeClock(
+                serverWallMs: 2_300_001,
+                serverCounter: 0,
+                serverTime: serverTime,
+                requestWall: serverTime.addingTimeInterval(3_600),
+                requestUptime: 100,
+                responseUptime: 100
+            )
+        }
+        #expect(state == original)
+    }
+
+    @Test func serverClockSampleRejectsExcessiveUncertaintyWithoutMutation() {
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        var state = PersistedTimerState.fresh()
+        state.serverTimeOffsetMs = 123
+        state.serverTimeUncertaintyMs = 10
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.mergeClock(
+                serverWallMs: 2_000_000,
+                serverCounter: 0,
+                serverTime: serverTime,
+                requestWall: serverTime,
+                requestUptime: 100,
+                responseUptime: 160.002
+            )
+        }
+        #expect(state == original)
+    }
+
+    @Test func retainedOperationWithoutCanonicalHeadroomRejectsWithoutMutation() throws {
+        let task = try #require(FocusTask(title: "Future retained task"))
+        let operation = TaskOperation(
+            id: "task-operation-future",
+            taskId: task.id.uuidString.lowercased(),
+            type: .upsert,
+            title: task.title,
+            occurredAt: Date(timeIntervalSince1970: 1_000.101),
+            hlcWallMs: 1_000_101,
+            hlcCounter: 0
+        )
+        var state = PersistedTimerState.fresh()
+        state.pendingTaskOperations = [operation]
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.rebasePendingOperations(
+                afterServerWallMs: 1_300_100,
+                serverCounter: WireBounds.maxSafeInteger,
+                serverTime: Date(timeIntervalSince1970: 1_000.1)
+            )
+        }
+        #expect(state == original)
+    }
+
+    @Test func serverClockSampleRejectsReversedOrUnsafeWallArithmeticWithoutMutation() {
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        for (requestWall, requestUptime, responseUptime) in [
+            (serverTime, 101.0, 100.0),
+            (Date(timeIntervalSince1970: .infinity), 100.0, 100.0)
+        ] {
+            var state = PersistedTimerState.fresh()
+            let original = state
+
+            #expect(throws: AppError.self) {
+                try state.mergeClock(
+                    serverWallMs: 2_000_000,
+                    serverCounter: 0,
+                    serverTime: serverTime,
+                    requestWall: requestWall,
+                    requestUptime: requestUptime,
+                    responseUptime: responseUptime
+                )
+            }
+            #expect(state == original)
+        }
+    }
+
+    @Test func persistedHalfSampleFailsClosed() throws {
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder.api.encode(
+            PersistedTimerState.fresh()
+        )) as? [String: Any])
+        object["serverTimeUncertaintyMs"] = 1
+
+        let state = try JSONDecoder.api.decode(
+            PersistedTimerState.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        #expect(state.serverTimeOffsetMs == nil)
+        #expect(state.serverTimeUncertaintyMs == 1)
+        #expect(!state.hasValidGeneratorState)
+        #expect(throws: AppError.self) {
+            try state.trustedOccurrenceDate(for: TestFixtures.anchor, uptime: 100)
+        }
+    }
+
+    @Test func physicalMillisecondsRejectsUnsafeDoubleBoundaryAndSubMillisecondEpoch() {
+        #expect(WireBounds.physicalMilliseconds(for: Date(
+            timeIntervalSince1970: 9_007_199_254_740_992.0 / 1_000
+        )) == nil)
+        #expect(WireBounds.physicalMilliseconds(for: Date(timeIntervalSince1970: 0.0009)) == nil)
+    }
+
+    @Test func resamplePreflightRejectsCorruptLastTrustedTimestamp() {
+        var state = PersistedTimerState.fresh()
+        state.lastTrustedTimeMs = WireBounds.maxSafeInteger + 1
+
+        #expect(!state.hasValidPendingWireOperationsForResample)
+    }
+
     @Test func taskRejectsTitleContainingOnlyInvisibleEdges() {
         #expect(FocusTask(title: "\u{0000}\t\n") == nil)
+    }
+
+    @Test func malformedTaskUpsertDoesNotDeleteExistingTask() throws {
+        let task = try #require(FocusTask(title: "Existing"))
+        let malformed = TaskOperation(
+            id: "task-operation-malformed",
+            taskId: task.id.uuidString.lowercased(),
+            type: .upsert,
+            title: "Different identity",
+            occurredAt: TestFixtures.anchor,
+            hlcWallMs: 1,
+            hlcCounter: 0
+        )
+
+        #expect(TaskReducer.applying([malformed], to: [task]) == [task])
     }
 
     @Test func timerAlarmIdentityRejectsMalformedTimerIDs() {
         #expect(TimerAlarmScheduler.alarmID(for: "remote-timer") == nil)
         #expect(TimerAlarmScheduler.alarmID(for: "timer-not-a-uuid") == nil)
+    }
+
+    @Test @MainActor
+    func timerAlarmSchedulerRejectsDeniedAuthorizationAndNotificationFallback() async {
+        let notifications = RecordingNotificationBackend()
+        let alarms = RecordingSystemAlarmBackend()
+        alarms.authorizationState = .denied
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+
+        await #expect(throws: TimerAlarmError.self) {
+            try await scheduler.requestAuthorization()
+        }
+        await #expect(throws: TimerAlarmError.self) {
+            try await scheduler.schedule(timerID: "remote-timer", phase: .focus, duration: 60)
+        }
+        #expect(notifications.operations == [.requestAuthorization, .canSchedule])
+        #expect(alarms.operations.isEmpty)
+    }
+
+    @Test @MainActor
+    func timerAlarmSchedulerPropagatesSelectedBackendFailures() async throws {
+        let notifications = RecordingNotificationBackend()
+        notifications.canScheduleResult = true
+        notifications.schedulingError = AppError.invalidResponse
+        let alarms = RecordingSystemAlarmBackend()
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+
+        await #expect(throws: AppError.self) {
+            try await scheduler.schedule(timerID: "remote-timer", phase: .focus, duration: 60)
+        }
+
+        let uuid = try #require(UUID(uuidString: "83A06D73-1D2D-441E-AFC2-E36DA0518613"))
+        alarms.authorizationState = .authorized
+        try await alarms.schedule(id: uuid, timerID: "timer-\(uuid.uuidString.lowercased())", phase: .focus, duration: 60)
+        alarms.operationError = AppError.invalidResponse
+        await #expect(throws: AppError.self) {
+            try await scheduler.pause(timerID: "timer-\(uuid.uuidString.lowercased())")
+        }
+    }
+
+    @Test @MainActor
+    func timerAlarmSchedulerKeepsExistingNotificationWhenAlarmReplacementFails() async throws {
+        let uuid = try #require(UUID(uuidString: "83A06D73-1D2D-441E-AFC2-E36DA0518613"))
+        let timerID = "timer-\(uuid.uuidString.lowercased())"
+        let notificationID = TimerAlarmScheduler.notificationID(for: timerID)
+        let notifications = RecordingNotificationBackend()
+        notifications.canScheduleResult = true
+        let alarms = RecordingSystemAlarmBackend()
+        alarms.authorizationState = .denied
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+        try await scheduler.schedule(timerID: timerID, phase: .focus, duration: 60)
+
+        alarms.authorizationState = .authorized
+        alarms.operationError = AppError.invalidResponse
+        await #expect(throws: AppError.self) {
+            try await scheduler.schedule(timerID: timerID, phase: .focus, duration: 30)
+        }
+
+        #expect(notifications.operations == [
+            .canSchedule,
+            .schedule(identifier: notificationID, phase: .focus, duration: 60),
+        ])
     }
 
     @Test func settingsClampDurationsOutsideAPIContract() {
@@ -62,7 +449,7 @@ struct UnitNegativeTests {
         #expect(!operation.isValid)
     }
 
-    @Test func persistedPendingDurationsRejectMalformedHLC() throws {
+    @Test func persistedPendingDurationsRetainMalformedHLCForFailClosedPreflight() throws {
         var state = PersistedTimerState.fresh()
         state.pendingDurationOperations = [TestFixtures.durationOperation(
             id: "duration-operation-malformed",
@@ -73,12 +460,13 @@ struct UnitNegativeTests {
         )]
         let data = try JSONEncoder.api.encode(state)
 
-        #expect(throws: DecodingError.self) {
-            try JSONDecoder.api.decode(PersistedTimerState.self, from: data)
-        }
+        let decoded = try JSONDecoder.api.decode(PersistedTimerState.self, from: data)
+
+        #expect(decoded.pendingDurationOperations == state.pendingDurationOperations)
+        #expect(!decoded.hasValidPendingWireOperations)
     }
 
-    @Test func persistedPendingAutoStartSanitizesMalformedForeignAndDuplicateRows() throws {
+    @Test func persistedPendingAutoStartRetainsDecodableCorruptionForFailClosedPreflight() throws {
         var state = PersistedTimerState.fresh()
         state.deviceId = "device-local"
         state.autoStartBreaks = true
@@ -112,15 +500,27 @@ struct UnitNegativeTests {
 
         let decoded = try JSONDecoder.api.decode(PersistedTimerState.self, from: malformedData)
 
-        #expect(!zeroWall.isValid)
+        #expect(zeroWall.isValid)
         #expect(!negativeWall.isValid)
-        #expect(decoded.pendingAutoStartOperations == [valid])
+        #expect(decoded.pendingAutoStartOperations == [valid, zeroWall, negativeWall, foreign, valid])
+        #expect(decoded.hasCorruptPendingOperations)
+        #expect(!decoded.hasValidPendingWireOperations)
         #expect(decoded.autoStartBreaks)
     }
 
     @Test func syncResponseRequiresFixedDurationFields() {
         let json = Data(
             #"{"acknowledgements":[],"revision":0,"canonicalTimer":null,"history":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":0}"#.utf8
+        )
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder.api.decode(SyncResponse.self, from: json)
+        }
+    }
+
+    @Test func syncResponseRequiresCanonicalTasksField() {
+        let json = Data(
+            #"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":1,"canonicalTimer":null,"history":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":0}"#.utf8
         )
 
         #expect(throws: DecodingError.self) {
@@ -181,7 +581,7 @@ struct UnitNegativeTests {
         let original = state
         let acknowledgement = DurationAcknowledgement(
             operationId: operation.id,
-            outcome: "applied",
+            outcome: .applied,
             reason: ""
         )
 
@@ -253,6 +653,32 @@ struct UnitNegativeTests {
 
         #expect(throws: DecodingError.self) {
             try JSONDecoder.api.decode(SyncResponse.self, from: json)
+        }
+    }
+
+    @Test(arguments: ["acknowledgements", "taskAcknowledgements", "durationAcknowledgements"])
+    func syncResponseRejectsUnknownStringAcknowledgementOutcomes(_ key: String) throws {
+        var object: [String: Any] = [
+            "acknowledgements": [],
+            "taskAcknowledgements": [],
+            "durationAcknowledgements": [],
+            "autoStartAcknowledgements": [],
+            "durationsMs": ["focus": 1_500_000, "short_break": 300_000, "long_break": 900_000],
+            "autoStartBreaks": false,
+            "revision": 1,
+            "canonicalTimer": NSNull(),
+            "history": [],
+            "tasks": [],
+            "serverTime": "2026-07-21T08:00:00.000Z",
+            "serverHlcWallMs": 1_784_620_800_000,
+            "serverHlcCounter": 0
+        ]
+        let idKey = key == "acknowledgements" ? "commandId" : "operationId"
+        object[key] = [[idKey: "unknown-outcome", "outcome": "unknown", "reason": ""]]
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder.api.decode(SyncResponse.self, from: data)
         }
     }
 
@@ -407,3 +833,10 @@ struct UnitNegativeTests {
         }
     }
 }
+
+private let keychainFailureTokens = TokenPair(
+    accessToken: "access",
+    accessTokenExpiresAt: Date(timeIntervalSince1970: 2_000),
+    refreshToken: "refresh",
+    refreshTokenExpiresAt: Date(timeIntervalSince1970: 3_000)
+)

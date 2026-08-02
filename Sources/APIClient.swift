@@ -1,16 +1,27 @@
 import Foundation
 
 actor APIClient {
-    private let baseURL = URL(string: "https://pomodorough.egigoka.me")!
+    private let baseURL: URL
     private let session: URLSession
     private let keychain: any TokenStoring
+    private let wallNow: @Sendable () -> Date
+    private let uptime: @Sendable () -> TimeInterval
     private var tokens: TokenPair?
     private var refreshTask: Task<TokenPair, Error>?
     private var tokenGeneration = 0
 
-    init(session: URLSession = .shared, keychain: any TokenStoring = KeychainStore()) {
+    init(
+        baseURL: URL = URL(string: "https://pomodorough.egigoka.me")!,
+        session: URLSession = .shared,
+        keychain: any TokenStoring = KeychainStore(),
+        wallNow: @escaping @Sendable () -> Date = { Date() },
+        uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        self.baseURL = baseURL
         self.session = session
         self.keychain = keychain
+        self.wallNow = wallNow
+        self.uptime = uptime
     }
 
     func restoreTokens() throws -> Bool {
@@ -44,22 +55,22 @@ actor APIClient {
         try await send("/api/v1/me", authenticated: true)
     }
 
-    func sync(_ request: SyncRequest) async throws -> SyncResponse {
+    func sync(_ request: SyncRequest) async throws -> TimedHTTPResponse<SyncResponse> {
         do {
-            return try await send("/api/v1/sync", method: "POST", body: request, authenticated: true)
+            return try await sendTimed("/api/v1/sync", method: "POST", body: request, authenticated: true)
         } catch is DecodingError {
             throw AppError.invalidResponse
         }
     }
 
-    func bootstrap(_: SyncRequest) async throws -> BootstrapResponse {
+    func bootstrap(_: SyncRequest) async throws -> TimedHTTPResponse<BootstrapResponse> {
         do {
-            let response: BootstrapResponse = try await send(
+            let response: TimedHTTPResponse<BootstrapResponse> = try await sendTimed(
                 "/api/v1/bootstrap",
                 authenticated: true,
                 reportsMissingRoute: true
             )
-            return try response.validatingEmptyAcknowledgements()
+            return try response.map { try $0.validatingEmptyAcknowledgements() }
         } catch is MissingRouteError {
             throw AppError.historyReplacementUnavailable
         } catch is DecodingError {
@@ -67,9 +78,9 @@ actor APIClient {
         }
     }
 
-    func resolveBootstrap(_ request: BootstrapResolveRequest) async throws -> BootstrapResponse {
+    func resolveBootstrap(_ request: BootstrapResolveRequest) async throws -> TimedHTTPResponse<BootstrapResponse> {
         do {
-            return try await send(
+            return try await sendTimed(
                 "/api/v1/bootstrap/resolve",
                 method: "POST",
                 body: request,
@@ -104,8 +115,18 @@ actor APIClient {
                     }
 
                     var parser = SSERevisionParser()
-                    for try await line in bytes.lines {
+                    var lineBytes = Data()
+                    for try await byte in bytes {
                         try Task.checkCancellation()
+                        guard byte == 0x0A else {
+                            lineBytes.append(byte)
+                            continue
+                        }
+                        if lineBytes.last == 0x0D {
+                            lineBytes.removeLast()
+                        }
+                        let line = String(decoding: lineBytes, as: UTF8.self)
+                        lineBytes.removeAll(keepingCapacity: true)
                         if let revision = parser.consume(line: line) {
                             continuation.yield(revision)
                         }
@@ -195,14 +216,57 @@ actor APIClient {
         authenticated: Bool,
         reportsMissingRoute: Bool = false
     ) async throws -> Response {
-        let data = try await perform(
+        let result = try await perform(
             path,
             method: method,
             body: body,
             authenticated: authenticated,
             reportsMissingRoute: reportsMissingRoute
         )
-        return try JSONDecoder.api.decode(Response.self, from: data)
+        return try JSONDecoder.api.decode(Response.self, from: result.data)
+    }
+
+    private func sendTimed<Response: Decodable & Sendable>(
+        _ path: String,
+        method: String = "GET",
+        authenticated: Bool,
+        reportsMissingRoute: Bool = false
+    ) async throws -> TimedHTTPResponse<Response> {
+        try await sendTimed(
+            path,
+            method: method,
+            body: Optional<String>.none,
+            authenticated: authenticated,
+            reportsMissingRoute: reportsMissingRoute
+        )
+    }
+
+    private func sendTimed<Body: Encodable, Response: Decodable & Sendable>(
+        _ path: String,
+        method: String = "GET",
+        body: Body?,
+        authenticated: Bool,
+        reportsMissingRoute: Bool = false
+    ) async throws -> TimedHTTPResponse<Response> {
+        let result = try await perform(
+            path,
+            method: method,
+            body: body,
+            authenticated: authenticated,
+            reportsMissingRoute: reportsMissingRoute,
+            capturesTiming: true
+        )
+        guard let requestWall = result.requestWall,
+              let requestUptime = result.requestUptime,
+              let responseUptime = result.responseUptime else {
+            throw AppError.invalidResponse
+        }
+        return TimedHTTPResponse(
+            value: try JSONDecoder.api.decode(Response.self, from: result.data),
+            requestWall: requestWall,
+            requestUptime: requestUptime,
+            responseUptime: responseUptime
+        )
     }
 
     private func perform<Body: Encodable>(
@@ -210,8 +274,9 @@ actor APIClient {
         method: String,
         body: Body?,
         authenticated: Bool,
-        reportsMissingRoute: Bool = false
-    ) async throws -> Data {
+        reportsMissingRoute: Bool = false,
+        capturesTiming: Bool = false
+    ) async throws -> HTTPResult {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -223,7 +288,10 @@ actor APIClient {
             request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
         }
 
+        let requestWall = capturesTiming ? wallNow() : nil
+        let requestUptime = capturesTiming ? uptime() : nil
         let (data, response) = try await session.data(for: request)
+        let responseUptime = capturesTiming ? uptime() : nil
         guard let http = response as? HTTPURLResponse else { throw AppError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 { throw AppError.unauthorized }
@@ -232,8 +300,36 @@ actor APIClient {
             if http.statusCode == 409 { throw AppError.conflict(message) }
             throw AppError.server(message)
         }
-        return data
+        return HTTPResult(
+            data: data,
+            requestWall: requestWall,
+            requestUptime: requestUptime,
+            responseUptime: responseUptime
+        )
     }
+}
+
+struct TimedHTTPResponse<Value: Sendable>: Sendable {
+    let value: Value
+    let requestWall: Date
+    let requestUptime: TimeInterval
+    let responseUptime: TimeInterval
+
+    func map<Mapped: Sendable>(_ transform: (Value) throws -> Mapped) rethrows -> TimedHTTPResponse<Mapped> {
+        TimedHTTPResponse<Mapped>(
+            value: try transform(value),
+            requestWall: requestWall,
+            requestUptime: requestUptime,
+            responseUptime: responseUptime
+        )
+    }
+}
+
+private struct HTTPResult: Sendable {
+    let data: Data
+    let requestWall: Date?
+    let requestUptime: TimeInterval?
+    let responseUptime: TimeInterval?
 }
 
 private struct APIError: Decodable { let error: String }

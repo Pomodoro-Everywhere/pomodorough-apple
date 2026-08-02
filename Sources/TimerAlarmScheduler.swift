@@ -10,9 +10,9 @@ import UserNotifications
 protocol TimerAlarmScheduling: AnyObject {
     func requestAuthorization() async throws
     func schedule(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws
-    func pause(timerID: String) throws
+    func pause(timerID: String) async throws
     func resume(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws
-    func cancel(timerID: String) throws
+    func cancel(timerID: String) async throws
 }
 
 enum TimerAlarmError: LocalizedError {
@@ -26,86 +26,305 @@ enum TimerAlarmError: LocalizedError {
     }
 }
 
+enum TimerSystemAlarmAuthorizationState: Equatable {
+    case unsupported
+    case notDetermined
+    case authorized
+    case denied
+}
+
 @MainActor
-final class TimerAlarmScheduler: TimerAlarmScheduling {
-    func requestAuthorization() async throws {
+protocol TimerNotificationBackend: Sendable {
+    var isSupported: Bool { get }
+    func requestAuthorization() async throws -> Bool
+    func canSchedule() async -> Bool
+    func schedule(identifier: String, phase: TimerPhase, duration: TimeInterval) async throws
+    func remove(identifier: String)
+}
+
+@MainActor
+protocol TimerSystemAlarmBackend: Sendable {
+    var authorizationState: TimerSystemAlarmAuthorizationState { get }
+    func requestAuthorization() async throws -> Bool
+    func schedule(id: UUID, timerID: String, phase: TimerPhase, duration: TimeInterval) async throws
+    func pause(id: UUID) throws
+    func resume(id: UUID) throws -> Bool
+    func cancel(id: UUID) throws
+}
+
+struct SystemTimerNotificationBackend: TimerNotificationBackend {
+    var isSupported: Bool {
 #if os(iOS)
-        let notificationsAllowed = (try? await UNUserNotificationCenter.current().requestAuthorization(
-            options: [.alert, .sound]
-        )) ?? false
-        var alarmsAllowed = false
+        true
+#else
+        false
+#endif
+    }
+
+    func requestAuthorization() async throws -> Bool {
+#if os(iOS)
+        try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+#else
+        false
+#endif
+    }
+
+    func canSchedule() async -> Bool {
+#if os(iOS)
+        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral: true
+        default: false
+        }
+#else
+        false
+#endif
+    }
+
+    func schedule(identifier: String, phase: TimerPhase, duration: TimeInterval) async throws {
+#if os(iOS)
+        let content = UNMutableNotificationContent()
+        content.title = TimerAlarmScheduler.title(for: phase)
+        content.body = "Your next Pomodorough interval is ready."
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1, duration), repeats: false)
+        )
+        try await UNUserNotificationCenter.current().add(request)
+#endif
+    }
+
+    func remove(identifier: String) {
+#if os(iOS)
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+#endif
+    }
+}
+
+struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
+    var authorizationState: TimerSystemAlarmAuthorizationState {
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            return switch AlarmManager.shared.authorizationState {
+            case .notDetermined: .notDetermined
+            case .authorized: .authorized
+            case .denied: .denied
+            @unknown default: .denied
+            }
+        }
+#endif
+        return .unsupported
+    }
+
+    func requestAuthorization() async throws -> Bool {
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            return try await AlarmManager.shared.requestAuthorization() == .authorized
+        }
+#endif
+        return false
+    }
+
+    func schedule(id: UUID, timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            let attributes = AlarmAttributes(
+                presentation: AlarmPresentation(alert: Self.alert(for: phase)),
+                metadata: TimerAlarmMetadata(timerID: timerID, phase: phase.rawValue),
+                tintColor: Color(red: 1, green: 96.0 / 255.0, blue: 79.0 / 255.0)
+            )
+            let configuration = AlarmManager.AlarmConfiguration<TimerAlarmMetadata>.timer(
+                duration: max(1, duration),
+                attributes: attributes
+            )
+            _ = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
+        }
+#endif
+    }
+
+    func pause(id: UUID) throws {
+#if os(iOS)
         if #available(iOS 26.0, *) {
             let manager = AlarmManager.shared
-            switch manager.authorizationState {
-            case .notDetermined:
-                alarmsAllowed = (try? await manager.requestAuthorization()) == .authorized
-            case .authorized:
-                alarmsAllowed = true
-            case .denied:
-                break
-            @unknown default:
-                break
+            guard try manager.alarms.contains(where: { $0.id == id }) else { return }
+            try manager.pause(id: id)
+        }
+#endif
+    }
+
+    func resume(id: UUID) throws -> Bool {
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            let manager = AlarmManager.shared
+            guard try manager.alarms.contains(where: { $0.id == id }) else { return false }
+            try manager.resume(id: id)
+            return true
+        }
+#endif
+        return false
+    }
+
+    func cancel(id: UUID) throws {
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            let manager = AlarmManager.shared
+            guard try manager.alarms.contains(where: { $0.id == id }) else { return }
+            try manager.cancel(id: id)
+        }
+#endif
+    }
+}
+
+@MainActor
+private final class TimerAlarmOperationCoordinator {
+    static let shared = TimerAlarmOperationCoordinator()
+
+    private var tails: [String: Task<Void, Never>] = [:]
+    private var tokens: [String: UUID] = [:]
+
+    func perform(
+        timerID: String,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async throws {
+        let previous = tails[timerID]
+        let token = UUID()
+        let task = Task<Void, Error> { @MainActor in
+            await previous?.value
+            try await operation()
+        }
+        let tail = Task<Void, Never> { @MainActor in
+            _ = await task.result
+        }
+        tails[timerID] = tail
+        tokens[timerID] = token
+        defer {
+            if tokens[timerID] == token {
+                tokens.removeValue(forKey: timerID)
+                tails.removeValue(forKey: timerID)
             }
+        }
+        try await task.value
+    }
+}
+
+@MainActor
+final class TimerAlarmScheduler: TimerAlarmScheduling {
+    private let notifications: any TimerNotificationBackend
+    private let alarms: any TimerSystemAlarmBackend
+
+    init(
+        notifications: any TimerNotificationBackend = SystemTimerNotificationBackend(),
+        alarms: any TimerSystemAlarmBackend = SystemTimerAlarmBackend()
+    ) {
+        self.notifications = notifications
+        self.alarms = alarms
+    }
+
+    func requestAuthorization() async throws {
+        guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
+        let notificationsAllowed = (try? await notifications.requestAuthorization()) ?? false
+        let alarmsAllowed: Bool
+        switch alarms.authorizationState {
+        case .notDetermined:
+            alarmsAllowed = (try? await alarms.requestAuthorization()) ?? false
+        case .authorized:
+            alarmsAllowed = true
+        case .unsupported, .denied:
+            alarmsAllowed = false
         }
         guard notificationsAllowed || alarmsAllowed else {
             throw TimerAlarmError.authorizationDenied
         }
-#endif
     }
 
     func schedule(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
-#if os(iOS)
-        if #available(iOS 26.0, *),
-           let alarmID = Self.alarmID(for: timerID),
-           AlarmManager.shared.authorizationState == .authorized {
-            try await scheduleAlarm(id: alarmID, timerID: timerID, phase: phase, duration: duration)
-            return
+        try await TimerAlarmOperationCoordinator.shared.perform(timerID: timerID) { [notifications, alarms] in
+            guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
+            if alarms.authorizationState == .authorized,
+               let alarmID = Self.alarmID(for: timerID) {
+                try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
+                notifications.remove(identifier: Self.notificationID(for: timerID))
+                return
+            }
+            guard await notifications.canSchedule() else { throw TimerAlarmError.authorizationDenied }
+            let notificationID = Self.notificationID(for: timerID)
+            try await notifications.schedule(identifier: notificationID, phase: phase, duration: duration)
+            if let alarmID = Self.alarmID(for: timerID) {
+                do {
+                    try alarms.cancel(id: alarmID)
+                } catch {
+                    notifications.remove(identifier: notificationID)
+                    throw error
+                }
+            }
         }
-        try await scheduleNotification(timerID: timerID, phase: phase, duration: duration)
-#endif
     }
 
-    func pause(timerID: String) throws {
-#if os(iOS)
-        if #available(iOS 26.0, *),
-           AlarmManager.shared.authorizationState == .authorized,
-           let alarmID = Self.alarmID(for: timerID) {
-            try AlarmManager.shared.pause(id: alarmID)
-        } else {
-            removeNotification(timerID: timerID)
+    func pause(timerID: String) async throws {
+        try await TimerAlarmOperationCoordinator.shared.perform(timerID: timerID) { [notifications, alarms] in
+            guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
+            notifications.remove(identifier: Self.notificationID(for: timerID))
+            if let alarmID = Self.alarmID(for: timerID) {
+                try alarms.pause(id: alarmID)
+            }
         }
-#endif
     }
 
     func resume(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
-#if os(iOS)
-        if #available(iOS 26.0, *),
-           AlarmManager.shared.authorizationState == .authorized,
-           let alarmID = Self.alarmID(for: timerID) {
-            try AlarmManager.shared.resume(id: alarmID)
-        } else {
-            try await scheduleNotification(timerID: timerID, phase: phase, duration: duration)
+        try await TimerAlarmOperationCoordinator.shared.perform(timerID: timerID) { [notifications, alarms] in
+            guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
+            if alarms.authorizationState == .authorized,
+               let alarmID = Self.alarmID(for: timerID) {
+                if try alarms.resume(id: alarmID) {
+                    notifications.remove(identifier: Self.notificationID(for: timerID))
+                    return
+                }
+                try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
+                notifications.remove(identifier: Self.notificationID(for: timerID))
+                return
+            }
+            guard await notifications.canSchedule() else { throw TimerAlarmError.authorizationDenied }
+            let notificationID = Self.notificationID(for: timerID)
+            try await notifications.schedule(identifier: notificationID, phase: phase, duration: duration)
+            if let alarmID = Self.alarmID(for: timerID) {
+                do {
+                    try alarms.cancel(id: alarmID)
+                } catch {
+                    notifications.remove(identifier: notificationID)
+                    throw error
+                }
+            }
         }
-#endif
     }
 
-    func cancel(timerID: String) throws {
-#if os(iOS)
-        if #available(iOS 26.0, *),
-           AlarmManager.shared.authorizationState == .authorized,
-           let alarmID = Self.alarmID(for: timerID) {
-            let manager = AlarmManager.shared
-            guard try manager.alarms.contains(where: { $0.id == alarmID }) else { return }
-            try manager.cancel(id: alarmID)
-        } else {
-            removeNotification(timerID: timerID)
+    func cancel(timerID: String) async throws {
+        try await TimerAlarmOperationCoordinator.shared.perform(timerID: timerID) { [notifications, alarms] in
+            guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
+            notifications.remove(identifier: Self.notificationID(for: timerID))
+            if let alarmID = Self.alarmID(for: timerID) {
+                try alarms.cancel(id: alarmID)
+            }
         }
-#endif
     }
 
     nonisolated static func alarmID(for timerID: String) -> UUID? {
         guard timerID.hasPrefix("timer-") else { return nil }
         return UUID(uuidString: String(timerID.dropFirst("timer-".count)))
+    }
+
+    nonisolated static func notificationID(for timerID: String) -> String {
+        "pomodorough.\(timerID)"
+    }
+
+    nonisolated static func title(for phase: TimerPhase) -> String {
+        switch phase {
+        case .focus: "Focus complete"
+        case .shortBreak: "Short break complete"
+        case .longBreak: "Long break complete"
+        }
     }
 }
 
@@ -117,25 +336,7 @@ private struct TimerAlarmMetadata: AlarmMetadata {
 }
 
 @available(iOS 26.0, *)
-private extension TimerAlarmScheduler {
-    func scheduleAlarm(
-        id: UUID,
-        timerID: String,
-        phase: TimerPhase,
-        duration: TimeInterval
-    ) async throws {
-        let attributes = AlarmAttributes(
-            presentation: AlarmPresentation(alert: Self.alert(for: phase)),
-            metadata: TimerAlarmMetadata(timerID: timerID, phase: phase.rawValue),
-            tintColor: Color(red: 1, green: 96.0 / 255.0, blue: 79.0 / 255.0)
-        )
-        let configuration = AlarmManager.AlarmConfiguration<TimerAlarmMetadata>.timer(
-            duration: max(1, duration),
-            attributes: attributes
-        )
-        _ = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
-    }
-
+private extension SystemTimerAlarmBackend {
     static func alert(for phase: TimerPhase) -> AlarmPresentation.Alert {
         let title: LocalizedStringResource = switch phase {
         case .focus: "Focus complete"
@@ -157,41 +358,4 @@ private extension TimerAlarmScheduler {
     }
 }
 
-private extension TimerAlarmScheduler {
-    func scheduleNotification(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
-        let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .authorized
-                || settings.authorizationStatus == .provisional
-                || settings.authorizationStatus == .ephemeral else {
-            throw TimerAlarmError.authorizationDenied
-        }
-
-        let content = UNMutableNotificationContent()
-        content.title = switch phase {
-        case .focus: "Focus complete"
-        case .shortBreak: "Short break complete"
-        case .longBreak: "Long break complete"
-        }
-        content.body = "Your next Pomodorough interval is ready."
-        content.sound = .default
-        let request = UNNotificationRequest(
-            identifier: Self.notificationID(for: timerID),
-            content: content,
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1, duration), repeats: false)
-        )
-        try await center.add(request)
-    }
-
-    func removeNotification(timerID: String) {
-        let identifier = Self.notificationID(for: timerID)
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-        center.removeDeliveredNotifications(withIdentifiers: [identifier])
-    }
-
-    nonisolated static func notificationID(for timerID: String) -> String {
-        "pomodorough.\(timerID)"
-    }
-}
 #endif

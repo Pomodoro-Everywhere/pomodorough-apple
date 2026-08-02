@@ -12,7 +12,7 @@ struct PomodoroughApp: App {
                     model.setSceneActive(scenePhase == .active)
                     await model.restore()
                 }
-                .onOpenURL { GoogleAuthService.handle($0) }
+                .onOpenURL { Self.handleGoogleSignInURL($0, model: model) }
                 .onChange(of: scenePhase) { _, phase in
                     let isActive = phase == .active
                     model.setSceneActive(isActive)
@@ -25,5 +25,11 @@ struct PomodoroughApp: App {
         .defaultSize(width: 920, height: 760)
         .windowResizability(.contentMinSize)
 #endif
+    }
+
+    @MainActor
+    @discardableResult
+    static func handleGoogleSignInURL(_ url: URL, model: AppModel) -> Bool {
+        model.handleGoogleSignInURL(url)
     }
 }

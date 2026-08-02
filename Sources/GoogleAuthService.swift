@@ -9,6 +9,28 @@ import CryptoKit
 import Security
 #endif
 
+@MainActor
+protocol GoogleIdentityProviding: Sendable {
+    func identityToken(nonce: String) async throws -> String
+    @discardableResult func handle(_ url: URL) -> Bool
+    func signOut()
+}
+
+struct SystemGoogleIdentityProvider: GoogleIdentityProviding {
+    func identityToken(nonce: String) async throws -> String {
+        try await GoogleAuthService.identityToken(nonce: nonce)
+    }
+
+    @discardableResult
+    func handle(_ url: URL) -> Bool {
+        GoogleAuthService.handle(url)
+    }
+
+    func signOut() {
+        GoogleAuthService.signOut()
+    }
+}
+
 enum GoogleAuthService {
     @MainActor
     static func identityToken(nonce: String) async throws -> String {
@@ -40,9 +62,12 @@ enum GoogleAuthService {
 #endif
     }
 
-    static func handle(_ url: URL) {
+    @discardableResult
+    static func handle(_ url: URL) -> Bool {
 #if os(iOS)
         GIDSignIn.sharedInstance.handle(url)
+#else
+        false
 #endif
     }
 
@@ -54,8 +79,23 @@ enum GoogleAuthService {
 }
 
 #if os(macOS)
-@MainActor
-private final class MacGoogleOAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
+protocol GoogleOAuthTokenExchangeTransport: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
+
+struct URLSessionGoogleOAuthTokenExchangeTransport: GoogleOAuthTokenExchangeTransport {
+    let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
+    }
+}
+
+enum MacGoogleOAuthContract {
     private struct TokenResponse: Decodable {
         let idToken: String?
 
@@ -64,6 +104,114 @@ private final class MacGoogleOAuth: NSObject, ASWebAuthenticationPresentationCon
         }
     }
 
+    static func authorizationURL(
+        clientID: String,
+        redirectURI: String,
+        nonce: String,
+        state: String,
+        verifier: String
+    ) throws -> URL {
+        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLString
+        var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")
+        components?.queryItems = [
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: "openid email profile"),
+            URLQueryItem(name: "nonce", value: nonce),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "include_granted_scopes", value: "true"),
+        ]
+        guard let url = components?.url else { throw AppError.configuration }
+        return url
+    }
+
+    static func authorizationCode(from callbackURL: URL, expectedState: String) throws -> String {
+        guard let callback = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
+            throw AppError.invalidResponse
+        }
+        let parameters = Dictionary(
+            callback.queryItems?.compactMap { item in
+                item.value.map { (item.name, $0) }
+            } ?? [],
+            uniquingKeysWith: { first, _ in first }
+        )
+        if let message = parameters["error_description"] ?? parameters["error"] {
+            throw AppError.server(message)
+        }
+        guard parameters["state"] == expectedState,
+              let code = parameters["code"],
+              !code.isEmpty else {
+            throw AppError.invalidResponse
+        }
+        return code
+    }
+
+    static func tokenRequest(
+        code: String,
+        clientID: String,
+        redirectURI: String,
+        verifier: String
+    ) throws -> URLRequest {
+        guard let url = URL(string: "https://oauth2.googleapis.com/token") else {
+            throw AppError.configuration
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formData([
+            "client_id": clientID,
+            "code": code,
+            "code_verifier": verifier,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirectURI,
+        ])
+        return request
+    }
+
+    static func exchangeCode(
+        _ code: String,
+        clientID: String,
+        redirectURI: String,
+        verifier: String,
+        transport: any GoogleOAuthTokenExchangeTransport
+    ) async throws -> String {
+        let request = try tokenRequest(
+            code: code,
+            clientID: clientID,
+            redirectURI: redirectURI,
+            verifier: verifier
+        )
+        let (data, response) = try await transport.data(for: request)
+        guard let response = response as? HTTPURLResponse,
+              (200 ... 299).contains(response.statusCode) else {
+            throw AppError.server("Google rejected the sign-in response.")
+        }
+        guard let token = try JSONDecoder().decode(TokenResponse.self, from: data).idToken,
+              !token.isEmpty else {
+            throw AppError.missingIDToken
+        }
+        return token
+    }
+
+    static func formData(_ parameters: [String: String]) -> Data {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let body = parameters
+            .sorted { $0.key < $1.key }
+            .map { key, value in
+                let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+                let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+                return "\(encodedKey)=\(encodedValue)"
+            }
+            .joined(separator: "&")
+        return Data(body.utf8)
+    }
+}
+
+@MainActor
+private final class MacGoogleOAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: ASWebAuthenticationSession?
 
     static func identityToken(clientID: String, nonce: String) async throws -> String {
@@ -78,50 +226,30 @@ private final class MacGoogleOAuth: NSObject, ASWebAuthenticationPresentationCon
 
         let verifier = try randomBase64URL(byteCount: 32)
         let state = try randomBase64URL(byteCount: 32)
-        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLString
         let redirectURI = "\(callbackScheme):/oauth2callback"
-
-        var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")
-        components?.queryItems = [
-            URLQueryItem(name: "client_id", value: clientID),
-            URLQueryItem(name: "redirect_uri", value: redirectURI),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: "openid email profile"),
-            URLQueryItem(name: "nonce", value: nonce),
-            URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "code_challenge", value: challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "include_granted_scopes", value: "true"),
-        ]
-        guard let authorizationURL = components?.url else { throw AppError.configuration }
+        let authorizationURL = try MacGoogleOAuthContract.authorizationURL(
+            clientID: clientID,
+            redirectURI: redirectURI,
+            nonce: nonce,
+            state: state,
+            verifier: verifier
+        )
 
         let callbackURL = try await MacGoogleOAuth().authenticate(
             at: authorizationURL,
             callbackScheme: callbackScheme
         )
-        guard let callback = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
-            throw AppError.invalidResponse
-        }
-        let parameters = Dictionary(
-            callback.queryItems?.compactMap { item in
-                item.value.map { (item.name, $0) }
-            } ?? [],
-            uniquingKeysWith: { first, _ in first }
+        let code = try MacGoogleOAuthContract.authorizationCode(
+            from: callbackURL,
+            expectedState: state
         )
-        if let message = parameters["error_description"] ?? parameters["error"] {
-            throw AppError.server(message)
-        }
-        guard parameters["state"] == state,
-              let code = parameters["code"],
-              !code.isEmpty else {
-            throw AppError.invalidResponse
-        }
 
-        return try await exchangeCode(
+        return try await MacGoogleOAuthContract.exchangeCode(
             code,
             clientID: clientID,
             redirectURI: redirectURI,
-            verifier: verifier
+            verifier: verifier,
+            transport: URLSessionGoogleOAuthTokenExchangeTransport()
         )
     }
 
@@ -168,38 +296,6 @@ private final class MacGoogleOAuth: NSObject, ASWebAuthenticationPresentationCon
         NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
     }
 
-    private static func exchangeCode(
-        _ code: String,
-        clientID: String,
-        redirectURI: String,
-        verifier: String
-    ) async throws -> String {
-        guard let url = URL(string: "https://oauth2.googleapis.com/token") else {
-            throw AppError.configuration
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = formData([
-            "client_id": clientID,
-            "code": code,
-            "code_verifier": verifier,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirectURI,
-        ])
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let response = response as? HTTPURLResponse,
-              (200 ... 299).contains(response.statusCode) else {
-            throw AppError.server("Google rejected the sign-in response.")
-        }
-        guard let token = try JSONDecoder().decode(TokenResponse.self, from: data).idToken,
-              !token.isEmpty else {
-            throw AppError.missingIDToken
-        }
-        return token
-    }
-
     private static func randomBase64URL(byteCount: Int) throws -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
@@ -208,18 +304,6 @@ private final class MacGoogleOAuth: NSObject, ASWebAuthenticationPresentationCon
         return Data(bytes).base64URLString
     }
 
-    private static func formData(_ parameters: [String: String]) -> Data {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        let body = parameters
-            .sorted { $0.key < $1.key }
-            .map { key, value in
-                let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-                let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-                return "\(encodedKey)=\(encodedValue)"
-            }
-            .joined(separator: "&")
-        return Data(body.utf8)
-    }
 }
 
 private extension Data {
