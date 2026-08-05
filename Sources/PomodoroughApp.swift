@@ -3,7 +3,19 @@ import SwiftUI
 @main
 struct PomodoroughApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+#if DEBUG
+        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_RESET"] == "1" {
+            if let bundleIdentifier = Bundle.main.bundleIdentifier {
+                UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
+            }
+            try? KeychainStore().delete()
+        }
+#endif
+        _model = State(initialValue: AppModel())
+    }
 
     var body: some Scene {
         WindowGroup {

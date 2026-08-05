@@ -82,7 +82,7 @@ Available shared schemes:
 
 | Scheme | Purpose |
 | --- | --- |
-| `Pomodorough-iOS` | iPhone and iPad application plus unit/integration tests |
+| `Pomodorough-iOS` | iPhone and iPad application plus unit, integration, and accessibility UI tests |
 | `Pomodorough-macOS` | Native Mac application plus unit/integration tests |
 
 The generated project is checked in for convenience. Run `xcodegen generate`

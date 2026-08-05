@@ -49,23 +49,33 @@ jobs:
           macos_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Supporting/macOS-Info.plist)"
           pbx_marketing="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' Pomodorough.xcodeproj/project.pbxproj | sort -u)"
           pbx_build="$(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION = ([0-9]+);/\1/p' Pomodorough.xcodeproj/project.pbxproj | sort -u)"
+          dollar='$'
+          expected_marketing_token="${dollar}(MARKETING_VERSION)"
+          expected_build_token="${dollar}(CURRENT_PROJECT_VERSION)"
 
-          for source_version in "$marketing_version" "$ios_marketing" "$macos_marketing" "$pbx_marketing"; do
-            if [[ "$source_version" != "$tag_version" ]]; then
-              echo "Tag $GITHUB_REF_NAME does not match source version $source_version" >&2
-              exit 1
-            fi
-          done
+          if [[ "$ios_marketing" != "$expected_marketing_token" ]] ||
+            [[ "$macos_marketing" != "$expected_marketing_token" ]]; then
+            echo "App plists must inherit MARKETING_VERSION" >&2
+            exit 1
+          fi
+          if [[ "$ios_build" != "$expected_build_token" ]] ||
+            [[ "$macos_build" != "$expected_build_token" ]]; then
+            echo "App plists must inherit CURRENT_PROJECT_VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "$marketing_version" != "$tag_version" ]] || [[ "$pbx_marketing" != "$tag_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match source version" >&2
+            exit 1
+          fi
           if [[ ! "$build_version" =~ ^[1-9][0-9]*$ ]]; then
             echo "CURRENT_PROJECT_VERSION must be a positive integer" >&2
             exit 1
           fi
-          for source_build in "$ios_build" "$macos_build" "$pbx_build"; do
-            if [[ "$source_build" != "$build_version" ]]; then
-              echo "Build version $build_version does not match source build $source_build" >&2
-              exit 1
-            fi
-          done
+          if [[ "$pbx_build" != "$build_version" ]]; then
+            echo "Build version $build_version does not match source build $pbx_build" >&2
+            exit 1
+          fi
 
           release_state="$(gh release view "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
