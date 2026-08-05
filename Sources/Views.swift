@@ -112,15 +112,18 @@ private struct HistoryResolutionView: View {
 
     private var chooser: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("HISTORY AT A CROSSING")
-                .font(.caption.monospaced().bold())
-                .tracking(1.4)
-                .foregroundStyle(PomodoroughTheme.ticket)
-            Text("Choose which synchronized state to keep")
-                .font(.title.bold())
-                .foregroundStyle(PomodoroughTheme.porcelain)
-            Text("This device has \(model.localHistoryResolutionCount) completed entries. Your account has \(model.remoteHistoryResolutionCount). Timers, tasks, or settings may also differ.")
-                .foregroundStyle(PomodoroughTheme.sky)
+            Group {
+                Text("HISTORY AT A CROSSING")
+                    .font(.caption.monospaced().bold())
+                    .tracking(1.4)
+                    .foregroundStyle(PomodoroughTheme.ticket)
+                Text("Choose which synchronized state to keep")
+                    .font(.title.bold())
+                    .foregroundStyle(PomodoroughTheme.porcelain)
+                Text("This device has \(model.localHistoryResolutionCount) completed entries. Your account has \(model.remoteHistoryResolutionCount). Timers, tasks, or settings may also differ.")
+                    .foregroundStyle(PomodoroughTheme.sky)
+            }
+            .accessibilityHidden(true)
 
             resolutionButton(
                 title: "Keep Local",
@@ -141,7 +144,10 @@ private struct HistoryResolutionView: View {
         .padding(20)
         .background(PomodoroughTheme.platform.opacity(0.94), in: .rect(cornerRadius: 22))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("History conflict")
+        .accessibilityLabel(
+            "History conflict. This device has \(model.localHistoryResolutionCount) completed entries. " +
+                "Your account has \(model.remoteHistoryResolutionCount)."
+        )
     }
 
     private func resolutionButton(
@@ -174,9 +180,11 @@ private struct HistoryResolutionView: View {
             Text("Confirm \(strategy.title)")
                 .font(.title.bold())
                 .foregroundStyle(PomodoroughTheme.porcelain)
+                .accessibilityHidden(true)
             Text(confirmationMessage(for: strategy))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(PomodoroughTheme.sky)
+                .accessibilityHidden(true)
             Button(strategy.title, role: strategy == .merge ? nil : .destructive) {
                 Task { await model.confirmHistoryResolution() }
             }
@@ -193,6 +201,7 @@ private struct HistoryResolutionView: View {
         .frame(maxWidth: .infinity)
         .background(PomodoroughTheme.platform.opacity(0.94), in: .rect(cornerRadius: 22))
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Confirm \(strategy.title). \(confirmationMessage(for: strategy))")
     }
 
     private func confirmationMessage(for strategy: BootstrapResolutionStrategy) -> String {
@@ -222,9 +231,10 @@ private struct HistoryResolutionView: View {
         .padding(24)
         .frame(maxWidth: .infinity)
         .background(PomodoroughTheme.platform.opacity(0.94), in: .rect(cornerRadius: 22))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("History resolution in progress")
-        .accessibilityValue(title)
+        .accessibilityRepresentation {
+            Text("History resolution in progress")
+                .accessibilityValue(title)
+        }
     }
 
     private func retryCard(strategy: BootstrapResolutionStrategy?) -> some View {
@@ -236,9 +246,11 @@ private struct HistoryResolutionView: View {
             Text("History setup needs a retry")
                 .font(.title2.bold())
                 .foregroundStyle(PomodoroughTheme.porcelain)
+                .accessibilityHidden(true)
             Text(retryMessage(for: strategy))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(PomodoroughTheme.sky)
+                .accessibilityHidden(true)
             Button("Retry", systemImage: "arrow.clockwise") {
                 Task { await model.retryHistoryResolution() }
             }
@@ -250,7 +262,7 @@ private struct HistoryResolutionView: View {
         .frame(maxWidth: .infinity)
         .background(PomodoroughTheme.platform.opacity(0.94), in: .rect(cornerRadius: 22))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("History resolution retry required")
+        .accessibilityLabel("History resolution retry required. \(retryMessage(for: strategy))")
     }
 
     private func retryMessage(for strategy: BootstrapResolutionStrategy?) -> String {
@@ -273,6 +285,9 @@ private struct LaunchView: View {
                     .font(.caption.monospaced().bold())
                     .tracking(2)
                     .foregroundStyle(PomodoroughTheme.sky)
+            }
+            .accessibilityRepresentation {
+                Text("Checking line")
             }
         }
     }
@@ -302,6 +317,12 @@ private struct PermissionIntroductionView: View {
                             .font(.body)
                             .multilineTextAlignment(.center)
                             .foregroundStyle(PomodoroughTheme.sky)
+                    }
+                    .accessibilityRepresentation {
+                        Text("Hear when time is up")
+                            .accessibilityValue(
+                                "Pomodorough can alert you when a focus run or break ends, even when you leave the app."
+                            )
                     }
 
                     VStack(spacing: 12) {
@@ -350,11 +371,13 @@ private struct PermissionIntroductionView: View {
                         .foregroundStyle(PomodoroughTheme.porcelain)
                         .frame(minHeight: 44)
                         .disabled(isRequesting)
+                        .accessibilityHint("Continues without timer alerts. The timer still works while Pomodorough is open.")
 
                         Text("Permissions are optional. The timer still works while Pomodorough is open.")
                             .font(.footnote)
                             .multilineTextAlignment(.center)
                             .foregroundStyle(PomodoroughTheme.steel)
+                            .accessibilityHidden(true)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -397,7 +420,10 @@ private struct PermissionIntroductionCard: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(PomodoroughTheme.porcelain.opacity(0.12), lineWidth: 1)
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityRepresentation {
+            Text(title)
+                .accessibilityValue(detail)
+        }
     }
 }
 #endif
@@ -542,12 +568,17 @@ private struct LegacyTabs: View {
 #endif
 
 private struct TimerScreen: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @Bindable var model: AppModel
     @State private var showsAccount = false
 
     var body: some View {
         GeometryReader { geometry in
-            let layout = TimerLayout(size: geometry.size)
+            let layout = TimerLayout(
+                size: geometry.size,
+                usesAccessibleLayout: dynamicTypeSize.isAccessibilitySize
+            )
 
             ZStack {
                 if layout == .landscape {
@@ -570,7 +601,7 @@ private struct TimerScreen: View {
                             TimerMachineCard(model: model, layout: layout)
                         }
                         .padding()
-                        .padding(.bottom, 16)
+                        .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 96 : 16)
                         .frame(maxWidth: 760)
                         .frame(maxWidth: .infinity)
                     }
@@ -580,7 +611,7 @@ private struct TimerScreen: View {
             .animation(.default, value: layout)
         }
         .background(TimerBackdrop())
-        .navigationTitle("Pomodorough")
+        .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Timer" : "Pomodorough")
         .inlineNavigationTitleIfSupported()
         .refreshable { await model.sync(force: true) }
 #if os(iOS)
@@ -590,6 +621,14 @@ private struct TimerScreen: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Account", systemImage: "person.crop.circle") { showsAccount = true }
+                    .accessibilityValue(model.syncLabel)
+                    .accessibilityActions {
+                        if model.isSignedIn && !model.isSyncing && !model.isHistoryResolutionBlocking {
+                            Button("Sync now") {
+                                Task { await model.sync(force: true) }
+                            }
+                        }
+                    }
             }
         }
         .sheet(isPresented: $showsAccount) { AccountView(model: model) }
@@ -601,9 +640,9 @@ private enum TimerLayout: Equatable {
     case portrait
     case landscape
 
-    init(size: CGSize) {
+    init(size: CGSize, usesAccessibleLayout: Bool = false) {
 #if os(iOS)
-        self = size.width > size.height ? .landscape : .portrait
+        self = size.width > size.height && !usesAccessibleLayout ? .landscape : .portrait
 #else
         self = .landscape
 #endif
@@ -633,6 +672,7 @@ private struct SyncToolbarStatus: View {
         .accessibilityLabel("Sync status, \(model.syncLabel)")
         .accessibilityHint(model.isSignedIn ? "Sync now" : "Sign in to sync across devices")
         .disabled(!model.isSignedIn || model.isSyncing || model.isHistoryResolutionBlocking)
+        .accessibilityHidden(true)
     }
 }
 
@@ -683,12 +723,15 @@ private struct AccountSyncToolbarButton: View {
 #endif
 
 private struct ServicePatternScreen: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @Bindable var model: AppModel
 
     var body: some View {
         ScrollView {
             ServicePatternCard(model: model)
                 .padding()
+                .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 80 : 0)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
         }
@@ -710,14 +753,15 @@ private struct ConflictBanner: View {
                 Text("Timer continued elsewhere").font(.headline)
                 Text(message).font(.subheadline)
             }
+            .accessibilityHidden(true)
             Spacer()
             Button("Dismiss", systemImage: "xmark", action: dismiss)
                 .labelStyle(.iconOnly)
+                .accessibilityLabel("Timer continued elsewhere. \(message). Dismiss")
         }
         .padding()
         .foregroundStyle(.white)
         .background(PomodoroughTheme.danger, in: .rect(cornerRadius: 16))
-        .accessibilityElement(children: .contain)
     }
 }
 
@@ -741,9 +785,11 @@ private struct ServicePatternCard: View {
             Toggle("Auto-start breaks", isOn: $model.autoStartBreaks)
                 .font(.headline)
                 .disabled(model.isTimerActive)
+                .accessibilityHint("Short after focus. Long every fourth completed focus.")
             Text("Short after focus. Long every fourth completed focus.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         }
         .padding(18)
         .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 22))
@@ -755,6 +801,8 @@ private struct ServicePatternCard: View {
 }
 
 private struct DurationRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let phase: TimerPhase
     let minutes: Int
     let selected: Bool
@@ -763,44 +811,84 @@ private struct DurationRow: View {
     let changeMinutes: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button(action: select) {
-                HStack(spacing: 10) {
-                    Rectangle()
-                        .fill(selected ? PomodoroughTheme.signal : PomodoroughTheme.steel)
-                        .frame(width: 5)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(phase.routeLabel.uppercased())
-                            .font(.caption2.monospaced().bold())
-                            .foregroundStyle(selected ? PomodoroughTheme.ticket : .secondary)
-                        Text(phase.title)
-                            .font(.headline)
-                    }
-                    Spacer(minLength: 0)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) {
+                    phaseButton
+                    durationControls.frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .padding(.horizontal, 10)
-                .frame(minHeight: 54)
-                .foregroundStyle(selected ? PomodoroughTheme.porcelain : PomodoroughTheme.track)
-                .background(selected ? PomodoroughTheme.platform : .clear, in: .rect(cornerRadius: 12))
+            } else {
+                HStack(spacing: 10) {
+                    phaseButton
+                    durationControls
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(disabled)
-            .accessibilityAddTraits(selected ? .isSelected : [])
-
-            HStack(spacing: 0) {
-                StepButton(title: "Reduce \(phase.title) duration", symbol: "minus") { changeMinutes(minutes - 1) }
-                Text("\(minutes) min")
-                    .font(.callout.monospaced().bold())
-                    .frame(minWidth: 66)
-                    .accessibilityHidden(true)
-                StepButton(title: "Increase \(phase.title) duration", symbol: "plus") { changeMinutes(minutes + 1) }
-            }
-            .background(PomodoroughTheme.sky, in: .rect(cornerRadius: 12))
-            .overlay { RoundedRectangle(cornerRadius: 12).stroke(PomodoroughTheme.track, lineWidth: 1.5) }
-            .disabled(disabled)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("\(phase.title) duration, \(minutes) minutes")
         }
+        .disabled(disabled)
+        .accessibilityRepresentation {
+            Button(phase.title) {
+                guard !disabled else { return }
+                select()
+            }
+            .disabled(disabled)
+            .accessibilityValue("\(minutes) minutes")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityHint(
+                disabled
+                    ? "Stop the current timer to change this setting."
+                    : "Double tap to select. Swipe up or down to change duration."
+            )
+            .accessibilityAdjustableAction { direction in
+                guard !disabled else { return }
+                switch direction {
+                case .increment:
+                    changeMinutes(minutes + 1)
+                case .decrement:
+                    changeMinutes(minutes - 1)
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    private var phaseButton: some View {
+        Button(action: select) {
+            HStack(spacing: 10) {
+                Rectangle()
+                    .fill(selected ? PomodoroughTheme.signal : PomodoroughTheme.steel)
+                    .frame(width: 5)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(phase.routeLabel.uppercased())
+                        .font(.caption2.monospaced().bold())
+                        .foregroundStyle(selected ? PomodoroughTheme.ticket : .secondary)
+                    Text(phase.title).font(.headline)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 54)
+            .foregroundStyle(selected ? PomodoroughTheme.porcelain : PomodoroughTheme.track)
+            .background(selected ? PomodoroughTheme.platform : .clear, in: .rect(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var durationControls: some View {
+        HStack(spacing: 0) {
+            StepButton(title: "Reduce \(phase.title) duration", symbol: "minus") { changeMinutes(minutes - 1) }
+            Text("\(minutes) min")
+                .font(.callout.monospaced().bold())
+                .frame(minWidth: 66)
+                .accessibilityLabel("\(phase.title) duration")
+                .accessibilityValue("\(minutes) minutes")
+            StepButton(title: "Increase \(phase.title) duration", symbol: "plus") { changeMinutes(minutes + 1) }
+        }
+        .background(PomodoroughTheme.sky, in: .rect(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(PomodoroughTheme.track, lineWidth: 1.5) }
+        .disabled(disabled)
     }
 }
 
@@ -824,21 +912,22 @@ private struct StepButton: View {
 }
 
 private struct TimerMachineCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let model: AppModel
     let layout: TimerLayout
 
     var body: some View {
         VStack(spacing: layout == .landscape ? 10 : 18) {
-            HStack {
+            if !dynamicTypeSize.isAccessibilitySize {
                 Text("CURRENT SERVICE")
-                Spacer()
-                Text((model.activeTimer?.status.rawValue ?? "idle").uppercased())
-                    .foregroundStyle(PomodoroughTheme.ticket)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption.monospaced().bold())
+                    .tracking(1)
+                    .padding(.bottom, 8)
+                    .overlay(alignment: .bottom) { Divider().overlay(.white.opacity(0.35)) }
+                    .accessibilityHidden(true)
             }
-            .font(.caption.monospaced().bold())
-            .tracking(1)
-            .padding(.bottom, 8)
-            .overlay(alignment: .bottom) { Divider().overlay(.white.opacity(0.35)) }
 
             #if os(macOS)
             if layout == .landscape {
@@ -893,15 +982,32 @@ private struct TimerMachineCard: View {
 }
 
 private struct TimerTaskPicker: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @Bindable var model: AppModel
     let layout: TimerLayout
 
     var body: some View {
-        HStack(spacing: 12) {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) { pickerContent }
+            } else {
+                HStack(spacing: 12) { pickerContent }
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: layout == .landscape ? 40 : 48)
+        .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private var pickerContent: some View {
             Label("FOCUS TASK", systemImage: "checklist")
                 .font(.caption.monospaced().bold())
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 .foregroundStyle(PomodoroughTheme.sky)
                 .labelStyle(.titleAndIcon)
+                .accessibilityHidden(true)
             if model.isTimerActive, let timer = model.canonicalTimer {
                 Text(model.task(forTimerID: timer.id)?.title ?? "No task")
                     .font(.callout.weight(.semibold))
@@ -910,6 +1016,9 @@ private struct TimerTaskPicker: View {
                     .allowsTightening(true)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .foregroundStyle(PomodoroughTheme.ticket)
+                    .accessibilityLabel("Focus task")
+                    .accessibilityValue(model.task(forTimerID: timer.id)?.title ?? "No task")
+                    .accessibilityHidden(true)
             } else {
                 Picker("Focus task", selection: $model.selectedTaskID) {
                     Text("No task").tag(UUID?.none)
@@ -925,11 +1034,6 @@ private struct TimerTaskPicker: View {
                 .allowsTightening(true)
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: layout == .landscape ? 40 : 48)
-        .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
-        .accessibilityElement(children: model.isTimerActive ? .combine : .contain)
     }
 }
 
@@ -979,6 +1083,8 @@ private struct TimerDial: View {
 }
 
 private struct DialFace: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let progress: Double
     let phase: TimerPhase
     let status: String
@@ -987,10 +1093,48 @@ private struct DialFace: View {
 
     @ViewBuilder
     var body: some View {
-        if layout == .landscape {
+        if dynamicTypeSize.isAccessibilitySize {
+            AccessibleDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
+        } else if layout == .landscape {
             LandscapeDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
         } else {
             PortraitDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
+        }
+    }
+}
+
+private struct AccessibleDialFace: View {
+    let progress: Double
+    let phase: TimerPhase
+    let status: String
+    let timeText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(phase.title)
+                .font(.title2.bold())
+                .foregroundStyle(PomodoroughTheme.signal)
+            Text(timeText)
+                .font(.system(size: 56, weight: .black, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(PomodoroughTheme.ticket)
+            Text(status)
+                .font(.headline)
+            ProgressView(value: max(0, min(1, progress)))
+                .tint(PomodoroughTheme.danger)
+        }
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .digitalReadoutPanel(cornerRadius: 18)
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(PomodoroughTheme.porcelain.opacity(0.8), lineWidth: 2)
+        }
+        .accessibilityRepresentation {
+            TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
         }
     }
 }
@@ -1007,7 +1151,7 @@ private struct PortraitDialFace: View {
             Circle().stroke(PomodoroughTheme.porcelain, lineWidth: 3)
             Circle()
                 .trim(from: 0, to: max(0.001, min(1, progress)))
-                .stroke(PomodoroughTheme.signal, style: StrokeStyle(lineWidth: 12, lineCap: .butt))
+                .stroke(PomodoroughTheme.danger, style: StrokeStyle(lineWidth: 12, lineCap: .butt))
                 .rotationEffect(.degrees(-90))
                 .padding(16)
             TickMarks().stroke(PomodoroughTheme.track, lineWidth: 1)
@@ -1015,9 +1159,13 @@ private struct PortraitDialFace: View {
                 Text("NOW TIMING")
                     .font(.caption2.monospaced().bold())
                     .foregroundStyle(PomodoroughTheme.steel)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
                 Text(phase.title.uppercased())
                     .font(.caption.monospaced().bold())
                     .foregroundStyle(PomodoroughTheme.signal)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
                 Text(timeText)
                     .font(.system(size: 64, weight: .black, design: .rounded))
                     .monospacedDigit()
@@ -1036,9 +1184,9 @@ private struct PortraitDialFace: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .frame(maxWidth: 500)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(phase.title) timer")
-        .accessibilityValue("\(timeText) remaining, \(status)")
+        .accessibilityRepresentation {
+            TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+        }
     }
 }
 
@@ -1082,9 +1230,20 @@ private struct LandscapeDialFace: View {
             RoundedRectangle(cornerRadius: 24)
                 .stroke(PomodoroughTheme.porcelain.opacity(0.55), lineWidth: 1.5)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(phase.title) timer")
-        .accessibilityValue("\(timeText) remaining, \(status)")
+        .accessibilityRepresentation {
+            TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+        }
+    }
+}
+
+private struct TimerAccessibilityElement: View {
+    let phase: TimerPhase
+    let status: String
+    let timeText: String
+
+    var body: some View {
+        Text("\(phase.title) timer")
+            .accessibilityValue("\(timeText) remaining, \(status)")
     }
 }
 
@@ -1123,14 +1282,50 @@ private struct TimerControls: View {
     @Namespace private var glassNamespace
 
     var body: some View {
-        if #available(iOS 26, macOS 26, *) {
-            GlassEffectContainer(spacing: 14) {
-                controls(glass: true)
+        Group {
+            if #available(iOS 26, macOS 26, *) {
+                GlassEffectContainer(spacing: 14) {
+                    controls(glass: true)
+                }
+                .animation(.smooth(duration: 0.4), value: controlState)
+            } else {
+                controls(glass: false)
             }
-            .animation(.smooth(duration: 0.4), value: controlState)
-        } else {
-            controls(glass: false)
         }
+        .accessibilityRepresentation { accessibilityControls }
+    }
+
+    @ViewBuilder
+    private var accessibilityControls: some View {
+        let button = Button(primaryAccessibilityTitle, action: primaryAccessibilityAction)
+            .accessibilityValue(activeTaskAccessibilityValue)
+        if model.isTimerActive {
+            button
+                .accessibilityAction(named: "Finish timer") { model.finish() }
+                .accessibilityAction(named: "Cancel timer") { model.cancel() }
+        } else if hasClearableTimer {
+            button
+                .accessibilityAction(named: "Clear timer", model.clear)
+        } else {
+            button
+        }
+    }
+
+    private var primaryAccessibilityTitle: String {
+        if model.canonicalTimer?.status == .running { return "Pause" }
+        if model.canonicalTimer?.status == .paused { return "Resume" }
+        return "Start \(model.selectedPhase.title)"
+    }
+
+    private var primaryAccessibilityAction: () -> Void {
+        if model.canonicalTimer?.status == .running { return { model.pause() } }
+        if model.canonicalTimer?.status == .paused { return { model.resume() } }
+        return model.start
+    }
+
+    private var activeTaskAccessibilityValue: String {
+        guard let timer = model.canonicalTimer else { return "" }
+        return "Focus task: \(model.task(forTimerID: timer.id)?.title ?? "No task")"
     }
 
     @ViewBuilder
@@ -1292,6 +1487,10 @@ private struct HistoryScreen: View {
                     systemImage: "clock.badge.questionmark",
                     description: Text("Your first completed or cancelled run appears here.")
                 )
+                .accessibilityRepresentation {
+                    Text("No arrivals yet")
+                        .accessibilityValue("Your first completed or cancelled run appears here.")
+                }
             } else {
                 List(model.history) { item in
                     HistoryRow(item: item)
@@ -1302,18 +1501,20 @@ private struct HistoryScreen: View {
         }
         .navigationTitle("Recent arrivals")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink {
-                    CompletedFocusBreakdownScreen(model: model)
-                } label: {
-                    Text("\(model.history.count) total")
-                        .font(.caption.weight(.medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .contentTransition(.numericText())
+            if !model.history.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink {
+                        CompletedFocusBreakdownScreen(model: model)
+                    } label: {
+                        Text("\(model.history.count) total")
+                            .font(.caption.weight(.medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .contentTransition(.numericText())
+                    }
+                    .accessibilityLabel("\(model.history.count) history entries")
+                    .accessibilityHint("Shows completed focus time by task")
                 }
-                .accessibilityLabel("\(model.history.count) history entries")
-                .accessibilityHint("Shows completed focus time by task")
             }
         }
     }
@@ -1340,6 +1541,10 @@ private struct CompletedFocusBreakdownScreen: View {
                     systemImage: "chart.pie",
                     description: Text("Finish a focus timer to see its time here.")
                 )
+                .accessibilityRepresentation {
+                    Text("No completed focus yet")
+                        .accessibilityValue("Finish a focus timer to see its time here.")
+                }
             } else {
                 ScrollView {
                     VStack(spacing: 24) {
@@ -1378,8 +1583,12 @@ private struct CompletedFocusBreakdownScreen: View {
         .padding(18)
         .foregroundStyle(PomodoroughTheme.porcelain)
         .background(PomodoroughTheme.platform, in: .rect(cornerRadius: 20))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(totalPomodoros) completed focus pomodoros, \(TaskTimeText.spoken(totalTimeMs)) total")
+        .accessibilityRepresentation {
+            Text("Completed focus summary")
+                .accessibilityValue(
+                    "\(totalPomodoros) completed pomodoros, \(TaskTimeText.spoken(totalTimeMs)) total"
+                )
+        }
     }
 
     private func chart(_ summaries: [CompletedFocusSummary]) -> some View {
@@ -1435,8 +1644,6 @@ private struct CompletedFocusBreakdownScreen: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 13)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(summary.taskTitle), \(summary.completedPomodoros) completed pomodoros, \(TaskTimeText.spoken(summary.timeSpentMs))")
             }
         }
         .background(.background, in: .rect(cornerRadius: 18))
@@ -1444,6 +1651,7 @@ private struct CompletedFocusBreakdownScreen: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(PomodoroughTheme.steel.opacity(0.45), lineWidth: 1)
         }
+        .accessibilityHidden(true)
     }
 
     private func focusMetric(value: String, label: String) -> some View {
@@ -1469,6 +1677,8 @@ private struct CompletedFocusBreakdownScreen: View {
 }
 
 private struct TasksScreen: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @Bindable var model: AppModel
     @State private var newTaskTitle = ""
     @FocusState private var taskFieldFocused: Bool
@@ -1513,6 +1723,7 @@ private struct TasksScreen: View {
                 .animation(.smooth(duration: 0.3), value: summaries.map(\.id))
             }
             .padding()
+            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 80 : 0)
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
@@ -1538,30 +1749,37 @@ private struct TasksScreen: View {
 }
 
 private struct TaskBoardHero: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let finishedPomodoros: Int
     let timeSpentMs: Int64
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 12) {
-                RouteClockMark(compact: true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("TODAY'S ROUTES")
-                        .font(.caption.monospaced().bold())
-                        .tracking(1.4)
-                        .foregroundStyle(PomodoroughTheme.ticket)
-                    Text(Date.now, format: .dateTime.weekday(.wide).month(.abbreviated).day())
-                        .font(.title3.weight(.bold))
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 8) { heroHeading }
+                } else {
+                    HStack(spacing: 12) { heroHeading }
                 }
-                Spacer(minLength: 0)
             }
 
-            HStack(spacing: 0) {
-                TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
-                Divider()
-                    .overlay(PomodoroughTheme.steel.opacity(0.5))
-                    .padding(.horizontal, 18)
-                TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 14) {
+                        TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
+                        Divider().overlay(PomodoroughTheme.steel.opacity(0.5))
+                        TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
+                        Divider()
+                            .overlay(PomodoroughTheme.steel.opacity(0.5))
+                            .padding(.horizontal, 18)
+                        TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
+                    }
+                }
             }
         }
         .padding(18)
@@ -1571,7 +1789,29 @@ private struct TaskBoardHero: View {
                 .fill(PomodoroughTheme.platform)
                 .shadow(color: PomodoroughTheme.signal.opacity(0.9), radius: 0, x: 6, y: 6)
         }
-        .accessibilityElement(children: .contain)
+        .accessibilityRepresentation {
+            Text("Today's routes")
+                .accessibilityValue(heroAccessibilityValue)
+        }
+    }
+
+    @ViewBuilder
+    private var heroHeading: some View {
+        RouteClockMark(compact: true)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("TODAY'S ROUTES")
+                .font(.caption.monospaced().bold())
+                .tracking(1.4)
+                .foregroundStyle(PomodoroughTheme.ticket)
+            Text(Date.now, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+                .font(.title3.weight(.bold))
+        }
+        Spacer(minLength: 0)
+    }
+
+    private var heroAccessibilityValue: String {
+        "\(Date.now.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())), " +
+            "\(finishedPomodoros) finished pomodoros, \(TaskTimeText.spoken(timeSpentMs)) focus time"
     }
 }
 
@@ -1591,10 +1831,15 @@ private struct TaskBoardMetric: View {
                 .minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
     }
 }
 
 private struct TaskComposer: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @Binding var title: String
     var focused: FocusState<Bool>.Binding
     let canAdd: Bool
@@ -1606,15 +1851,13 @@ private struct TaskComposer: View {
                 .font(.caption2.monospaced().bold())
                 .tracking(1.2)
                 .foregroundStyle(PomodoroughTheme.platform)
-            HStack(spacing: 10) {
-                TextField("What are you focusing on?", text: $title)
-                    .focused(focused)
-                    .submitLabel(.done)
-                    .onSubmit(add)
-                Button("Add", systemImage: "plus", action: add)
-                    .buttonStyle(.borderedProminent)
-                    .tint(PomodoroughTheme.signal)
-                    .disabled(!canAdd)
+                .accessibilityHidden(true)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 10) { composerControls }
+                } else {
+                    HStack(spacing: 10) { composerControls }
+                }
             }
         }
         .padding(16)
@@ -1624,25 +1867,47 @@ private struct TaskComposer: View {
                 .stroke(PomodoroughTheme.track, lineWidth: 2)
         }
     }
+
+    @ViewBuilder
+    private var composerControls: some View {
+        TextField("What are you focusing on?", text: $title)
+            .focused(focused)
+            .submitLabel(.done)
+            .onSubmit(add)
+            .accessibilityLabel("New task")
+            .accessibilityAction(named: "Add task") {
+                guard canAdd else { return }
+                add()
+            }
+        Button("Add", systemImage: "plus", action: add)
+            .buttonStyle(.borderedProminent)
+            .tint(PomodoroughTheme.signal)
+            .disabled(!canAdd)
+            .accessibilityHidden(true)
+    }
 }
 
 private struct TaskBoardHeader: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        HStack(spacing: 10) {
-            Text("TASK")
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text("DONE")
-                .frame(width: 48, alignment: .trailing)
-            Text("TIME")
-                .frame(width: 70, alignment: .trailing)
-            Color.clear.frame(width: 32, height: 1)
+        if !dynamicTypeSize.isAccessibilitySize {
+            HStack(spacing: 10) {
+                Text("TASK")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("DONE")
+                    .frame(width: 48, alignment: .trailing)
+                Text("TIME")
+                    .frame(width: 70, alignment: .trailing)
+                Color.clear.frame(width: 32, height: 1)
+            }
+            .font(.caption2.monospaced().bold())
+            .foregroundStyle(PomodoroughTheme.sky)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 42)
+            .background(PomodoroughTheme.track)
+            .accessibilityHidden(true)
         }
-        .font(.caption2.monospaced().bold())
-        .foregroundStyle(PomodoroughTheme.sky)
-        .padding(.horizontal, 14)
-        .frame(minHeight: 42)
-        .background(PomodoroughTheme.track)
-        .accessibilityHidden(true)
     }
 }
 
@@ -1663,34 +1928,75 @@ private struct TaskBoardEmptyState: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
         .padding(.vertical, 30)
-        .accessibilityElement(children: .combine)
+        .accessibilityRepresentation {
+            Text("No routes posted")
+                .accessibilityValue("Add a task, then assign it before starting focus.")
+        }
     }
 }
 
 private struct TaskSummaryRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let summary: TaskDailySummary
     let delete: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(summary.task.title)
-                .font(.body.weight(.semibold))
-                .lineLimit(2)
+            summaryContent
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(summary.finishedPomodoros)")
-                .frame(width: 48, alignment: .trailing)
-            Text(TaskTimeText.compact(summary.timeSpentMs))
-                .frame(width: 70, alignment: .trailing)
+            deleteButton
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .monospacedDigit()
+        .accessibilityRepresentation {
+            Text(summary.task.title)
+                .accessibilityValue(summaryAccessibilityValue)
+                .accessibilityAction(named: "Delete task", delete)
+        }
+    }
+
+    @ViewBuilder
+    private var summaryContent: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(summary.task.title)
+                    .font(.body.weight(.semibold))
+                Text("\(summary.finishedPomodoros) finished pomodoros")
+                Text(TaskTimeText.spoken(summary.timeSpentMs))
+            }
+        } else {
+            HStack(spacing: 10) {
+                Text(summary.task.title)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(summary.finishedPomodoros)")
+                    .frame(width: 48, alignment: .trailing)
+                Text(TaskTimeText.compact(summary.timeSpentMs))
+                    .frame(width: 70, alignment: .trailing)
+            }
+        }
+    }
+
+    private var summaryAccessibilityValue: String {
+        "\(summary.finishedPomodoros) finished pomodoros today, \(TaskTimeText.spoken(summary.timeSpentMs)) spent"
+    }
+
+    @ViewBuilder
+    private var deleteButton: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Button("Delete \(summary.task.title)", systemImage: "trash", role: .destructive, action: delete)
+                .foregroundStyle(PomodoroughTheme.danger)
+                .labelStyle(.iconOnly)
+                .frame(width: 44, height: 44)
+        } else {
             Button("Delete \(summary.task.title)", systemImage: "trash", role: .destructive, action: delete)
                 .labelStyle(.iconOnly)
                 .foregroundStyle(PomodoroughTheme.danger)
                 .frame(width: 32, height: 44)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .monospacedDigit()
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(summary.task.title), \(summary.finishedPomodoros) finished pomodoros today, \(TaskTimeText.spoken(summary.timeSpentMs)) spent")
     }
 }
 
@@ -1739,9 +2045,12 @@ private struct HistoryRow: View {
                 .padding(8)
                 .background(PomodoroughTheme.platform, in: .rect(cornerRadius: 7))
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(item.phase.title), \(item.status), \(item.minutes) minutes")
-        .accessibilityValue(item.date?.formatted(date: .abbreviated, time: .shortened) ?? "Time not recorded")
+        .accessibilityRepresentation {
+            Text("\(item.phase.title), \(item.status), \(item.minutes) minutes")
+                .accessibilityValue(
+                    item.date?.formatted(date: .abbreviated, time: .shortened) ?? "Time not recorded"
+                )
+        }
     }
 }
 
@@ -1768,11 +2077,16 @@ private struct AccountView: View {
                                 Text(user.email).font(.subheadline).foregroundStyle(.secondary)
                             }
                         }
-                        .accessibilityElement(children: .combine)
+                        .accessibilityRepresentation {
+                            Text(user.name)
+                                .accessibilityValue(user.email)
+                        }
                     }
                 } else {
                     Section {
                         Label("Timer works without internet", systemImage: "iphone")
+                            .accessibilityLabel("On-device mode")
+                            .accessibilityValue("Timer works without internet")
                         GoogleSignInButton(action: model.signIn)
                             .frame(maxWidth: 280)
                             .disabled(model.isWorking)
@@ -1782,18 +2096,32 @@ private struct AccountView: View {
                         }
                     } header: {
                         Text("On-device mode")
+                            .accessibilityHidden(true)
                     } footer: {
                         Text("Sign in only if you want to sync this timer and its history across devices.")
+                            .accessibilityHidden(true)
                     }
                 }
-                Section("Line status") {
+                Section {
                     LabeledContent("Sync", value: model.syncLabel)
+                        .accessibilityRepresentation {
+                            Text("Line status")
+                                .accessibilityValue(
+                                    "Sync \(model.syncLabel), device \(model.deviceMark), " +
+                                        "\(model.completedFocusCount) completed focus runs"
+                                )
+                        }
                     LabeledContent("Device", value: model.deviceMark)
+                        .accessibilityHidden(true)
                     LabeledContent("Completed focus runs", value: "\(model.completedFocusCount)")
+                        .accessibilityHidden(true)
                     Button("Sync now", systemImage: "arrow.triangle.2.circlepath") {
                         Task { await model.sync(force: true) }
                     }
                     .disabled(!model.isSignedIn || model.isSyncing || model.isHistoryResolutionBlocking)
+                } header: {
+                    Text("Line status")
+                        .accessibilityHidden(true)
                 }
                 if model.isSignedIn {
                     Section {
@@ -1827,12 +2155,25 @@ private struct AccountView: View {
 }
 
 private struct SectionHeading: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let kicker: String
     let title: String
     let subtitle: String
 
     var body: some View {
-        HStack(spacing: 12) {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) { headingContent }
+            } else {
+                HStack(spacing: 12) { headingContent }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var headingContent: some View {
             Text(kicker)
                 .font(.caption2.monospaced().bold())
                 .foregroundStyle(PomodoroughTheme.porcelain)
@@ -1843,7 +2184,6 @@ private struct SectionHeading: View {
                 Text(title.uppercased()).font(.headline)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
-        }
     }
 }
 
