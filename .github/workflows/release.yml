@@ -182,6 +182,7 @@ jobs:
           -configuration Release
           -destination "generic/platform=macOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          ARCHS=arm64
           CODE_SIGNING_ALLOWED=NO
           build
 
