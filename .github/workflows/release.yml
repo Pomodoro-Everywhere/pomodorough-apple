@@ -4,12 +4,21 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to recover
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +37,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify manual release source
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" >/dev/null
+          git merge-base --is-ancestor "$RELEASE_TAG" HEAD
+          unexpected_changes="$(git diff --name-only "$RELEASE_TAG" HEAD -- . ':(exclude).github/**')"
+          if [[ -n "$unexpected_changes" ]]; then
+            echo "Manual release source differs from $RELEASE_TAG outside workflow files:" >&2
+            printf '%s\n' "$unexpected_changes" >&2
+            exit 1
+          fi
+
       - name: Validate tag and version metadata
         env:
           GH_TOKEN: ${{ github.token }}
@@ -35,8 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          tag_version="${GITHUB_REF_NAME#v}"
-          if [[ "$GITHUB_REF_NAME" != v* ]] || [[ ! "$tag_version" =~ $semver_pattern ]]; then
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "$RELEASE_TAG" != v* ]] || [[ ! "$tag_version" =~ $semver_pattern ]]; then
             echo "Release tag must use vMAJOR.MINOR.PATCH format" >&2
             exit 1
           fi
@@ -65,7 +88,7 @@ jobs:
           fi
 
           if [[ "$marketing_version" != "$tag_version" ]] || [[ "$pbx_marketing" != "$tag_version" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match source version" >&2
+            echo "Tag $RELEASE_TAG does not match source version" >&2
             exit 1
           fi
           if [[ ! "$build_version" =~ ^[1-9][0-9]*$ ]]; then
@@ -77,14 +100,14 @@ jobs:
             exit 1
           fi
 
-          release_state="$(gh release view "$GITHUB_REF_NAME" \
+          release_state="$(gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --json isDraft \
             --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || printf missing)"
           if [[ "$release_state" != "published" ]]; then
             previous_tags=()
             while IFS= read -r candidate; do
-              [[ "$candidate" == "$GITHUB_REF_NAME" ]] && continue
+              [[ "$candidate" == "$RELEASE_TAG" ]] && continue
               candidate_version="${candidate#v}"
               if [[ ! "$candidate_version" =~ $semver_pattern ]]; then
                 echo "Existing release tag $candidate is not strict SemVer" >&2
@@ -198,9 +221,9 @@ jobs:
           ios_device_staging="$RUNNER_TEMP/Pomodorough-iOS-Device"
           ios_device_staged_app="$ios_device_staging/Payload/Pomodorough.app"
           macos_staged_app="$RUNNER_TEMP/Pomodorough-macOS/Pomodorough.app"
-          ios_simulator_zip="$RELEASE_DIR/Pomodorough-iOS-Simulator-unsigned-non-notarized-${GITHUB_REF_NAME}.zip"
-          ios_device_ipa="$RELEASE_DIR/Pomodorough-iOS-unsigned-${GITHUB_REF_NAME}.ipa"
-          macos_zip="$RELEASE_DIR/Pomodorough-macOS-unsigned-non-notarized-${GITHUB_REF_NAME}.zip"
+          ios_simulator_zip="$RELEASE_DIR/Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
+          ios_device_ipa="$RELEASE_DIR/Pomodorough-iOS-unsigned-${RELEASE_TAG}.ipa"
+          macos_zip="$RELEASE_DIR/Pomodorough-macOS-unsigned-non-notarized-${RELEASE_TAG}.zip"
 
           test -d "$ios_simulator_app"
           test -d "$ios_device_app"
@@ -249,9 +272,9 @@ jobs:
           set -euo pipefail
 
           expected_assets=(
-            "Pomodorough-iOS-Simulator-unsigned-non-notarized-${GITHUB_REF_NAME}.zip"
-            "Pomodorough-iOS-unsigned-${GITHUB_REF_NAME}.ipa"
-            "Pomodorough-macOS-unsigned-non-notarized-${GITHUB_REF_NAME}.zip"
+            "Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
+            "Pomodorough-iOS-unsigned-${RELEASE_TAG}.ipa"
+            "Pomodorough-macOS-unsigned-non-notarized-${RELEASE_TAG}.zip"
           )
           expected_release_assets=("${expected_assets[@]}" "SHA256SUMS.txt")
 
@@ -259,11 +282,11 @@ jobs:
             published_dir="$RUNNER_TEMP/published-release"
             rm -rf "$published_dir"
             mkdir -p "$published_dir"
-            gh release download "$GITHUB_REF_NAME" \
+            gh release download "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --dir "$published_dir"
             printf '%s\n' "${expected_release_assets[@]}" | sort > "$RUNNER_TEMP/expected-assets.txt"
-            gh release view "$GITHUB_REF_NAME" \
+            gh release view "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --json assets \
               --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"
@@ -278,13 +301,13 @@ jobs:
           }
 
           release_state="missing"
-          if release_state="$(gh release view "$GITHUB_REF_NAME" \
+          if release_state="$(gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --json isDraft \
             --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null)"; then
             if [[ "$release_state" == "published" ]]; then
               verify_release_assets
-              echo "Release $GITHUB_REF_NAME is already published"
+              echo "Release $RELEASE_TAG is already published"
               exit 0
             fi
           else
@@ -304,31 +327,31 @@ jobs:
               ''
             gh api --method POST \
               "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-              -f tag_name="$GITHUB_REF_NAME" \
+              -f tag_name="$RELEASE_TAG" \
               --jq .body
           } > "$notes_file"
 
           if [[ "$release_state" == "missing" ]]; then
-            gh release create "$GITHUB_REF_NAME" \
+            gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --draft \
-              --title "Pomodorough $GITHUB_REF_NAME unsigned artifacts" \
+              --title "Pomodorough $RELEASE_TAG unsigned artifacts" \
               --notes-file "$notes_file"
           fi
           while IFS= read -r asset; do
-            gh release delete-asset "$GITHUB_REF_NAME" "$asset" \
+            gh release delete-asset "$RELEASE_TAG" "$asset" \
               --repo "$GITHUB_REPOSITORY" \
               --yes
-          done < <(gh release view "$GITHUB_REF_NAME" \
+          done < <(gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --json assets \
             --jq '.assets[].name')
-          gh release upload "$GITHUB_REF_NAME" "$RELEASE_DIR"/* \
+          gh release upload "$RELEASE_TAG" "$RELEASE_DIR"/* \
             --repo "$GITHUB_REPOSITORY"
           verify_release_assets
-          gh release edit "$GITHUB_REF_NAME" \
+          gh release edit "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Pomodorough $GITHUB_REF_NAME unsigned artifacts" \
+            --title "Pomodorough $RELEASE_TAG unsigned artifacts" \
             --notes-file "$notes_file" \
             --draft=false
