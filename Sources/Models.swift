@@ -815,6 +815,7 @@ struct TimerIntent: Codable, Equatable, Sendable {
             && WireBounds.physicalMilliseconds(for: occurredAt) != nil
             && (deviceId == nil || deviceId?.isEmpty == false)
     }
+
 }
 
 struct CanonicalTimer: Codable, Equatable, Sendable {
@@ -829,6 +830,7 @@ struct CanonicalTimer: Codable, Equatable, Sendable {
     let plannedDurationMs: Int64
     let elapsedAtAnchorMs: Int64
     let anchorAt: Date
+    var startedByDeviceId: String? = nil
     let lastIntent: TimerIntent?
 
     var plannedDuration: TimeInterval { TimeInterval(plannedDurationMs) / 1_000 }
@@ -839,6 +841,7 @@ struct CanonicalTimer: Codable, Equatable, Sendable {
             && DurationValues.isValidWireDuration(plannedDurationMs)
             && (0...plannedDurationMs).contains(elapsedAtAnchorMs)
             && WireBounds.physicalMilliseconds(for: anchorAt) != nil
+            && (startedByDeviceId == nil || startedByDeviceId?.isEmpty == false)
             && (lastIntent?.isValid ?? true)
     }
 
@@ -871,7 +874,7 @@ struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
         let validTerminalDate: Bool
         switch status {
         case CanonicalTimer.Status.completed.rawValue:
-            validTerminalDate = completedAt != nil && endedAt == nil
+            validTerminalDate = completedAt != nil
         case CanonicalTimer.Status.cancelled.rawValue,
              CanonicalTimer.Status.superseded.rawValue:
             validTerminalDate = completedAt == nil && endedAt != nil
@@ -885,12 +888,15 @@ struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
             && DurationValues.isValidWireDuration(plannedDurationMs)
             && validTerminalDate
             && date.flatMap(WireBounds.physicalMilliseconds(for:)) != nil
+            && (endedAt == nil || endedAt.flatMap(WireBounds.physicalMilliseconds(for:)) != nil)
     }
 }
 
 struct FocusTask: Codable, Identifiable, Equatable, Hashable, Sendable {
     let id: UUID
     let title: String
+
+    private enum CodingKeys: String, CodingKey { case id, title }
 
     init?(title rawTitle: String) {
         let title = Self.normalizedTitle(rawTitle)
@@ -901,6 +907,18 @@ struct FocusTask: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     var isValid: Bool {
         Self(title: title)?.id == id
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id.uuidString.lowercased(), forKey: .id)
+        try values.encode(title, forKey: .title)
     }
 
     static func normalizedTitle(_ title: String) -> String {
@@ -1414,6 +1432,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
                 plannedDurationMs: timer.plannedDurationMs,
                 elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
                 anchorAt: timer.anchorAt,
+                startedByDeviceId: timer.startedByDeviceId,
                 lastIntent: timer.lastIntent
             )
         }
@@ -1489,11 +1508,13 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
               timer.status == .running || timer.status == .paused,
               localTimerOwners[timer.id] == nil,
               !pendingCommands.contains(where: {
-                $0.type == .start && $0.timerId == timer.id
-              }),
-              let intent = timer.lastIntent,
-              intent.type == .start,
-              intent.deviceId == deviceId else { return false }
+                  $0.type == .start && $0.timerId == timer.id
+              }) else { return false }
+        let owner = timer.startedByDeviceId ?? {
+            guard let intent = timer.lastIntent, intent.type == .start else { return nil }
+            return intent.deviceId
+        }()
+        guard owner == deviceId else { return false }
         localTimerOwners[timer.id] = deviceId
         return true
     }
@@ -1912,6 +1933,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             plannedDurationMs: timer.plannedDurationMs,
             elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
             anchorAt: try physicalDate(forTrustedDate: timer.anchorAt),
+            startedByDeviceId: timer.startedByDeviceId,
             lastIntent: timer.lastIntent
         )
     }
@@ -2099,6 +2121,15 @@ enum AutoStartReducer {
 }
 
 enum TimerReducer {
+    static func projectingTimeCompletion(
+        _ timer: CanonicalTimer?,
+        history: [HistoryItem],
+        at date: Date
+    ) -> (timer: CanonicalTimer?, history: [HistoryItem]) {
+        let projected = autoCompleting(timer, history: history, at: date)
+        return (projected.0, projected.1)
+    }
+
     static func breakPhase(afterCompletedFocusCount count: Int) -> TimerPhase {
         count > 0 && count.isMultiple(of: 4) ? .longBreak : .shortBreak
     }
@@ -2241,9 +2272,10 @@ enum TimerReducer {
                         phase: timer.phase,
                         status: timer.status,
                         plannedDurationMs: timer.plannedDurationMs,
-                        elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
-                        anchorAt: timer.anchorAt,
-                        lastIntent: intent
+                    elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
+                    anchorAt: timer.anchorAt,
+                    startedByDeviceId: timer.startedByDeviceId,
+                    lastIntent: intent
                     ),
                     nextHistory
                 )
@@ -2257,10 +2289,10 @@ enum TimerReducer {
                 commandId: command.id,
                 taskId: timer.taskId,
                 phase: timer.phase,
-                status: "completed",
-                plannedDurationMs: timer.plannedDurationMs,
-                completedAt: command.occurredAt,
-                endedAt: command.occurredAt
+                    status: "completed",
+                    plannedDurationMs: timer.plannedDurationMs,
+                    completedAt: command.occurredAt,
+                    endedAt: command.occurredAt
             )
             return (finished, [item] + history)
         case .cancel:
@@ -2306,6 +2338,7 @@ enum TimerReducer {
             plannedDurationMs: timer.plannedDurationMs,
             elapsedAtAnchorMs: timer.plannedDurationMs,
             anchorAt: completedAt,
+            startedByDeviceId: timer.startedByDeviceId,
             lastIntent: timer.lastIntent
         )
         guard !history.contains(where: { $0.timerId == timer.id }) else { return (completed, history) }
@@ -2338,6 +2371,7 @@ enum TimerReducer {
             plannedDurationMs: timer.plannedDurationMs,
             elapsedAtAnchorMs: min(timer.plannedDurationMs, max(0, elapsed)),
             anchorAt: date,
+            startedByDeviceId: timer.startedByDeviceId,
             lastIntent: intent
         )
     }

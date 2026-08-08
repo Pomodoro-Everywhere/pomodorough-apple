@@ -64,6 +64,33 @@ struct UnitPositiveTests {
         expectKeychainBaseQuery(query)
     }
 
+    @Test func irohEndpointKeychainStoresStableDeviceOnlySecretSeparately() throws {
+        let secret = Data(0...31)
+        let saving = RecordingKeychainSecurity(updateStatus: errSecItemNotFound)
+        try IrohEndpointKeychainStore(security: saving).save(secret)
+        let saved = try #require(saving.addQueries.first)
+        #expect(saved.service == "me.egigoka.pomodorough.iroh")
+        #expect(saved.account == "endpoint-secret-v1")
+        #expect(saved.accessible == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+        #expect(saved.valueData == secret)
+
+        let loading = RecordingKeychainSecurity(copyStatus: errSecSuccess, copyData: secret)
+        #expect(try IrohEndpointKeychainStore(security: loading).load() == secret)
+    }
+
+    @Test func irohRoomKeychainUsesPerRoomDeviceOnlySecret() throws {
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let saving = RecordingKeychainSecurity(updateStatus: errSecItemNotFound)
+        try IrohRoomSecretKeychainStore(security: saving).save(secret, roomID: roomID)
+
+        let saved = try #require(saving.addQueries.first)
+        #expect(saved.service == "me.egigoka.pomodorough.iroh-room")
+        #expect(saved.account == "room-secret-v1.\(roomID)")
+        #expect(saved.accessible == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+        #expect(saved.valueData == secret)
+    }
+
     @Test func wireBoundsAcceptExactSafeIntegerLimits() {
         #expect(WireBounds.containsUnsigned(WireBounds.maxSafeInteger))
         #expect(WireBounds.isValidClock(

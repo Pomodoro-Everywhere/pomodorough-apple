@@ -49,6 +49,26 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertEqual(focusPhase.value as? String, "25 minutes")
     }
 
+    func testNetworkSectionExposesModesRoomActionsAndPrivacyCopy() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+
+        app.buttons["Account"].tap()
+
+        XCTAssertTrue(elements(labelled: "Network replication", in: app).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["On device"].exists)
+        XCTAssertTrue(app.buttons["Iroh room"].exists)
+        XCTAssertTrue(app.buttons["Pomodorough Cloud"].exists)
+        XCTAssertTrue(app.buttons["Create Iroh room"].exists)
+        XCTAssertTrue(app.buttons["Join with invite"].exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS %@",
+            "Peers may see each other's IP addresses"
+        )).firstMatch.exists)
+    }
+
     private func makeApplication() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-permission-introduction-completed-v1", "YES"]

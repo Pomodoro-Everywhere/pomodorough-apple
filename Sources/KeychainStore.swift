@@ -7,6 +7,17 @@ protocol TokenStoring: Sendable {
     func delete() throws
 }
 
+protocol IrohEndpointKeyStoring: Sendable {
+    func load() throws -> Data?
+    func save(_ key: Data) throws
+}
+
+protocol IrohRoomSecretStoring: Sendable {
+    func load(roomID: String) throws -> Data?
+    func save(_ secret: Data, roomID: String) throws
+    func delete(roomID: String) throws
+}
+
 protocol KeychainSecurityOperating: Sendable {
     func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?)
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus
@@ -100,6 +111,123 @@ struct KeychainStore: TokenStoring {
             kSecAttrAccount as String: account,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
+    }
+}
+
+struct IrohEndpointKeychainStore: IrohEndpointKeyStoring {
+    private let service = "me.egigoka.pomodorough.iroh"
+    private let account = "endpoint-secret-v1"
+    private let security: any KeychainSecurityOperating
+
+    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+        self.security = security
+    }
+
+    func load() throws -> Data? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let result = security.copyMatching(query)
+        if result.status == errSecItemNotFound { return nil }
+        guard result.status == errSecSuccess, let data = result.data, data.count == 32 else {
+            throw error(operation: "load", status: result.status)
+        }
+        return data
+    }
+
+    func save(_ key: Data) throws {
+        guard key.count == 32 else {
+            throw KeychainError(operation: "save", status: errSecParam, message: "Endpoint key must be 32 bytes")
+        }
+        let attributes = [kSecValueData as String: key]
+        let status = security.update(baseQuery, attributes: attributes)
+        if status == errSecItemNotFound {
+            var query = baseQuery
+            query[kSecValueData as String] = key
+            let addStatus = security.add(query)
+            guard addStatus == errSecSuccess else { throw error(operation: "save (add)", status: addStatus) }
+        } else if status != errSecSuccess {
+            throw error(operation: "save (update)", status: status)
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+    }
+
+    private func error(operation: String, status: OSStatus) -> KeychainError {
+        KeychainError(
+            operation: "Iroh endpoint key \(operation)",
+            status: status,
+            message: security.errorMessage(for: status) ?? "Unknown error"
+        )
+    }
+}
+
+struct IrohRoomSecretKeychainStore: IrohRoomSecretStoring {
+    private let service = "me.egigoka.pomodorough.iroh-room"
+    private let security: any KeychainSecurityOperating
+
+    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+        self.security = security
+    }
+
+    func load(roomID: String) throws -> Data? {
+        var query = baseQuery(roomID: roomID)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let result = security.copyMatching(query)
+        if result.status == errSecItemNotFound { return nil }
+        guard result.status == errSecSuccess, let data = result.data, data.count == 32 else {
+            throw error(operation: "load", status: result.status)
+        }
+        return data
+    }
+
+    func save(_ secret: Data, roomID: String) throws {
+        guard secret.count == 32, IrohProtocolV1.isValidRoomID(roomID) else {
+            throw KeychainError(operation: "Iroh room secret save", status: errSecParam, message: "Invalid room secret")
+        }
+        let query = baseQuery(roomID: roomID)
+        let attributes = [kSecValueData as String: secret]
+        let status = security.update(query, attributes: attributes)
+        if status == errSecItemNotFound {
+            var addQuery = query
+            addQuery[kSecValueData as String] = secret
+            let addStatus = security.add(addQuery)
+            guard addStatus == errSecSuccess else { throw error(operation: "save (add)", status: addStatus) }
+        } else if status != errSecSuccess {
+            throw error(operation: "save (update)", status: status)
+        }
+    }
+
+    func delete(roomID: String) throws {
+        let status = security.delete(baseQuery(roomID: roomID))
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw error(operation: "delete", status: status)
+        }
+    }
+
+    private func baseQuery(roomID: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "room-secret-v1.\(roomID)",
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+    }
+
+    private func error(operation: String, status: OSStatus) -> KeychainError {
+        KeychainError(
+            operation: "Iroh room secret \(operation)",
+            status: status,
+            message: security.errorMessage(for: status) ?? "Unknown error"
+        )
     }
 }
 

@@ -139,3 +139,8 @@ changes made by another client; HTTP synchronization remains authoritative.
 - [Apple (this project)](https://github.com/Pomodoro-Everywhere/pomodorough-apple)
 - [Android](https://github.com/Pomodoro-Everywhere/pomodorough-android)
 - [Desktop](https://github.com/Pomodoro-Everywhere/pomodorough-desktop)
+
+## Third-party licenses
+
+Iroh native dependency notices ship in the application bundle and are recorded
+in [Resources/IROH_THIRD_PARTY_LICENSES.md](Resources/IROH_THIRD_PARTY_LICENSES.md).

@@ -9,15 +9,20 @@
 /* Begin PBXBuildFile section */
 		05ADF2030E5861781198DA1B /* UnitPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */; };
 		0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */; };
+		10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */; };
+		15DBCAB75EE12A495C4D7D83 /* IrohReplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB5513A77A7DD816A61A1607 /* IrohReplicationService.swift */; };
 		22BE502BD744FF4B20C0F52C /* convergence-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 3A79EE92914204BD6B846A11 /* convergence-v1.json */; };
 		25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */; };
 		2BE5CDEF3D373057F72AF294 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 1B2F658FFCC6E497932EB5E1 /* GoogleSignIn */; };
+		2EC15A7B22650818465F13BE /* IROH_THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */; };
+		32CD7FD4021BF0DF052D4CF7 /* IrohRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */; };
 		3B9C80CC0469781B09D176CA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A07D519989D4A2F8C108C3BE /* Assets.xcassets */; };
 		3DE6BD9BCADB3D8702B651E6 /* convergence-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 3A79EE92914204BD6B846A11 /* convergence-v1.json */; };
 		3FFA600ACA6A8AA43B56AF17 /* IntegrationPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */; };
 		4255112A51D66FBEC7FFA25E /* UnitNegativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */; };
 		471AC410750E1BBBB89BDBDC /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF58A4FC46A48C3BEAA7E13E /* Models.swift */; };
 		4A9136A6FAC18DF7D451623B /* UnitPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */; };
+		505B2B0AF04A88EB671C899A /* IrohLib in Frameworks */ = {isa = PBXBuildFile; productRef = F883AB1431F3186814AACEF4 /* IrohLib */; };
 		586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
 		58D9FB99984C3C9DE6B8E2A5 /* PomodoroughApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */; };
 		5C5F3C5C652265C7C81ACB31 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D641D6CAC2F40A338AAC120 /* AppModel.swift */; };
@@ -25,6 +30,10 @@
 		74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
 		7843250182CD72D47AF92818 /* uuidv7-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EE9592BD58F7F316E722046D /* uuidv7-v1.json */; };
 		83CBB05092621687C1CD6752 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5763B6AA139E86DBCDE4D11C /* APIClient.swift */; };
+		84B131A8A1403C42A16AFB5C /* IrohReplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */; };
+		87568375524EE6FC685681A5 /* IrohProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9151C5F69A1F64F86529666 /* IrohProtocol.swift */; };
+		87BDDCCB865B8A72DD4AEBFC /* IrohReplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */; };
+		8F896A75991DA7E095E805E0 /* IrohLib in Frameworks */ = {isa = PBXBuildFile; productRef = 8314F34588484234E7441061 /* IrohLib */; };
 		8FCBB3E45762191D6D5DB0E0 /* TimerAlarmScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FCD013ABB0FD83204A7E89B /* TimerAlarmScheduler.swift */; };
 		94DAD594DE4C0DDB7BC40D7A /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5763B6AA139E86DBCDE4D11C /* APIClient.swift */; };
 		98B4B39B908271919830386D /* IntegrationNegativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */; };
@@ -33,8 +42,10 @@
 		AB492C16E7AF250315F8F18C /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */; };
 		AD39F854C2880ADC57743E1F /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = E58D7FE3469640FD437B5909 /* Views.swift */; };
 		B07D8AF9405E6B21B227E084 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF58A4FC46A48C3BEAA7E13E /* Models.swift */; };
+		B09F5BBD20CF48828AFF4844 /* IrohReplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB5513A77A7DD816A61A1607 /* IrohReplicationService.swift */; };
 		B2295D5A227E68C6503F6D36 /* PomodoroughApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */; };
 		B52ADEA1251692A7CD150328 /* PomodoroughAccessibilityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9223397CA303F7E682AC131A /* PomodoroughAccessibilityUITests.swift */; };
+		BEDD57B570584744BBF2E177 /* IrohProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9151C5F69A1F64F86529666 /* IrohProtocol.swift */; };
 		C0725FE9385C24B7F5C728E8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A07D519989D4A2F8C108C3BE /* Assets.xcassets */; };
 		C3A869CE2835EC339576D607 /* IntegrationNegativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */; };
 		D31A942F600F2AD2BD57150D /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 0EE041835DA15370CCB79786 /* GoogleSignInSwift */; };
@@ -43,6 +54,7 @@
 		D71BC324CAE1DF74369577E1 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */; };
 		DE4287D68F65F02C32291ED7 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7E580D67B2F342466E4D82 /* KeychainStore.swift */; };
 		E8586324CE793E09F7EDC876 /* TimerAlarmScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FCD013ABB0FD83204A7E89B /* TimerAlarmScheduler.swift */; };
+		ED568D143FD55313C51B97C0 /* IrohRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */; };
 		F3DC0C00F8130BAE92CCC641 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = E58D7FE3469640FD437B5909 /* Views.swift */; };
 		F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */; };
 		F96B0C5F596F1D64DE3D07D7 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7E580D67B2F342466E4D82 /* KeychainStore.swift */; };
@@ -79,6 +91,8 @@
 		3A79EE92914204BD6B846A11 /* convergence-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "convergence-v1.json"; sourceTree = "<group>"; };
 		3C24F7A45B3B70459A21180A /* GoogleAuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleAuthService.swift; sourceTree = "<group>"; };
 		3D641D6CAC2F40A338AAC120 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationTests.swift; sourceTree = "<group>"; };
+		544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomStore.swift; sourceTree = "<group>"; };
 		5763B6AA139E86DBCDE4D11C /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		6D043EE67CA1960F20CF2749 /* MacOSTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSTests.swift; sourceTree = "<group>"; };
 		6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
@@ -88,11 +102,14 @@
 		8E424BDE1951688EFEBA81AF /* PomodoroughMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PomodoroughMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9223397CA303F7E682AC131A /* PomodoroughAccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughAccessibilityUITests.swift; sourceTree = "<group>"; };
 		A07D519989D4A2F8C108C3BE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		CB5513A77A7DD816A61A1607 /* IrohReplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationService.swift; sourceTree = "<group>"; };
 		CE7E580D67B2F342466E4D82 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		CF58A4FC46A48C3BEAA7E13E /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitNegativeTests.swift; sourceTree = "<group>"; };
 		DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitPositiveTests.swift; sourceTree = "<group>"; };
+		E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = IROH_THIRD_PARTY_LICENSES.md; sourceTree = "<group>"; };
 		E58D7FE3469640FD437B5909 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
+		E9151C5F69A1F64F86529666 /* IrohProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohProtocol.swift; sourceTree = "<group>"; };
 		EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughApp.swift; sourceTree = "<group>"; };
 		EE9592BD58F7F316E722046D /* uuidv7-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "uuidv7-v1.json"; sourceTree = "<group>"; };
 		EF4A223E38D4969E741D9514 /* PomodoroughTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PomodoroughTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -105,6 +122,7 @@
 			files = (
 				D71BC324CAE1DF74369577E1 /* GoogleSignIn in Frameworks */,
 				AB492C16E7AF250315F8F18C /* GoogleSignInSwift in Frameworks */,
+				505B2B0AF04A88EB671C899A /* IrohLib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -114,6 +132,7 @@
 			files = (
 				2BE5CDEF3D373057F72AF294 /* GoogleSignIn in Frameworks */,
 				D31A942F600F2AD2BD57150D /* GoogleSignInSwift in Frameworks */,
+				8F896A75991DA7E095E805E0 /* IrohLib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,6 +145,9 @@
 				5763B6AA139E86DBCDE4D11C /* APIClient.swift */,
 				3D641D6CAC2F40A338AAC120 /* AppModel.swift */,
 				3C24F7A45B3B70459A21180A /* GoogleAuthService.swift */,
+				E9151C5F69A1F64F86529666 /* IrohProtocol.swift */,
+				CB5513A77A7DD816A61A1607 /* IrohReplicationService.swift */,
+				544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */,
 				CE7E580D67B2F342466E4D82 /* KeychainStore.swift */,
 				CF58A4FC46A48C3BEAA7E13E /* Models.swift */,
 				EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */,
@@ -140,6 +162,7 @@
 			children = (
 				7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */,
 				2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */,
+				3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */,
 				6D043EE67CA1960F20CF2749 /* MacOSTests.swift */,
 				6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */,
 				DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */,
@@ -193,6 +216,7 @@
 			isa = PBXGroup;
 			children = (
 				A07D519989D4A2F8C108C3BE /* Assets.xcassets */,
+				E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -253,6 +277,7 @@
 			packageProductDependencies = (
 				7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */,
 				35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */,
+				F883AB1431F3186814AACEF4 /* IrohLib */,
 			);
 			productName = "Pomodorough-macOS";
 			productReference = 05C431FDA9B5C4273A3A48BC /* Pomodorough.app */;
@@ -293,6 +318,7 @@
 			packageProductDependencies = (
 				1B2F658FFCC6E497932EB5E1 /* GoogleSignIn */,
 				0EE041835DA15370CCB79786 /* GoogleSignInSwift */,
+				8314F34588484234E7441061 /* IrohLib */,
 			);
 			productName = "Pomodorough-iOS";
 			productReference = 80A775511EF0C665343A6BF3 /* Pomodorough.app */;
@@ -331,6 +357,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				8B8C149D80299360883ECC8B /* XCRemoteSwiftPackageReference "iroh-ffi" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 780FBA18FDFC7FA9013B67B0 /* Products */;
@@ -361,6 +388,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3B9C80CC0469781B09D176CA /* Assets.xcassets in Resources */,
+				10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -378,6 +406,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0725FE9385C24B7F5C728E8 /* Assets.xcassets in Resources */,
+				2EC15A7B22650818465F13BE /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -390,6 +419,7 @@
 			files = (
 				C3A869CE2835EC339576D607 /* IntegrationNegativeTests.swift in Sources */,
 				F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */,
+				84B131A8A1403C42A16AFB5C /* IrohReplicationTests.swift in Sources */,
 				586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */,
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
 				4255112A51D66FBEC7FFA25E /* UnitNegativeTests.swift in Sources */,
@@ -403,6 +433,7 @@
 			files = (
 				98B4B39B908271919830386D /* IntegrationNegativeTests.swift in Sources */,
 				3FFA600ACA6A8AA43B56AF17 /* IntegrationPositiveTests.swift in Sources */,
+				87BDDCCB865B8A72DD4AEBFC /* IrohReplicationTests.swift in Sources */,
 				74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */,
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
 				25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */,
@@ -417,6 +448,9 @@
 				94DAD594DE4C0DDB7BC40D7A /* APIClient.swift in Sources */,
 				5C5F3C5C652265C7C81ACB31 /* AppModel.swift in Sources */,
 				6489DB8DEDA781EDD7C19DF6 /* GoogleAuthService.swift in Sources */,
+				87568375524EE6FC685681A5 /* IrohProtocol.swift in Sources */,
+				B09F5BBD20CF48828AFF4844 /* IrohReplicationService.swift in Sources */,
+				32CD7FD4021BF0DF052D4CF7 /* IrohRoomStore.swift in Sources */,
 				DE4287D68F65F02C32291ED7 /* KeychainStore.swift in Sources */,
 				471AC410750E1BBBB89BDBDC /* Models.swift in Sources */,
 				B2295D5A227E68C6503F6D36 /* PomodoroughApp.swift in Sources */,
@@ -440,6 +474,9 @@
 				83CBB05092621687C1CD6752 /* APIClient.swift in Sources */,
 				D33FAB5D214DE97A6B1B9AC7 /* AppModel.swift in Sources */,
 				A77B9E5B4D71B5AD19D2D931 /* GoogleAuthService.swift in Sources */,
+				BEDD57B570584744BBF2E177 /* IrohProtocol.swift in Sources */,
+				15DBCAB75EE12A495C4D7D83 /* IrohReplicationService.swift in Sources */,
+				ED568D143FD55313C51B97C0 /* IrohRoomStore.swift in Sources */,
 				F96B0C5F596F1D64DE3D07D7 /* KeychainStore.swift in Sources */,
 				B07D8AF9405E6B21B227E084 /* Models.swift in Sources */,
 				58D9FB99984C3C9DE6B8E2A5 /* PomodoroughApp.swift in Sources */,
@@ -629,8 +666,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GOOGLE_CLIENT_ID = "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com";
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				MACOSX_DEPLOYMENT_TARGET = 14.5;
 				MARKETING_VERSION = 0.1.9;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -746,8 +783,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GOOGLE_CLIENT_ID = "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com";
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				MACOSX_DEPLOYMENT_TARGET = 14.5;
 				MARKETING_VERSION = 0.1.9;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -844,6 +881,14 @@
 				minimumVersion = 9.2.0;
 			};
 		};
+		8B8C149D80299360883ECC8B /* XCRemoteSwiftPackageReference "iroh-ffi" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/n0-computer/iroh-ffi";
+			requirement = {
+				kind = exactVersion;
+				version = 1.1.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -866,6 +911,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignIn;
+		};
+		8314F34588484234E7441061 /* IrohLib */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8B8C149D80299360883ECC8B /* XCRemoteSwiftPackageReference "iroh-ffi" */;
+			productName = IrohLib;
+		};
+		F883AB1431F3186814AACEF4 /* IrohLib */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8B8C149D80299360883ECC8B /* XCRemoteSwiftPackageReference "iroh-ffi" */;
+			productName = IrohLib;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

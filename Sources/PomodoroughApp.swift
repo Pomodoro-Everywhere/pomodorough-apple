@@ -12,6 +12,7 @@ struct PomodoroughApp: App {
                 UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
             }
             try? KeychainStore().delete()
+            try? IrohRoomStore.resetDefaultStorage()
         }
 #endif
         _model = State(initialValue: AppModel())

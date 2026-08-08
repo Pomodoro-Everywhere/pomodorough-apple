@@ -427,6 +427,27 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
     func errorMessage(for status: OSStatus) -> String? { "test status \(status)" }
 }
 
+final class MemoryIrohRoomSecretStore: IrohRoomSecretStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var secrets: [String: Data]
+
+    init(secrets: [String: Data] = [:]) {
+        self.secrets = secrets
+    }
+
+    func load(roomID: String) throws -> Data? {
+        lock.withLock { secrets[roomID] }
+    }
+
+    func save(_ secret: Data, roomID: String) throws {
+        lock.withLock { secrets[roomID] = secret }
+    }
+
+    func delete(roomID: String) throws {
+        lock.withLock { secrets[roomID] = nil }
+    }
+}
+
 #if os(macOS)
 final class RecordingGoogleOAuthTransport: GoogleOAuthTokenExchangeTransport, @unchecked Sendable {
     private let lock = NSLock()
@@ -641,6 +662,18 @@ struct RecordedRequest: Sendable {
     let authorization: String?
 }
 
+struct LoopbackHTTPResponse: Sendable {
+    let statusCode: Int
+    let contentType: String
+    let body: Data
+
+    init(statusCode: Int = 200, contentType: String = "application/json", body: Data) {
+        self.statusCode = statusCode
+        self.contentType = contentType
+        self.body = body
+    }
+}
+
 final class LoopbackHTTPServer: @unchecked Sendable {
     private final class StartupState: @unchecked Sendable {
         private let lock = NSLock()
@@ -667,7 +700,13 @@ final class LoopbackHTTPServer: @unchecked Sendable {
 
     private(set) var baseURL = URL(string: "http://127.0.0.1")!
 
-    init(statusCode: Int = 200, contentType: String, body: Data) throws {
+    convenience init(statusCode: Int = 200, contentType: String, body: Data) throws {
+        try self.init { _ in
+            LoopbackHTTPResponse(statusCode: statusCode, contentType: contentType, body: body)
+        }
+    }
+
+    init(response: @escaping @Sendable (Data) -> LoopbackHTTPResponse) throws {
         listener = try NWListener(using: .tcp, on: .any)
         let started = DispatchSemaphore(value: 0)
         let startup = StartupState()
@@ -684,23 +723,23 @@ final class LoopbackHTTPServer: @unchecked Sendable {
                 break
             }
         }
-        let reason = HTTPURLResponse.localizedString(forStatusCode: statusCode)
-        let headers = Data((
-            "HTTP/1.1 \(statusCode) \(reason)\r\n"
-                + "Content-Type: \(contentType)\r\n"
-                + "Content-Length: \(body.count)\r\n"
-                + "Connection: close\r\n\r\n"
-        ).utf8)
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
             connection.start(queue: self.queue)
             connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1_024) {
                 data, _, _, _ in
-                if let data {
-                    self.lock.withLock { self.recordedRequest.append(data) }
-                }
+                let request = data ?? Data()
+                self.lock.withLock { self.recordedRequest.append(request) }
+                let response = response(request)
+                let reason = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+                let headers = Data((
+                    "HTTP/1.1 \(response.statusCode) \(reason)\r\n"
+                        + "Content-Type: \(response.contentType)\r\n"
+                        + "Content-Length: \(response.body.count)\r\n"
+                        + "Connection: close\r\n\r\n"
+                ).utf8)
                 connection.send(
-                    content: headers + body,
+                    content: headers + response.body,
                     completion: .contentProcessed { _ in
                         self.queue.asyncAfter(deadline: .now() + 1) {
                             connection.cancel()
@@ -911,6 +950,14 @@ final class StubURLProtocol: URLProtocol {
                 && request.value(forHTTPHeaderField: "Accept") == "application/json":
             statusCode = 200
             body = Data(#"{"challenge":"challenge-123","nonce":"nonce-456","expiresAt":"2026-07-20T12:34:56.789Z"}"#.utf8)
+        case "bootstrap-offline-sign-in"
+            where request.httpMethod == "POST" && path == "/api/v1/auth/google/challenge":
+            statusCode = 200
+            body = Data(#"{"challenge":"offline-challenge","nonce":"offline-nonce","expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
+        case "bootstrap-offline-sign-in"
+            where request.httpMethod == "POST" && path == "/api/v1/auth/google/exchange":
+            statusCode = 200
+            body = Self.tokenPairBody(accessToken: "offline-access", refreshToken: "offline-refresh")
         case "server-error":
             statusCode = 422
             body = Data(#"{"error":"Challenge expired."}"#.utf8)

@@ -2,12 +2,15 @@ name: Pomodorough
 options:
   bundleIdPrefix: me.egigoka
   deploymentTarget:
-    iOS: "17.0"
-    macOS: "14.0"
+    iOS: "17.5"
+    macOS: "14.5"
 packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS.git
     from: 9.2.0
+  IrohLib:
+    url: https://github.com/n0-computer/iroh-ffi
+    exactVersion: 1.1.0
 schemes:
   Pomodorough-iOS:
     build:
@@ -49,6 +52,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         GIDClientID: $(GOOGLE_CLIENT_ID)
         NSAlarmKitUsageDescription: Pomodorough schedules alarms so completed focus sessions and breaks alert you even when the app is not open.
+        NSLocalNetworkUsageDescription: Pomodorough uses your local network to connect directly to trusted Iroh room peers.
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - $(GOOGLE_REVERSED_CLIENT_ID)
@@ -69,6 +73,8 @@ targets:
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+      - package: IrohLib
+        product: IrohLib
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough
@@ -100,6 +106,8 @@ targets:
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+      - package: IrohLib
+        product: IrohLib
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac

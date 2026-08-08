@@ -21,6 +21,8 @@ final class AppModel {
 
     private let api: APIClient
     private let defaults: UserDefaults
+    private let roomStore: IrohRoomStore
+    private let endpointKeyStore: any IrohEndpointKeyStoring
     private let alarmScheduler: any TimerAlarmScheduling
     private let googleIdentityProvider: any GoogleIdentityProviding
     private let retryDelay: Duration
@@ -34,12 +36,21 @@ final class AppModel {
     @ObservationIgnored private var sessionVerificationOwner: UUID?
     @ObservationIgnored private var revisionStreamTask: Task<Void, Never>?
     @ObservationIgnored private var remotePollingTask: Task<Void, Never>?
+    @ObservationIgnored private var irohStartupTask: Task<Void, Never>?
     @ObservationIgnored private var revisionLifecycle = RevisionStreamLifecycle()
     @ObservationIgnored private var revisionHints = RevisionHintCoalescer()
     @ObservationIgnored private var completionQueuedFor: String?
     @ObservationIgnored private var sessionGeneration = 0
+    @ObservationIgnored private var replicationGeneration = 0
     @ObservationIgnored private var bootstrapSnapshot: BootstrapResponse?
     @ObservationIgnored private var physicalAnchor: (wall: Date, uptime: TimeInterval)?
+    @ObservationIgnored private var sceneIsActive = false
+    @ObservationIgnored private lazy var irohService = IrohReplicationService(
+        store: roomStore,
+        keyStore: endpointKeyStore,
+        statusHandler: { [weak self] status in self?.irohStatus = status },
+        projectionHandler: { [weak self] roomID, state in self?.applyIrohProjection(state, roomID: roomID) }
+    )
 
     private(set) var sessionState: SessionState = .restoring
     private(set) var canonicalTimer: CanonicalTimer?
@@ -53,11 +64,16 @@ final class AppModel {
     private(set) var localHistoryResolutionCount = 0
     private(set) var remoteHistoryResolutionCount = 0
     private(set) var needsPermissionIntroduction = false
+    private(set) var replicationMode: ReplicationMode
+    private(set) var irohStatus: IrohConnectionStatus = .stopped
+    private(set) var roomInvite: String?
     var errorMessage: String?
 
     init(
         api: APIClient = APIClient(),
         defaults: UserDefaults = .standard,
+        roomStore: IrohRoomStore = IrohRoomStore(),
+        endpointKeyStore: any IrohEndpointKeyStoring = IrohEndpointKeychainStore(),
         alarmScheduler: (any TimerAlarmScheduling)? = nil,
         googleIdentityProvider: any GoogleIdentityProviding = SystemGoogleIdentityProvider(),
         retryDelay: Duration = .seconds(5),
@@ -66,11 +82,15 @@ final class AppModel {
     ) {
         self.api = api
         self.defaults = defaults
+        self.roomStore = roomStore
+        self.endpointKeyStore = endpointKeyStore
         self.alarmScheduler = alarmScheduler ?? TimerAlarmScheduler()
         self.googleIdentityProvider = googleIdentityProvider
         self.retryDelay = retryDelay
         self.now = now
         self.uptime = uptime
+        var initialReplicationMode = defaults.string(forKey: Self.replicationModeKey)
+            .flatMap(ReplicationMode.init(rawValue:)) ?? .centralized
         let initialWall = now()
         let initialUptime = uptime()
         if WireBounds.physicalMilliseconds(for: initialWall) != nil,
@@ -83,6 +103,13 @@ final class AppModel {
             try? JSONDecoder.api.decode(PersistedTimerState.self, from: $0)
         }
         var stagedState = decodedState ?? .fresh()
+        if initialReplicationMode == .iroh, let roomState = roomStore.activeRoomState {
+            stagedState = roomState
+        } else if initialReplicationMode == .iroh {
+            initialReplicationMode = .offline
+            defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
+        }
+        replicationMode = initialReplicationMode
         var migratedLegacyDurations = false
         var migratedLegacyAutoStartBreaks = false
         var migratedLegacyTimerOwnership = false
@@ -160,6 +187,7 @@ final class AppModel {
         alarmOperationTask?.cancel()
         revisionStreamTask?.cancel()
         remotePollingTask?.cancel()
+        irohStartupTask?.cancel()
     }
 
     var isSignedIn: Bool {
@@ -228,7 +256,7 @@ final class AppModel {
                 return
             }
             timerState = updated
-            persist()
+            guard persist() else { return }
             Task { await sync() }
         }
     }
@@ -238,7 +266,8 @@ final class AppModel {
     }
 
     var activeTimer: CanonicalTimer? {
-        isTimerActive ? canonicalTimer : nil
+        if isTimerActive { return canonicalTimer }
+        return durableIrohTimerNeedingCompletion
     }
 
     func elapsedForDisplay(_ timer: CanonicalTimer) -> TimeInterval {
@@ -258,15 +287,26 @@ final class AppModel {
             + pendingDurationOperationCount
             + pendingAutoStartOperationCount
     }
+    var activeRoom: IrohRoomSnapshot? { roomStore.activeSnapshot }
+    var preferredRoom: IrohRoomSnapshot? {
+        roomStore.preferredRoomID.flatMap(roomStore.roomSnapshot(roomID:))
+    }
+    var hasIrohRoom: Bool { preferredRoom != nil }
+    var irohStatusLabel: String { irohStatus.label }
     var isHistoryResolutionBlocking: Bool {
-        historyResolutionState != .none
+        replicationMode == .centralized && (historyResolutionState != .none
             || timerState.bootstrapUser != nil
-            || timerState.pendingBootstrapResolution != nil
+            || timerState.pendingBootstrapResolution != nil)
     }
     var completedFocusCount: Int { history.count { $0.status == "completed" && $0.phase == .focus } }
     var deviceMark: String { String(timerState.deviceId.suffix(4)).uppercased() }
 
     var syncLabel: String {
+        if replicationMode == .iroh {
+            if activeRoom?.conflict != nil { return "Room repair needed" }
+            return irohStatus.label
+        }
+        if replicationMode == .offline { return "On device" }
         if !isSignedIn { return "On device" }
         if isHistoryResolutionBlocking {
             switch historyResolutionState {
@@ -316,7 +356,7 @@ final class AppModel {
             return
         }
         timerState = updated
-        commitCommands()
+        guard commitCommands() else { return }
         cancelAlarm(timerID: timer.id, reportsError: false)
     }
 
@@ -365,7 +405,7 @@ final class AppModel {
         }
         timerState = updated
         rebuildOptimisticState()
-        persist()
+        guard persist() else { return }
         if let clearedTimerID {
             cancelAlarm(timerID: clearedTimerID, reportsError: false)
         }
@@ -532,7 +572,15 @@ final class AppModel {
         retryTask = nil
         cancelRevisionStream()
         googleIdentityProvider.signOut()
-        if preservesBootstrapResolution {
+        if replicationMode == .iroh {
+            timerState.cachedUser = nil
+            timerState.bootstrapUser = nil
+            timerState.pendingBootstrapResolution = nil
+            var clearedReturnState = PersistedTimerState.fresh()
+            clearedReturnState.deviceId = timerState.deviceId
+            try? roomStore.replaceActiveReturnState(clearedReturnState)
+            persist()
+        } else if preservesBootstrapResolution {
             persist()
         } else {
             timerState = .fresh()
@@ -606,9 +654,13 @@ final class AppModel {
     }
 
     @discardableResult
-    private func finish(at date: Date, cancelsAlarm: Bool) -> Bool {
+    private func finish(
+        at date: Date,
+        cancelsAlarm: Bool,
+        timer explicitTimer: CanonicalTimer? = nil
+    ) -> Bool {
         guard !isHistoryResolutionBlocking else { return false }
-        guard let timer = canonicalTimer,
+        guard let timer = explicitTimer ?? canonicalTimer,
               timer.status == .running || timer.status == .paused else { return false }
         let localDate = effectivePhysicalNow() ?? now()
         let occurredAt: Date
@@ -651,7 +703,7 @@ final class AppModel {
 
         guard timer.phase == .focus, autoStartBreaks else {
             timerState = updated
-            commitCommands()
+            guard commitCommands() else { return false }
             if cancelsAlarm {
                 cancelAlarm(timerID: timer.id)
             }
@@ -660,6 +712,28 @@ final class AppModel {
 
         let breakTimerID = "timer-\(UUID().uuidString.lowercased())"
         let breakDuration = TimeInterval(updated.settings.durationMs(for: nextPhase)) / 1_000
+        if replicationMode == .iroh {
+            timerState = updated
+            guard commitCommands(),
+                  history.contains(where: { $0.commandId == finishCommand.id && $0.status == "completed" }),
+                  enqueue(
+                      .start,
+                      timerID: breakTimerID,
+                      taskID: nil,
+                      phase: nextPhase,
+                      duration: breakDuration,
+                      elapsed: 0
+                  ) else { return false }
+            if cancelsAlarm { cancelAlarm(timerID: timer.id) }
+            enqueueAlarmOperation { [alarmScheduler] in
+                try await alarmScheduler.schedule(
+                    timerID: breakTimerID,
+                    phase: nextPhase,
+                    duration: breakDuration
+                )
+            }
+            return true
+        }
         let startCommand: TimerCommand
         do {
             startCommand = try appendCommand(
@@ -684,7 +758,7 @@ final class AppModel {
             startCommandId: startCommand.id
         ))
         timerState = updated
-        commitCommands()
+        guard commitCommands() else { return false }
         if cancelsAlarm {
             cancelAlarm(timerID: timer.id)
         }
@@ -717,14 +791,78 @@ final class AppModel {
 
     func completeIfNeeded(timerID: String, at date: Date) {
         guard !isHistoryResolutionBlocking else { return }
-        guard let timer = canonicalTimer,
+        guard let timer = durableIrohTimerNeedingCompletion ?? canonicalTimer,
               timer.id == timerID,
               timer.status == .running,
               timer.remaining(at: date) <= 0,
               ownsAutomaticCompletion(for: timer.id),
               completionQueuedFor != timer.id else { return }
-        if finish(at: date, cancelsAlarm: false) {
+        if replicationMode == .iroh {
+            completeIrohTimerIfNeeded(timer, at: date)
+            return
+        }
+        if finish(at: date, cancelsAlarm: false, timer: timer) {
             completionQueuedFor = canonicalTimer?.status == .running ? timer.id : nil
+        }
+    }
+
+    private func completeIrohTimerIfNeeded(_ timer: CanonicalTimer, at date: Date) {
+        let projected = TimerReducer.projectingTimeCompletion(
+            timer,
+            history: timerState.history,
+            at: date
+        )
+        guard projected.timer?.status == .completed else { return }
+        let nextPhase = timer.phase == .focus
+            ? TimerReducer.breakPhase(afterCompletedFocusCount: projected.history.count {
+                $0.status == CanonicalTimer.Status.completed.rawValue && $0.phase == .focus
+            })
+            : .focus
+        var updated = timerState
+        updated.settings.selectedPhase = nextPhase
+
+        guard timer.phase == .focus, autoStartBreaks else {
+            timerState = updated
+            rebuildOptimisticState()
+            _ = persist()
+            return
+        }
+
+        let localDate = effectivePhysicalNow() ?? now()
+        let occurredAt: Date
+        do {
+            occurredAt = try trustedOccurrenceDate(localDate: localDate)
+        } catch {
+            reportInvalidLocalClock()
+            return
+        }
+        guard let completedAt = projected.timer?.anchorAt, occurredAt >= completedAt else { return }
+        let breakTimerID = "timer-\(UUID().uuidString.lowercased())"
+        let breakDuration = TimeInterval(updated.settings.durationMs(for: nextPhase)) / 1_000
+        do {
+            try appendCommand(
+                .start,
+                timerID: breakTimerID,
+                taskID: nil,
+                phase: nextPhase,
+                duration: breakDuration,
+                elapsed: 0,
+                at: occurredAt,
+                localDate: localDate,
+                to: &updated
+            )
+        } catch {
+            reportInvalidLocalClock()
+            return
+        }
+        timerState = updated
+        guard commitCommands() else { return }
+        enqueueAlarmOperation { [alarmScheduler] in
+            try await alarmScheduler.schedule(
+                timerID: breakTimerID,
+                phase: nextPhase,
+                duration: breakDuration
+            )
         }
     }
 
@@ -774,8 +912,9 @@ final class AppModel {
     }
 
     func sync(force: Bool = false, showsActivity: Bool = true) async {
-        guard isSignedIn, !isHistoryResolutionBlocking else { return }
+        guard replicationMode == .centralized, isSignedIn, !isHistoryResolutionBlocking else { return }
         let generation = sessionGeneration
+        let modeGeneration = replicationGeneration
         guard sessionVerification.allows(generation: generation) else {
             await verifyRestoredSession(generation: generation)
             return
@@ -803,8 +942,13 @@ final class AppModel {
                     || !timerState.pendingDurationOperations.isEmpty
                     || !timerState.pendingAutoStartOperations.isEmpty
                 let needsLocalFollowUp = requestedFollowUp && hasPendingOperations
-                let needsRemoteFollowUp = generation == sessionGeneration && hintedFollowUp
+                let needsRemoteFollowUp = generation == sessionGeneration
+                    && modeGeneration == replicationGeneration
+                    && replicationMode == .centralized
+                    && hintedFollowUp
                 if allowsFollowUpSync,
+                   modeGeneration == replicationGeneration,
+                   replicationMode == .centralized,
                    isSignedIn,
                    (needsLocalFollowUp || needsRemoteFollowUp) {
                     Task { [weak self] in await self?.sync(force: true) }
@@ -833,7 +977,10 @@ final class AppModel {
                 )
                 let response = sampledResponse.value
                 let receivedAt = effectivePhysicalNow() ?? now()
-                guard generation == sessionGeneration, isSignedIn else { return }
+                guard generation == sessionGeneration,
+                      modeGeneration == replicationGeneration,
+                      replicationMode == .centralized,
+                      isSignedIn else { return }
                 guard response.hasValidCanonicalSnapshot,
                       WireBounds.containsUnsigned(response.revision),
                       response.revision >= timerState.revision else {
@@ -923,23 +1070,36 @@ final class AppModel {
             startRevisionStream()
             startRemotePolling()
         } catch AppError.unauthorized {
+            guard modeGeneration == replicationGeneration,
+                  replicationMode == .centralized else { return }
             await invalidateUnauthorizedSession(generation: generation)
         } catch AppError.invalidResponse, AppError.invalidLocalClock {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard generation == sessionGeneration,
+                  modeGeneration == replicationGeneration,
+                  replicationMode == .centralized,
+                  isSignedIn else { return }
             allowsFollowUpSync = false
             isOffline = false
             errorMessage = "Sync paused because the server response did not match queued changes. \(pendingChangeCount) queued changes remain on this device."
             cancelRevisionStream()
         } catch {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard generation == sessionGeneration,
+                  modeGeneration == replicationGeneration,
+                  replicationMode == .centralized,
+                  isSignedIn else { return }
             isOffline = true
             scheduleRetry()
         }
     }
 
     func refreshAfterForeground() async {
-        guard isSignedIn else { return }
         completionQueuedFor = nil
+        if replicationMode == .iroh {
+            await startIrohIfNeeded()
+            await irohService.syncNow()
+            return
+        }
+        guard replicationMode == .centralized, isSignedIn else { return }
         if !isHistoryResolutionBlocking {
             startRevisionStream()
             startRemotePolling()
@@ -948,6 +1108,7 @@ final class AppModel {
     }
 
     func setSceneActive(_ active: Bool) {
+        sceneIsActive = active
         revisionLifecycle.setActive(active)
         if !active {
             revisionStreamTask?.cancel()
@@ -955,6 +1116,205 @@ final class AppModel {
             remotePollingTask?.cancel()
             remotePollingTask = nil
         }
+        if replicationMode == .iroh {
+            Task { [irohService] in
+#if os(iOS)
+                if active {
+                    await startIrohIfNeeded()
+                } else {
+                    await irohService.stop()
+                }
+#else
+                await startIrohIfNeeded()
+#endif
+            }
+        }
+    }
+
+    func setReplicationMode(_ mode: ReplicationMode) async {
+        guard mode != replicationMode else {
+            if mode == .iroh { scheduleIrohStartup() }
+            return
+        }
+        irohStartupTask?.cancel()
+        irohStartupTask = nil
+        errorMessage = nil
+        roomInvite = nil
+        let resumesCentralizedReplication = replicationMode == .centralized && mode != .centralized
+        if resumesCentralizedReplication {
+            quiesceCentralizedReplication()
+        }
+        if replicationMode == .iroh {
+            await irohService.stop()
+            do {
+                timerState = try roomStore.captureAndSuspendActiveRoom(from: timerState)
+            } catch {
+                await startIrohIfNeeded()
+                if resumesCentralizedReplication { resumeCentralizedReplication() }
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        if mode == .iroh {
+            guard let roomID = roomStore.preferredRoomID else {
+                if resumesCentralizedReplication { resumeCentralizedReplication() }
+                errorMessage = "Create or join an Iroh room before selecting Iroh mode."
+                return
+            }
+            do {
+                timerState = try roomStore.activateExistingRoom(roomID: roomID, returnState: timerState)
+            } catch {
+                if resumesCentralizedReplication { resumeCentralizedReplication() }
+                errorMessage = error.localizedDescription
+                return
+            }
+            cancelRevisionStream()
+        }
+        if mode != .centralized { cancelRevisionStream() }
+        replicationMode = mode
+        defaults.set(mode.rawValue, forKey: Self.replicationModeKey)
+        rebuildOptimisticState()
+        persist()
+        if mode == .centralized {
+            if let user {
+                await completeAuthenticatedSession(user: user, generation: sessionGeneration)
+            }
+        } else if mode == .iroh {
+            scheduleIrohStartup()
+        }
+    }
+
+    func createIrohRoom(name rawName: String) async -> Bool {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.unicodeScalars.count <= 64 else {
+            errorMessage = "Room name must be 64 characters or fewer."
+            return false
+        }
+        let resumesCentralizedReplication = replicationMode == .centralized
+        if resumesCentralizedReplication { quiesceCentralizedReplication() }
+        do {
+            let secret = secureRandomBytes(count: 32)
+            let roomID = try IrohProtocolV1.roomID(for: secret)
+            let context = irohContext(roomID: roomID, secret: secret)
+            let ticket = try await irohService.start(context)
+            let returnState = activeRoom?.conflict != nil
+                ? roomStore.activeReturnState ?? timerState
+                : timerState
+            let genesis = IrohGenesis(
+                canonicalTimer: canonicalTimer,
+                history: history,
+                tasks: tasks,
+                durationsMs: timerState.settings.durationsMs,
+                autoStartBreaks: autoStartBreaks,
+                hlcWallMs: timerState.hlcWallMs,
+                hlcCounter: timerState.hlcCounter
+            )
+            timerState = try roomStore.createRoom(
+                roomID: roomID,
+                roomSecret: secret,
+                name: name.isEmpty ? nil : name,
+                returnState: returnState,
+                genesis: genesis
+            )
+            replicationMode = .iroh
+            defaults.set(ReplicationMode.iroh.rawValue, forKey: Self.replicationModeKey)
+            cancelRevisionStream()
+            rebuildOptimisticState()
+            roomInvite = try IrohRoomInvite(
+                roomID: roomID,
+                roomName: name.isEmpty ? nil : name,
+                endpointTicket: ticket,
+                roomSecret: secret
+            ).encoded()
+            irohStatus = .listening(endpointMark: String(ticket.suffix(6)))
+            errorMessage = nil
+            return true
+        } catch {
+            await irohService.stop()
+            if resumesCentralizedReplication { resumeCentralizedReplication() }
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func refreshIrohInvite() async {
+        guard let room = activeRoom, let secret = roomStore.activeRoomSecret else { return }
+        do {
+            await startIrohIfNeeded()
+            let ticket = try await irohService.currentEndpointTicket()
+            roomInvite = try IrohRoomInvite(
+                roomID: room.roomID,
+                roomName: room.roomName,
+                endpointTicket: ticket,
+                roomSecret: secret
+            ).encoded()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func joinIrohRoom(inviteText: String) async -> Bool {
+        var preparedRoomID: String?
+        let resumesCentralizedReplication = replicationMode == .centralized
+        if resumesCentralizedReplication { quiesceCentralizedReplication() }
+        do {
+            let invite = try IrohRoomInvite.decode(inviteText.trimmingCharacters(in: .whitespacesAndNewlines))
+            try roomStore.prepareJoinedRoom(
+                roomID: invite.roomID,
+                roomSecret: invite.roomSecret,
+                name: invite.roomName,
+                returnState: timerState,
+                initialPeer: IrohPeer(
+                    endpointID: invite.endpointID,
+                    endpointTicket: invite.endpointTicket,
+                    deviceID: nil,
+                    displayName: nil,
+                    lastSeenAt: nil
+                )
+            )
+            preparedRoomID = invite.roomID
+            _ = try await irohService.start(irohContext(roomID: invite.roomID, secret: invite.roomSecret))
+            try await irohService.join(invite: invite)
+            timerState = try roomStore.activateJoinedRoom(roomID: invite.roomID, returnState: timerState)
+            replicationMode = .iroh
+            defaults.set(ReplicationMode.iroh.rawValue, forKey: Self.replicationModeKey)
+            cancelRevisionStream()
+            rebuildOptimisticState()
+            roomInvite = nil
+            errorMessage = nil
+            return true
+        } catch {
+            await irohService.stop()
+            if let preparedRoomID {
+                try? roomStore.discardUnconflictedInactiveRoom(roomID: preparedRoomID)
+            }
+            if resumesCentralizedReplication { resumeCentralizedReplication() }
+            if replicationMode == .iroh { await startIrohIfNeeded() }
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func leaveIrohRoom() async {
+        guard replicationMode == .iroh else { return }
+        await irohService.stop()
+        do {
+            timerState = try roomStore.captureAndSuspendActiveRoom(from: timerState)
+            replicationMode = .offline
+            defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
+            roomInvite = nil
+            rebuildOptimisticState()
+            persist()
+        } catch {
+            await startIrohIfNeeded()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func syncIrohNow() async {
+        guard replicationMode == .iroh else { return }
+        await startIrohIfNeeded()
+        await irohService.syncNow()
     }
 
     private func cancelRevisionStream() {
@@ -963,6 +1323,28 @@ final class AppModel {
         revisionStreamTask = nil
         remotePollingTask?.cancel()
         remotePollingTask = nil
+    }
+
+    private func quiesceCentralizedReplication() {
+        replicationGeneration += 1
+        syncOwnership.invalidate()
+        retryTask?.cancel()
+        retryTask = nil
+        isSyncing = false
+        cancelRevisionStream()
+    }
+
+    private func resumeCentralizedReplication() {
+        guard replicationMode == .centralized, isSignedIn else { return }
+        startRevisionStream()
+        startRemotePolling()
+        Task { [weak self] in await self?.sync(force: true) }
+    }
+
+    private func ownsCentralizedReplication(generation: Int, modeGeneration: Int) -> Bool {
+        generation == sessionGeneration
+            && modeGeneration == replicationGeneration
+            && replicationMode == .centralized
     }
 
     func nextBreakPhase() -> TimerPhase {
@@ -1014,8 +1396,7 @@ final class AppModel {
             return false
         }
         timerState = updated
-        commitCommands()
-        return true
+        return commitCommands()
     }
 
     @discardableResult
@@ -1076,10 +1457,12 @@ final class AppModel {
         )
     }
 
-    private func commitCommands() {
+    @discardableResult
+    private func commitCommands() -> Bool {
         rebuildOptimisticState()
-        persist()
+        guard persist() else { return false }
         Task { await sync() }
+        return true
     }
 
     private func uploadableCommands(limit: Int? = nil) -> [TimerCommand] {
@@ -1096,6 +1479,15 @@ final class AppModel {
             || timerState.pendingCommands.contains {
                 $0.type == .start && $0.timerId == timerID
             }
+    }
+
+    private var durableIrohTimerNeedingCompletion: CanonicalTimer? {
+        guard replicationMode == .iroh,
+              let timer = timerState.canonicalTimer,
+              timer.status == .running || timer.status == .paused,
+              timer.remaining(at: effectivePhysicalNow() ?? now()) <= 0,
+              ownsAutomaticCompletion(for: timer.id) else { return nil }
+        return timer
     }
 
     private func pruneLocalTimerOwners() {
@@ -1338,7 +1730,7 @@ final class AppModel {
         }
         timerState = updated
         rebuildOptimisticState()
-        persist()
+        guard persist() else { return false }
         Task { await sync() }
         return true
     }
@@ -1378,8 +1770,18 @@ final class AppModel {
             to: (try? timerState.physicalCanonicalTimer(timerState.canonicalTimer)) ?? timerState.canonicalTimer,
             history: timerState.history
         )
-        canonicalTimer = result.timer
-        history = result.history
+        if replicationMode == .iroh {
+            let projected = TimerReducer.projectingTimeCompletion(
+                result.timer,
+                history: result.history,
+                at: effectivePhysicalNow() ?? now()
+            )
+            canonicalTimer = projected.timer
+            history = projected.history
+        } else {
+            canonicalTimer = result.timer
+            history = result.history
+        }
         for operation in timerState.pendingTaskOperations where operation.type == .upsert {
             if let title = operation.title, let task = FocusTask(title: title) {
                 timerState.mergeKnownTasks([task])
@@ -1421,6 +1823,18 @@ final class AppModel {
             reportInvalidPendingOperations()
             return
         }
+        if replicationMode != .centralized {
+            if timerState.cachedUser?.id != user.id {
+                if timerState.bootstrapUser?.id != user.id {
+                    timerState.pendingBootstrapResolution = nil
+                }
+                timerState.cachedUser = nil
+                timerState.bootstrapUser = user
+            }
+            historyResolutionState = .none
+            persist()
+            return
+        }
         if timerState.cachedUser != nil {
             timerState.prepare(for: user)
             historyResolutionState = .none
@@ -1446,7 +1860,8 @@ final class AppModel {
     }
 
     private func preflightBootstrapResolution(generation: Int, autoSubmits: Bool = true) async {
-        guard generation == sessionGeneration,
+        let modeGeneration = replicationGeneration
+        guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration),
               isSignedIn,
               sessionVerification.allows(generation: generation),
               timerState.cachedUser == nil,
@@ -1466,7 +1881,7 @@ final class AppModel {
                 autoStartOperations: []
             ))
             let response = sampledResponse.value
-            guard generation == sessionGeneration,
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration),
                   isSignedIn,
                   timerState.cachedUser == nil else { return }
             guard response.hasValidCanonicalSnapshot,
@@ -1513,19 +1928,20 @@ final class AppModel {
             }
             await submitBootstrapResolution(strategy: strategy, snapshot: response)
         } catch AppError.unauthorized {
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration) else { return }
             await invalidateUnauthorizedSession(generation: generation)
         } catch AppError.invalidResponse {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(nil)
             isOffline = false
             errorMessage = "History setup paused because the server returned an invalid response. Local data remains on this device."
         } catch AppError.historyReplacementUnavailable {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(nil)
             isOffline = false
             errorMessage = AppError.historyReplacementUnavailable.localizedDescription
         } catch {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(nil)
             isOffline = true
             scheduleRetry()
@@ -1560,7 +1976,8 @@ final class AppModel {
         strategy: BootstrapResolutionStrategy,
         snapshot: BootstrapResponse
     ) async {
-        guard timerState.pendingBootstrapResolution == nil else { return }
+        guard replicationMode == .centralized,
+              timerState.pendingBootstrapResolution == nil else { return }
         let includesLocalOperations = strategy != .keepRemote
         guard !includesLocalOperations || timerState.hasValidPendingWireOperations else {
             reportInvalidPendingOperations()
@@ -1587,7 +2004,8 @@ final class AppModel {
         _ request: BootstrapResolveRequest,
         generation: Int
     ) async {
-        guard generation == sessionGeneration,
+        let modeGeneration = replicationGeneration
+        guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration),
               isSignedIn,
               sessionVerification.allows(generation: generation),
               timerState.cachedUser == nil,
@@ -1609,7 +2027,7 @@ final class AppModel {
             let sampledResponse = try await api.resolveBootstrap(request)
             let response = sampledResponse.value
             let receivedAt = effectivePhysicalNow() ?? now()
-            guard generation == sessionGeneration,
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration),
                   isSignedIn,
                   timerState.pendingBootstrapResolution == request,
                   let bootstrapUser = timerState.bootstrapUser else { return }
@@ -1625,25 +2043,26 @@ final class AppModel {
             reconcileAlarm(from: previousTimer, to: activeTimer, at: receivedAt)
             await sync(force: true)
         } catch AppError.unauthorized {
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration) else { return }
             await invalidateUnauthorizedSession(generation: generation)
         } catch AppError.conflict {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             timerState.pendingBootstrapResolution = nil
             bootstrapSnapshot = nil
             persist()
             await preflightBootstrapResolution(generation: generation, autoSubmits: false)
         } catch AppError.invalidResponse {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(request.strategy)
             isOffline = false
             errorMessage = "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved."
         } catch AppError.historyReplacementUnavailable {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(request.strategy)
             isOffline = false
             errorMessage = AppError.historyReplacementUnavailable.localizedDescription
         } catch {
-            guard generation == sessionGeneration, isSignedIn else { return }
+            guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(request.strategy)
             isOffline = true
             scheduleRetry()
@@ -1839,7 +2258,8 @@ final class AppModel {
     }
 
     private func startRemotePolling() {
-        guard isSignedIn,
+        guard replicationMode == .centralized,
+              isSignedIn,
               !isHistoryResolutionBlocking,
               sessionVerification.allows(generation: sessionGeneration),
               revisionLifecycle.isActive,
@@ -1867,7 +2287,8 @@ final class AppModel {
     }
 
     private func startRevisionStream() {
-        guard isSignedIn,
+        guard replicationMode == .centralized,
+              isSignedIn,
               !isHistoryResolutionBlocking,
               sessionVerification.allows(generation: sessionGeneration),
               let streamID = revisionLifecycle.begin() else { return }
@@ -1919,10 +2340,98 @@ final class AppModel {
         }
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist() -> Bool {
+        if replicationMode == .iroh {
+            let durableState = roomStore.activeRoomState
+            do {
+                timerState = try roomStore.captureLocalOperations(from: timerState)
+                Task { [irohService] in await irohService.syncNow() }
+            } catch {
+                if let durableState {
+                    timerState = durableState
+                    rebuildOptimisticState()
+                }
+                conflictMessage = error.localizedDescription
+                if case IrohProtocolError.immutableConflict = error {
+                    irohStatus = .conflict
+                    let roomID = roomStore.activeRoomID
+                    Task { [irohService] in await irohService.markConflict(roomID: roomID) }
+                }
+                return false
+            }
+            return true
+        }
         if let data = try? JSONEncoder.api.encode(timerState) {
             defaults.set(data, forKey: Self.storageKey)
+            return true
         }
+        return false
+    }
+
+    private func startIrohIfNeeded() async {
+        guard replicationMode == .iroh,
+              let room = activeRoom,
+              room.conflict == nil,
+              let secret = roomStore.activeRoomSecret else { return }
+#if os(iOS)
+        guard sceneIsActive else { return }
+#endif
+        do {
+            _ = try await irohService.start(irohContext(roomID: room.roomID, secret: secret))
+        } catch {
+            irohStatus = .unavailable(error.localizedDescription)
+        }
+    }
+
+    private func scheduleIrohStartup() {
+        irohStartupTask?.cancel()
+        guard replicationMode == .iroh,
+              let room = activeRoom,
+              room.conflict == nil,
+              let secret = roomStore.activeRoomSecret else { return }
+#if os(iOS)
+        guard sceneIsActive else { return }
+#endif
+        let service = irohService
+        let context = irohContext(roomID: room.roomID, secret: secret)
+        irohStartupTask = Task { [weak self, service] in
+            do {
+                _ = try await service.start(context)
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run { [weak self] in
+                    guard self?.replicationMode == .iroh,
+                          self?.activeRoom?.roomID == context.roomID else { return }
+                    self?.irohStatus = .unavailable(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func applyIrohProjection(_ state: PersistedTimerState, roomID: String) {
+        guard replicationMode == .iroh,
+              roomStore.activeRoomID == roomID,
+              let state = roomStore.activeRoomState else { return }
+        let previous = activeTimer
+        timerState = state
+        rebuildOptimisticState()
+        reconcileAlarm(from: previous, to: activeTimer, at: effectivePhysicalNow() ?? now())
+    }
+
+    private func irohContext(roomID: String, secret: Data) -> IrohServiceContext {
+        IrohServiceContext(
+            roomID: roomID,
+            roomSecret: secret,
+            deviceID: timerState.deviceId,
+            displayName: nil,
+            platform: Self.platform
+        )
+    }
+
+    private func secureRandomBytes(count: Int) -> Data {
+        var generator = SystemRandomNumberGenerator()
+        return Data((0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
     }
 
     private func reportInvalidLocalClock() {
@@ -1940,6 +2449,7 @@ final class AppModel {
     private static let storageKey = "timer-state-v2"
     private static let localTaskStorageKey = "local-tasks-v1"
     private static let permissionIntroductionKey = "permission-introduction-completed-v1"
+    private static let replicationModeKey = "replication-mode-v1"
 
     private static func hasPersistedDurationOperations(in data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
