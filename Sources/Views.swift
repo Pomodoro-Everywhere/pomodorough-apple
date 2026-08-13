@@ -52,7 +52,7 @@ struct RootView: View {
 
     @ViewBuilder
     private var destination: some View {
-#if os(iOS)
+#if os(iOS) || os(macOS)
         if model.needsPermissionIntroduction {
             PermissionIntroductionView(model: model)
         } else {
@@ -293,7 +293,7 @@ private struct LaunchView: View {
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(macOS)
 private struct PermissionIntroductionView: View {
     let model: AppModel
     @State private var isRequesting = false
@@ -329,9 +329,10 @@ private struct PermissionIntroductionView: View {
                         PermissionIntroductionCard(
                             icon: "bell.badge.fill",
                             title: "Notifications",
-                            detail: "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable.",
+                            detail: notificationDetail,
                             color: PomodoroughTheme.sky
                         )
+#if os(iOS)
                         if #available(iOS 26.0, *) {
                             PermissionIntroductionCard(
                                 icon: "alarm.fill",
@@ -340,6 +341,7 @@ private struct PermissionIntroductionView: View {
                                 color: PomodoroughTheme.signal
                             )
                         }
+#endif
                     }
 
                     VStack(spacing: 12) {
@@ -386,6 +388,14 @@ private struct PermissionIntroductionView: View {
                 .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private var notificationDetail: String {
+#if os(iOS)
+        "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable."
+#else
+        "Sends an alert and plays a sound until you dismiss it or start another timer."
+#endif
     }
 }
 
@@ -735,7 +745,7 @@ private struct ServicePatternScreen: View {
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
         }
-        .background(PomodoroughTheme.sky.gradient)
+        .background(TimerBackdrop())
         .navigationTitle("Service pattern")
         .inlineNavigationTitleIfSupported()
     }
@@ -792,11 +802,10 @@ private struct ServicePatternCard: View {
                 .accessibilityHidden(true)
         }
         .padding(18)
-        .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 22))
+        .background(.background, in: .rect(cornerRadius: 22))
         .overlay {
-            RoundedRectangle(cornerRadius: 22).stroke(PomodoroughTheme.track, lineWidth: 2)
+            RoundedRectangle(cornerRadius: 22).stroke(PomodoroughTheme.steel, lineWidth: 2)
         }
-        .environment(\.colorScheme, .light)
     }
 }
 
@@ -868,7 +877,7 @@ private struct DurationRow: View {
             }
             .padding(.horizontal, 10)
             .frame(minHeight: 54)
-            .foregroundStyle(selected ? PomodoroughTheme.porcelain : PomodoroughTheme.track)
+            .foregroundStyle(selected ? PomodoroughTheme.porcelain : Color.primary)
             .background(selected ? PomodoroughTheme.platform : .clear, in: .rect(cornerRadius: 12))
         }
         .buttonStyle(.plain)
@@ -886,8 +895,8 @@ private struct DurationRow: View {
                 .accessibilityValue("\(minutes) minutes")
             StepButton(title: "Increase \(phase.title) duration", symbol: "plus") { changeMinutes(minutes + 1) }
         }
-        .background(PomodoroughTheme.sky, in: .rect(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).stroke(PomodoroughTheme.track, lineWidth: 1.5) }
+        .background(Color.secondary.opacity(0.12), in: .rect(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(PomodoroughTheme.steel, lineWidth: 1.5) }
         .disabled(disabled)
     }
 }
@@ -967,17 +976,36 @@ private struct TimerMachineCard: View {
 
     @ViewBuilder
     private func dial(layout: TimerLayout) -> some View {
-        Group {
-            if let timer = model.activeTimer {
-                TimerDial(timer: timer, model: model, layout: layout)
-            } else {
-                IdleTimerDial(
-                    phase: model.selectedPhase,
-                    minutes: model.durationMinutes(for: model.selectedPhase),
-                    layout: layout
-                )
+        VStack(spacing: 8) {
+            Group {
+                if let timer = model.activeTimer {
+                    TimerDial(timer: timer, model: model, layout: layout)
+                } else {
+                    IdleTimerDial(
+                        phase: model.selectedPhase,
+                        minutes: model.durationMinutes(for: model.selectedPhase),
+                        layout: layout
+                    )
+                }
             }
+            LongBreakProgressIndicator(progress: model.longBreakProgress)
         }
+    }
+}
+
+private struct LongBreakProgressIndicator: View {
+    let progress: Int
+
+    var body: some View {
+        Text(String(repeating: "●", count: progress) + String(repeating: "○", count: 4 - progress))
+        .font(.caption.monospaced().bold())
+        .foregroundStyle(PomodoroughTheme.ticket)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 40)
+        .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Pomodoro progress")
+        .accessibilityValue("\(progress) of 4 pomodoros today")
     }
 }
 
@@ -1300,12 +1328,19 @@ private struct TimerControls: View {
         let button = Button(primaryAccessibilityTitle, action: primaryAccessibilityAction)
             .accessibilityValue(activeTaskAccessibilityValue)
         if model.isTimerActive {
-            button
-                .accessibilityAction(named: "Finish timer") { model.finish() }
-                .accessibilityAction(named: "Cancel timer") { model.cancel() }
+            if model.hasActiveCompletionAlert {
+                button
+                    .accessibilityAction(named: "Finish timer") { model.finish() }
+                    .accessibilityAction(named: "Cancel timer") { model.cancel() }
+                    .accessibilityAction(named: clearTimerTitle, model.stopSound)
+            } else {
+                button
+                    .accessibilityAction(named: "Finish timer") { model.finish() }
+                    .accessibilityAction(named: "Cancel timer") { model.cancel() }
+            }
         } else if hasClearableTimer {
             button
-                .accessibilityAction(named: "Clear timer", model.clear)
+                .accessibilityAction(named: clearTimerTitle, model.stopSound)
         } else {
             button
         }
@@ -1336,8 +1371,11 @@ private struct TimerControls: View {
                 if model.isTimerActive {
                     controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
                     controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+                    if model.hasActiveCompletionAlert {
+                        controlButton(clearTimerTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
+                    }
                 } else if hasClearableTimer {
-                    controlButton("Clear", symbol: "trash", glassID: .clear, prominent: false, glass: glass, action: model.clear)
+                    controlButton(clearTimerTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
                 }
             }
         } else {
@@ -1354,11 +1392,15 @@ private struct TimerControls: View {
                     }
                     #endif
                 }
-                if hasClearableTimer {
-                    controlButton("Clear timer", symbol: "trash", glassID: .clear, prominent: false, glass: glass, action: model.clear)
+                if model.hasActiveCompletionAlert || hasClearableTimer {
+                    controlButton(clearTimerTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
                 }
             }
         }
+    }
+
+    private var clearTimerTitle: String {
+        TimerAlarmScheduler.stopSoundTitle
     }
 
     @ViewBuilder
@@ -1452,20 +1494,22 @@ private struct TimerControls: View {
 }
 
 private struct TimerBackdrop: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [PomodoroughTheme.sky, PomodoroughTheme.mint.opacity(0.82), PomodoroughTheme.sky],
+                colors: backdropColors,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             Circle()
-                .fill(PomodoroughTheme.ticket.opacity(0.3))
+                .fill(PomodoroughTheme.ticket.opacity(colorScheme == .dark ? 0.16 : 0.3))
                 .frame(width: 280, height: 280)
                 .blur(radius: 18)
                 .offset(x: -150, y: -220)
             RoundedRectangle(cornerRadius: 80)
-                .fill(PomodoroughTheme.signal.opacity(0.2))
+                .fill(PomodoroughTheme.signal.opacity(colorScheme == .dark ? 0.14 : 0.2))
                 .frame(width: 360, height: 150)
                 .rotationEffect(.degrees(-14))
                 .blur(radius: 20)
@@ -1473,6 +1517,14 @@ private struct TimerBackdrop: View {
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
+    }
+
+    private var backdropColors: [Color] {
+        if colorScheme == .dark {
+            [PomodoroughTheme.night, PomodoroughTheme.platformDeep, PomodoroughTheme.nightSurface]
+        } else {
+            [PomodoroughTheme.sky, PomodoroughTheme.mint.opacity(0.82), PomodoroughTheme.sky]
+        }
     }
 }
 
@@ -1714,10 +1766,10 @@ private struct TasksScreen: View {
                         }
                     }
                 }
-                .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 20))
+                .background(.background, in: .rect(cornerRadius: 20))
                 .overlay {
                     RoundedRectangle(cornerRadius: 20)
-                        .stroke(PomodoroughTheme.track, lineWidth: 2)
+                        .stroke(PomodoroughTheme.steel, lineWidth: 2)
                 }
                 .clipShape(.rect(cornerRadius: 20))
                 .animation(.smooth(duration: 0.3), value: summaries.map(\.id))
@@ -1850,7 +1902,7 @@ private struct TaskComposer: View {
             Text("ADD A ROUTE")
                 .font(.caption2.monospaced().bold())
                 .tracking(1.2)
-                .foregroundStyle(PomodoroughTheme.platform)
+                .foregroundStyle(PomodoroughTheme.signal)
                 .accessibilityHidden(true)
             Group {
                 if dynamicTypeSize.isAccessibilitySize {
@@ -1861,10 +1913,10 @@ private struct TaskComposer: View {
             }
         }
         .padding(16)
-        .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 18))
+        .background(.background, in: .rect(cornerRadius: 18))
         .overlay {
             RoundedRectangle(cornerRadius: 18)
-                .stroke(PomodoroughTheme.track, lineWidth: 2)
+                .stroke(PomodoroughTheme.steel, lineWidth: 2)
         }
     }
 
@@ -2641,6 +2693,8 @@ private enum PomodoroughTheme {
     static let steel = Color(red: 143 / 255, green: 168 / 255, blue: 184 / 255)
     static let mint = Color(red: 168 / 255, green: 217 / 255, blue: 203 / 255)
     static let danger = Color(red: 195 / 255, green: 61 / 255, blue: 56 / 255)
+    static let night = Color(red: 13 / 255, green: 23 / 255, blue: 34 / 255)
+    static let nightSurface = Color(red: 23 / 255, green: 36 / 255, blue: 48 / 255)
 }
 
 private extension View {
@@ -2672,15 +2726,7 @@ private extension View {
         }
     }
 
-    @ViewBuilder
     func digitalReadoutPanel(cornerRadius: CGFloat) -> some View {
-        if #available(iOS 26, macOS 26, *) {
-            glassEffect(
-                .regular.tint(PomodoroughTheme.track.opacity(0.66)),
-                in: .rect(cornerRadius: cornerRadius)
-            )
-        } else {
-            background(PomodoroughTheme.track, in: .rect(cornerRadius: cornerRadius))
-        }
+        background(PomodoroughTheme.track, in: .rect(cornerRadius: cornerRadius))
     }
 }

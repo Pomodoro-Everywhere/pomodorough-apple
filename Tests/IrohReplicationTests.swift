@@ -97,6 +97,8 @@ struct IrohReplicationTests {
                     ]],
                     "durationAcknowledgements": [],
                     "autoStartAcknowledgements": [],
+                    "selectedTaskAcknowledgements": [],
+                    "selectedTaskId": NSNull(),
                     "durationsMs": [
                         "focus": 1_500_000,
                         "short_break": 300_000,

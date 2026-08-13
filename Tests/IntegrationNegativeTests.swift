@@ -99,6 +99,36 @@ struct IntegrationNegativeTests {
     }
 
     @Test @MainActor
+    func cancellingRejectsAtomicallyWhenClearCannotFit() async throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let occurrence = Date(timeIntervalSince1970: 1_000)
+        let scheduler = RecordingAlarmScheduler()
+        var state = PersistedTimerState.fresh()
+        state.nextSequence = WireBounds.maxSafeInteger
+        state.canonicalTimer = TestFixtures.timer(status: .running, elapsed: 0)
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        defaults.resetTimerStateWrites()
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: scheduler,
+            now: { occurrence }
+        )
+        let original = try persistedState(defaults)
+
+        model.cancel(at: occurrence)
+        await model.waitForAlarmOperations()
+
+        #expect(try persistedState(defaults) == original)
+        #expect(defaults.timerStateWrites.isEmpty)
+        #expect(model.pendingCommandCount == 0)
+        #expect(model.canonicalTimer == original.canonicalTimer)
+        #expect(scheduler.operations.isEmpty)
+        #expect(model.conflictMessage?.contains("trusted-time") == true)
+    }
+
+    @Test @MainActor
     func excessiveServerTimeUncertaintyRejectsResponseAtomically() async throws {
         let scenario = "duration-sync"
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
@@ -497,13 +527,11 @@ struct IntegrationNegativeTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let scheduler = RecordingAlarmScheduler()
+        var state = PersistedTimerState.fresh()
+        state.canonicalTimer = TestFixtures.timer(status: .cancelled, elapsed: 10)
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let model = AppModel(defaults: defaults, alarmScheduler: scheduler)
-
-        model.start()
-        await model.waitForAlarmOperations()
         let timer = try #require(model.canonicalTimer)
-        model.cancel(at: timer.anchorAt.addingTimeInterval(10))
-        await model.waitForAlarmOperations()
         scheduler.cancellationError = TimerAlarmError.authorizationDenied
 
         model.clear()
@@ -511,10 +539,7 @@ struct IntegrationNegativeTests {
 
         #expect(model.canonicalTimer == nil)
         #expect(model.errorMessage == nil)
-        #expect(scheduler.operations.suffix(2) == [
-            .cancel(timerID: timer.id),
-            .cancel(timerID: timer.id)
-        ])
+        #expect(scheduler.operations == [.cancel(timerID: timer.id)])
     }
 
     @Test func apiClientMapsUnauthorizedResponse() async {
@@ -724,7 +749,8 @@ struct IntegrationNegativeTests {
             "apple-api-coverage-bootstrap-nonempty-timer-ack",
             "apple-api-coverage-bootstrap-nonempty-task-ack",
             "apple-api-coverage-bootstrap-nonempty-duration-ack",
-            "apple-api-coverage-bootstrap-nonempty-auto-start-ack"
+            "apple-api-coverage-bootstrap-nonempty-auto-start-ack",
+            "apple-api-coverage-bootstrap-nonempty-selected-task-ack"
         ]
     )
     func bootstrapRejectsEveryNonemptyAcknowledgementList(_ scenario: String) async throws {
@@ -1427,7 +1453,19 @@ struct IntegrationNegativeTests {
 
     private func decodedResolutionRequest(_ request: RecordedRequest) throws -> BootstrapResolveRequest {
         let data = try #require(request.body)
-        return try JSONDecoder.api.decode(BootstrapResolveRequest.self, from: data)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        if let deviceID = object["deviceId"] as? String,
+           let operations = object["autoStartOperations"] as? [[String: Any]] {
+            object["autoStartOperations"] = operations.map { operation in
+                var operation = operation
+                operation["deviceId"] = deviceID
+                return operation
+            }
+        }
+        return try JSONDecoder.api.decode(
+            BootstrapResolveRequest.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
     }
 
     private func emptySyncRequest() -> SyncRequest {

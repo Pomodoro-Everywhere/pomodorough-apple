@@ -656,6 +656,25 @@ struct SyncRequest: Encodable, Sendable {
     let taskOperations: [TaskOperation]
     let durationOperations: [DurationOperation]
     let autoStartOperations: [AutoStartOperation]?
+    let selectedTaskOperations: [SelectedTaskOperation]
+
+    init(
+        deviceId: String,
+        lastRevision: Int64,
+        commands: [TimerCommand],
+        taskOperations: [TaskOperation],
+        durationOperations: [DurationOperation],
+        autoStartOperations: [AutoStartOperation]?,
+        selectedTaskOperations: [SelectedTaskOperation] = []
+    ) {
+        self.deviceId = deviceId
+        self.lastRevision = lastRevision
+        self.commands = commands
+        self.taskOperations = taskOperations
+        self.durationOperations = durationOperations
+        self.autoStartOperations = autoStartOperations
+        self.selectedTaskOperations = selectedTaskOperations
+    }
 }
 
 enum BootstrapResolutionStrategy: String, Codable, Equatable, Sendable {
@@ -681,6 +700,53 @@ struct BootstrapResolveRequest: Codable, Equatable, Sendable {
     let taskOperations: [TaskOperation]
     let durationOperations: [DurationOperation]
     let autoStartOperations: [AutoStartOperation]?
+    let selectedTaskOperations: [SelectedTaskOperation]?
+
+    init(
+        requestId: String,
+        deviceId: String,
+        expectedRevision: Int64,
+        strategy: BootstrapResolutionStrategy,
+        commands: [TimerCommand],
+        taskOperations: [TaskOperation],
+        durationOperations: [DurationOperation],
+        autoStartOperations: [AutoStartOperation]?,
+        selectedTaskOperations: [SelectedTaskOperation]? = nil
+    ) {
+        self.requestId = requestId
+        self.deviceId = deviceId
+        self.expectedRevision = expectedRevision
+        self.strategy = strategy
+        self.commands = commands
+        self.taskOperations = taskOperations
+        self.durationOperations = durationOperations
+        self.autoStartOperations = autoStartOperations
+        self.selectedTaskOperations = selectedTaskOperations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId, deviceId, expectedRevision, strategy, commands, taskOperations
+        case durationOperations, autoStartOperations, selectedTaskOperations
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try values.decode(String.self, forKey: .requestId)
+        deviceId = try values.decode(String.self, forKey: .deviceId)
+        expectedRevision = try values.decode(Int64.self, forKey: .expectedRevision)
+        strategy = try values.decode(BootstrapResolutionStrategy.self, forKey: .strategy)
+        commands = try values.decode([TimerCommand].self, forKey: .commands)
+        taskOperations = try values.decode([TaskOperation].self, forKey: .taskOperations)
+        durationOperations = try values.decode([DurationOperation].self, forKey: .durationOperations)
+        autoStartOperations = try values.decodeIfPresent(
+            [AutoStartOperation].self,
+            forKey: .autoStartOperations
+        )
+        selectedTaskOperations = try values.decodeIfPresent(
+            [SelectedTaskOperation].self,
+            forKey: .selectedTaskOperations
+        )
+    }
 }
 
 struct Acknowledgement: Codable, Equatable, Sendable {
@@ -781,6 +847,38 @@ enum AcknowledgementOutcome: String, Codable, Equatable, Sendable {
 }
 
 struct AutoStartAcknowledgement: Codable, Equatable, Sendable {
+    let operationId: UUID
+    let outcome: AcknowledgementOutcome
+    let reason: String
+}
+
+struct SelectedTaskOperation: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    let deviceId: String
+    let taskId: String?
+    let occurredAt: Date
+    let hlcWallMs: Int64
+    let hlcCounter: Int64
+
+    var isValid: Bool {
+        !deviceId.isEmpty
+            && (taskId == nil || taskId.flatMap(UUID.init(uuidString:)) != nil)
+            && WireBounds.isValidClock(
+                wallMs: hlcWallMs,
+                counter: hlcCounter,
+                allowsLegacySentinel: true
+            )
+            && (hlcWallMs == 0
+                ? WireBounds.isLegacySentinel(
+                    wallMs: hlcWallMs,
+                    counter: hlcCounter,
+                    occurredAt: occurredAt
+                )
+                : WireBounds.isWithinClockSkew(wallMs: hlcWallMs, occurredAt: occurredAt))
+    }
+}
+
+struct SelectedTaskAcknowledgement: Codable, Equatable, Sendable {
     let operationId: UUID
     let outcome: AcknowledgementOutcome
     let reason: String
@@ -1027,8 +1125,10 @@ struct SyncResponse: Decodable, Sendable {
     let taskAcknowledgements: [TaskAcknowledgement]
     let durationAcknowledgements: [DurationAcknowledgement]
     let autoStartAcknowledgements: [AutoStartAcknowledgement]
+    let selectedTaskAcknowledgements: [SelectedTaskAcknowledgement]
     let durationsMs: DurationValues
     let autoStartBreaks: Bool
+    let selectedTaskId: String?
     let revision: Int64
     let canonicalTimer: CanonicalTimer?
     let history: [HistoryItem]
@@ -1039,7 +1139,7 @@ struct SyncResponse: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case acknowledgements, taskAcknowledgements, durationAcknowledgements, autoStartAcknowledgements
-        case durationsMs, autoStartBreaks
+        case selectedTaskAcknowledgements, durationsMs, autoStartBreaks, selectedTaskId
         case revision, canonicalTimer
         case history, tasks, serverTime, serverHlcWallMs, serverHlcCounter
     }
@@ -1050,8 +1150,19 @@ struct SyncResponse: Decodable, Sendable {
         taskAcknowledgements = try values.decodeIfPresent([TaskAcknowledgement].self, forKey: .taskAcknowledgements) ?? []
         durationAcknowledgements = try values.decode([DurationAcknowledgement].self, forKey: .durationAcknowledgements)
         autoStartAcknowledgements = try values.decode([AutoStartAcknowledgement].self, forKey: .autoStartAcknowledgements)
+        selectedTaskAcknowledgements = try values.decode(
+            [SelectedTaskAcknowledgement].self,
+            forKey: .selectedTaskAcknowledgements
+        )
         durationsMs = try values.decode(DurationValues.self, forKey: .durationsMs)
         autoStartBreaks = try values.decode(Bool.self, forKey: .autoStartBreaks)
+        guard values.contains(.selectedTaskId) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.selectedTaskId,
+                .init(codingPath: values.codingPath, debugDescription: "Sync response requires selectedTaskId.")
+            )
+        }
+        selectedTaskId = try values.decodeIfPresent(String.self, forKey: .selectedTaskId)
         revision = try values.decode(Int64.self, forKey: .revision)
         canonicalTimer = try values.decodeIfPresent(CanonicalTimer.self, forKey: .canonicalTimer)
         history = try values.decode([HistoryItem].self, forKey: .history)
@@ -1066,7 +1177,8 @@ struct SyncResponse: Decodable, Sendable {
             timer: canonicalTimer,
             history: history,
             tasks: tasks,
-            durations: durationsMs
+            durations: durationsMs,
+            selectedTaskId: selectedTaskId
         )
     }
 }
@@ -1076,8 +1188,10 @@ struct BootstrapResponse: Decodable, Sendable {
     let taskAcknowledgements: [TaskAcknowledgement]
     let durationAcknowledgements: [DurationAcknowledgement]
     let autoStartAcknowledgements: [AutoStartAcknowledgement]
+    let selectedTaskAcknowledgements: [SelectedTaskAcknowledgement]
     let durationsMs: DurationValues
     let autoStartBreaks: Bool
+    let selectedTaskId: String?
     let revision: Int64
     let canonicalTimer: CanonicalTimer?
     let history: [HistoryItem]
@@ -1088,19 +1202,19 @@ struct BootstrapResponse: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case acknowledgements, taskAcknowledgements, durationAcknowledgements, autoStartAcknowledgements
-        case durationsMs, autoStartBreaks
+        case selectedTaskAcknowledgements, durationsMs, autoStartBreaks, selectedTaskId
         case revision, canonicalTimer
         case history, tasks, serverTime, serverHlcWallMs, serverHlcCounter
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        guard values.contains(.canonicalTimer) else {
+        guard values.contains(.canonicalTimer), values.contains(.selectedTaskId) else {
             throw DecodingError.keyNotFound(
-                CodingKeys.canonicalTimer,
+                values.contains(.canonicalTimer) ? CodingKeys.selectedTaskId : CodingKeys.canonicalTimer,
                 DecodingError.Context(
                     codingPath: values.codingPath,
-                    debugDescription: "Bootstrap response must include canonicalTimer."
+                    debugDescription: "Bootstrap response must include canonicalTimer and selectedTaskId."
                 )
             )
         }
@@ -1108,8 +1222,13 @@ struct BootstrapResponse: Decodable, Sendable {
         taskAcknowledgements = try values.decode([TaskAcknowledgement].self, forKey: .taskAcknowledgements)
         durationAcknowledgements = try values.decode([DurationAcknowledgement].self, forKey: .durationAcknowledgements)
         autoStartAcknowledgements = try values.decode([AutoStartAcknowledgement].self, forKey: .autoStartAcknowledgements)
+        selectedTaskAcknowledgements = try values.decode(
+            [SelectedTaskAcknowledgement].self,
+            forKey: .selectedTaskAcknowledgements
+        )
         durationsMs = try values.decode(DurationValues.self, forKey: .durationsMs)
         autoStartBreaks = try values.decode(Bool.self, forKey: .autoStartBreaks)
+        selectedTaskId = try values.decodeIfPresent(String.self, forKey: .selectedTaskId)
         revision = try values.decode(Int64.self, forKey: .revision)
         canonicalTimer = try values.decodeIfPresent(CanonicalTimer.self, forKey: .canonicalTimer)
         history = try values.decode([HistoryItem].self, forKey: .history)
@@ -1124,7 +1243,8 @@ struct BootstrapResponse: Decodable, Sendable {
             timer: canonicalTimer,
             history: history,
             tasks: tasks,
-            durations: durationsMs
+            durations: durationsMs,
+            selectedTaskId: selectedTaskId
         )
     }
 }
@@ -1134,7 +1254,8 @@ enum CanonicalSnapshotValidation {
         timer: CanonicalTimer?,
         history: [HistoryItem],
         tasks: [FocusTask],
-        durations: DurationValues
+        durations: DurationValues,
+        selectedTaskId: String?
     ) -> Bool {
         durations.isValid
             && (timer?.isValid ?? true)
@@ -1143,6 +1264,9 @@ enum CanonicalSnapshotValidation {
             && Set(history.map(\.id)).count == history.count
             && Set(history.map(\.timerId)).count == history.count
             && Set(tasks.map(\.id)).count == tasks.count
+            && (selectedTaskId == nil || selectedTaskId.flatMap(UUID.init(uuidString:)).map { selected in
+                tasks.contains { $0.id == selected }
+            } == true)
     }
 }
 
@@ -1174,6 +1298,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var pendingTaskOperations: [TaskOperation]
     var pendingDurationOperations: [DurationOperation]
     var pendingAutoStartOperations: [AutoStartOperation]
+    var pendingSelectedTaskOperations: [SelectedTaskOperation]
     var autoStartBreaks: Bool
     var localTimerOwners: [String: String]
     var provisionalBreaks: [ProvisionalBreak]
@@ -1208,6 +1333,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             pendingTaskOperations: [],
             pendingDurationOperations: [],
             pendingAutoStartOperations: [],
+            pendingSelectedTaskOperations: [],
             autoStartBreaks: false,
             localTimerOwners: [:],
             provisionalBreaks: [],
@@ -1258,6 +1384,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case serverTimeOffsetMs, serverTimeUncertaintyMs, serverTimeAnchorMs
         case serverTimeAnchorUptime, lastTrustedTimeMs, lastUuidV7, localCommandDates
         case pendingCommands, pendingTaskOperations, pendingDurationOperations, pendingAutoStartOperations
+        case pendingSelectedTaskOperations
         case autoStartBreaks, localTimerOwners, provisionalBreaks, canonicalTimer, history
         case tasks, knownTasks, selectedTaskID, legacyTaskAssignments, hasCorruptPendingOperations
         case settings, cachedUser
@@ -1282,6 +1409,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         pendingTaskOperations: [TaskOperation],
         pendingDurationOperations: [DurationOperation],
         pendingAutoStartOperations: [AutoStartOperation],
+        pendingSelectedTaskOperations: [SelectedTaskOperation] = [],
         autoStartBreaks: Bool,
         localTimerOwners: [String: String],
         provisionalBreaks: [ProvisionalBreak],
@@ -1314,6 +1442,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self.pendingTaskOperations = pendingTaskOperations
         self.pendingDurationOperations = pendingDurationOperations
         self.pendingAutoStartOperations = pendingAutoStartOperations
+        self.pendingSelectedTaskOperations = pendingSelectedTaskOperations
         self.autoStartBreaks = autoStartBreaks
         self.localTimerOwners = localTimerOwners
         self.provisionalBreaks = provisionalBreaks
@@ -1365,12 +1494,19 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         ) ?? []
         pendingAutoStartOperations = decodedAutoStartOperations.compactMap(\.value)
             .map(Self.normalizedLegacySentinel)
+        let decodedSelectedTaskOperations = try values.decodeIfPresent(
+            [LossyDecodable<SelectedTaskOperation>].self,
+            forKey: .pendingSelectedTaskOperations
+        ) ?? []
+        pendingSelectedTaskOperations = decodedSelectedTaskOperations.compactMap(\.value)
+            .map(Self.normalizedLegacySentinel)
         let persistedCorruptPendingOperations = try values.decodeIfPresent(
             Bool.self,
             forKey: .hasCorruptPendingOperations
         ) ?? false
         hasCorruptPendingOperations = persistedCorruptPendingOperations
             || decodedAutoStartOperations.contains { $0.value == nil }
+            || decodedSelectedTaskOperations.contains { $0.value == nil }
         autoStartBreaks = try values.decodeIfPresent(Bool.self, forKey: .autoStartBreaks) ?? false
         localTimerOwners = try values.decodeIfPresent([String: String].self, forKey: .localTimerOwners) ?? [:]
         provisionalBreaks = try values.decodeIfPresent(
@@ -1503,6 +1639,23 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     }
 
     @discardableResult
+    mutating func migrateLegacySelectedTask(at date: Date = .now) throws -> Bool {
+        guard let selectedTaskID,
+              TaskReducer.applying(pendingTaskOperations, to: tasks)
+                .contains(where: { $0.id == selectedTaskID }) else { return false }
+        try advanceClock(at: date)
+        pendingSelectedTaskOperations.append(SelectedTaskOperation(
+            id: try reserveUuidV7()[0],
+            deviceId: deviceId,
+            taskId: selectedTaskID.uuidString.lowercased(),
+            occurredAt: date,
+            hlcWallMs: hlcWallMs,
+            hlcCounter: hlcCounter
+        ))
+        return true
+    }
+
+    @discardableResult
     mutating func migrateLegacyTimerOwnership() -> Bool {
         guard let timer = canonicalTimer,
               timer.status == .running || timer.status == .paused,
@@ -1562,6 +1715,33 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         let acknowledgedIDSet = Set(acknowledgedOperationIDs)
         pendingAutoStartOperations.removeAll { acknowledgedIDSet.contains($0.id) }
         autoStartBreaks = canonicalValue
+    }
+
+    mutating func applySelectedTaskSync(
+        canonicalTaskId: String?,
+        canonicalTasks: [FocusTask],
+        sentOperations: [SelectedTaskOperation],
+        acknowledgements: [SelectedTaskAcknowledgement]
+    ) throws {
+        let canonicalTaskID = canonicalTaskId.flatMap(UUID.init(uuidString:))
+        let sentOperationIDs = sentOperations.map(\.id)
+        let acknowledgedOperationIDs = acknowledgements.map(\.operationId)
+        guard canonicalTaskId == nil || canonicalTaskID.map({ selected in
+            canonicalTasks.contains { $0.id == selected }
+        }) == true,
+              sentOperations.allSatisfy({ $0.isValid && $0.deviceId == deviceId }),
+              AcknowledgementSet.exactlyMatches(
+                sent: sentOperationIDs,
+                acknowledged: acknowledgedOperationIDs
+              ) else {
+            throw AppError.invalidResponse
+        }
+        let acknowledgedIDSet = Set(acknowledgedOperationIDs)
+        pendingSelectedTaskOperations.removeAll { acknowledgedIDSet.contains($0.id) }
+        selectedTaskID = SelectedTaskReducer.applying(
+            pendingSelectedTaskOperations,
+            to: canonicalTaskID
+        )
     }
 
     mutating func rebasePendingOperations(
@@ -1709,11 +1889,30 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             )
         }
 
+        let selectedTaskReplacements = try replacements(for: pendingSelectedTaskOperations.sorted {
+            ($0.hlcWallMs, $0.hlcCounter, $0.id.uuidString)
+                < ($1.hlcWallMs, $1.hlcCounter, $1.id.uuidString)
+        }.map { ($0.id.uuidString, $0.hlcWallMs, $0.hlcCounter) })
+        pendingSelectedTaskOperations = try pendingSelectedTaskOperations.map { operation in
+            guard let clock = selectedTaskReplacements[operation.id.uuidString] else {
+                return operation
+            }
+            return SelectedTaskOperation(
+                id: operation.id,
+                deviceId: operation.deviceId,
+                taskId: operation.taskId,
+                occurredAt: try rebasedDate(operation.occurredAt, clock: clock),
+                hlcWallMs: clock.wallMs,
+                hlcCounter: clock.counter
+            )
+        }
+
         let retainedMaximum = (
             pendingCommands.map { ($0.hlcWallMs, $0.hlcCounter) }
                 + pendingTaskOperations.map { ($0.hlcWallMs, $0.hlcCounter) }
                 + pendingDurationOperations.map { ($0.hlcWallMs, $0.hlcCounter) }
                 + pendingAutoStartOperations.map { ($0.hlcWallMs, $0.hlcCounter) }
+                + pendingSelectedTaskOperations.map { ($0.hlcWallMs, $0.hlcCounter) }
         ).filter { $0.0 > 0 }.max { $0 < $1 }
         let currentClock = (hlcWallMs, hlcCounter)
         let pendingClock = retainedMaximum ?? (serverWallMs, serverCounter)
@@ -1800,11 +1999,15 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             && pendingAutoStartOperations.allSatisfy {
                 $0.isValid && $0.deviceId == deviceId
             }
+            && pendingSelectedTaskOperations.allSatisfy {
+                $0.isValid && $0.deviceId == deviceId
+            }
             && Set(pendingCommands.map(\.id)).count == pendingCommands.count
             && Set(pendingCommands.map(\.deviceSequence)).count == pendingCommands.count
             && Set(pendingTaskOperations.map(\.id)).count == pendingTaskOperations.count
             && Set(pendingDurationOperations.map(\.id)).count == pendingDurationOperations.count
             && Set(pendingAutoStartOperations.map(\.id)).count == pendingAutoStartOperations.count
+            && Set(pendingSelectedTaskOperations.map(\.id)).count == pendingSelectedTaskOperations.count
     }
 
     mutating func reserveDeviceSequence() throws -> Int64 {
@@ -1829,6 +2032,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             + pendingTaskOperations.compactMap { UUIDv7.payload(from: $0.id) }
             + pendingDurationOperations.compactMap { UUIDv7.payload(from: $0.id) }
             + pendingAutoStartOperations.compactMap { UUIDv7.payload(from: $0.id.uuidString) }
+            + pendingSelectedTaskOperations.compactMap { UUIDv7.payload(from: $0.id.uuidString) }
         let latestQueued = queued.max { UUIDv7.isLess($0, than: $1) }
         if let lastUuidV7 {
             _ = try UUIDv7.parts(of: lastUuidV7)
@@ -2040,6 +2244,18 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         )
     }
 
+    private static func normalizedLegacySentinel(_ operation: SelectedTaskOperation) -> SelectedTaskOperation {
+        guard operation.hlcWallMs == 0, operation.hlcCounter == 0 else { return operation }
+        return SelectedTaskOperation(
+            id: operation.id,
+            deviceId: operation.deviceId,
+            taskId: operation.taskId,
+            occurredAt: Date(timeIntervalSince1970: 0),
+            hlcWallMs: 0,
+            hlcCounter: 0
+        )
+    }
+
     private static func normalizedLegacySentinels(
         _ request: BootstrapResolveRequest
     ) -> BootstrapResolveRequest {
@@ -2051,7 +2267,8 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             commands: request.commands,
             taskOperations: request.taskOperations,
             durationOperations: request.durationOperations.map(normalizedLegacySentinel),
-            autoStartOperations: request.autoStartOperations?.map(normalizedLegacySentinel)
+            autoStartOperations: request.autoStartOperations?.map(normalizedLegacySentinel),
+            selectedTaskOperations: request.selectedTaskOperations?.map(normalizedLegacySentinel)
         )
     }
 
@@ -2113,6 +2330,22 @@ enum AutoStartReducer {
     }
 
     private static func precedes(_ lhs: AutoStartOperation, _ rhs: AutoStartOperation) -> Bool {
+        if lhs.hlcWallMs != rhs.hlcWallMs { return lhs.hlcWallMs < rhs.hlcWallMs }
+        if lhs.hlcCounter != rhs.hlcCounter { return lhs.hlcCounter < rhs.hlcCounter }
+        if lhs.deviceId != rhs.deviceId { return lhs.deviceId < rhs.deviceId }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
+enum SelectedTaskReducer {
+    static func applying(_ operations: [SelectedTaskOperation], to base: UUID?) -> UUID? {
+        operations.sorted(by: precedes).reduce(base) { selectedTaskID, operation in
+            guard operation.isValid else { return selectedTaskID }
+            return operation.taskId.flatMap(UUID.init(uuidString:))
+        }
+    }
+
+    private static func precedes(_ lhs: SelectedTaskOperation, _ rhs: SelectedTaskOperation) -> Bool {
         if lhs.hlcWallMs != rhs.hlcWallMs { return lhs.hlcWallMs < rhs.hlcWallMs }
         if lhs.hlcCounter != rhs.hlcCounter { return lhs.hlcCounter < rhs.hlcCounter }
         if lhs.deviceId != rhs.deviceId { return lhs.deviceId < rhs.deviceId }

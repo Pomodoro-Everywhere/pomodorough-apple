@@ -112,6 +112,27 @@ enum TestFixtures {
         )
     }
 
+    static func selectedTaskOperation(
+        id: UUID = UUID(),
+        deviceID: String = "device-test",
+        taskID: UUID?,
+        wallMs: Int64,
+        counter: Int64 = 0,
+        occurredAt: Date? = nil
+    ) -> SelectedTaskOperation {
+        let defaultOccurredAt = wallMs == 0 && counter == 0
+            ? Date(timeIntervalSince1970: 0)
+            : Date(timeIntervalSince1970: TimeInterval(max(1, wallMs / 1_000)))
+        return SelectedTaskOperation(
+            id: id,
+            deviceId: deviceID,
+            taskId: taskID?.uuidString.lowercased(),
+            occurredAt: occurredAt ?? defaultOccurredAt,
+            hlcWallMs: wallMs,
+            hlcCounter: counter
+        )
+    }
+
     static func permutations<Value>(of values: [Value]) -> [[Value]] {
         guard !values.isEmpty else { return [[]] }
         return values.indices.flatMap { index in
@@ -1066,6 +1087,11 @@ final class StubURLProtocol: URLProtocol {
                     key: "autoStartOperations",
                     idKey: "operationId"
                 ),
+                selectedTaskAcknowledgements: Self.acknowledgements(
+                    from: requestObject,
+                    key: "selectedTaskOperations",
+                    idKey: "operationId"
+                ),
                 autoStartBreaks: Self.bootstrapAutoStartValue(
                     strategy: resolutionRequest?["strategy"] as? String,
                     request: resolutionRequest,
@@ -1078,6 +1104,9 @@ final class StubURLProtocol: URLProtocol {
                 )
             )
         case _ where scenario?.hasPrefix("task-sync") == true && path == "/api/v1/me":
+            statusCode = 200
+            body = Self.meBody
+        case _ where scenario?.hasPrefix("selected-task-sync") == true && path == "/api/v1/me":
             statusCode = 200
             body = Self.meBody
         case _ where (scenario?.hasPrefix("auto-start-") == true || scenario == "timer-cycle")
@@ -1146,6 +1175,14 @@ final class StubURLProtocol: URLProtocol {
                 pathAttempt: pathAttempt,
                 request: Self.requestObject(requestBody)
             )
+        case _ where scenario?.hasPrefix("selected-task-sync") == true
+            && request.httpMethod == "POST"
+            && path == "/api/v1/sync":
+            statusCode = 200
+            body = Self.selectedTaskSyncResponse(
+                scenario: scenario!,
+                request: Self.requestObject(requestBody)
+            )
         case _ where scenario?.hasPrefix("sync-contract-") == true
             && request.httpMethod == "POST"
             && path == "/api/v1/sync":
@@ -1164,12 +1201,12 @@ final class StubURLProtocol: URLProtocol {
             where request.httpMethod == "POST"
                 && request.url?.path == "/api/v1/sync":
             statusCode = 200
-            body = Data(#"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"durationsMs":{"focus":2400000,"short_break":360000,"long_break":1200000},"autoStartBreaks":false,"revision":7,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":4}"#.utf8)
+            body = Data(#"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"selectedTaskAcknowledgements":[],"selectedTaskId":null,"durationsMs":{"focus":2400000,"short_break":360000,"long_break":1200000},"autoStartBreaks":false,"revision":7,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":4}"#.utf8)
         case "duration-invalid-ack"
             where request.httpMethod == "POST"
                 && request.url?.path == "/api/v1/sync":
             statusCode = 200
-            body = Data(#"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[{"operationId":"duration-operation-unexpected","outcome":"applied","reason":""}],"autoStartAcknowledgements":[],"durationsMs":{"focus":1800000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":7,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":4}"#.utf8)
+            body = Data(#"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[{"operationId":"duration-operation-unexpected","outcome":"applied","reason":""}],"autoStartAcknowledgements":[],"selectedTaskAcknowledgements":[],"selectedTaskId":null,"durationsMs":{"focus":1800000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":7,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":4}"#.utf8)
         case "unauthorized":
             statusCode = 401
             body = Data(#"{"error":"Unauthorized"}"#.utf8)
@@ -1272,7 +1309,8 @@ final class StubURLProtocol: URLProtocol {
         case ("apple-api-coverage-bootstrap-nonempty-timer-ack", "/api/v1/bootstrap"),
              ("apple-api-coverage-bootstrap-nonempty-task-ack", "/api/v1/bootstrap"),
              ("apple-api-coverage-bootstrap-nonempty-duration-ack", "/api/v1/bootstrap"),
-             ("apple-api-coverage-bootstrap-nonempty-auto-start-ack", "/api/v1/bootstrap"):
+             ("apple-api-coverage-bootstrap-nonempty-auto-start-ack", "/api/v1/bootstrap"),
+             ("apple-api-coverage-bootstrap-nonempty-selected-task-ack", "/api/v1/bootstrap"):
             statusCode = 200
             body = Self.bootstrapResponseWithAcknowledgement(for: scenario)
         case ("apple-api-coverage-bootstrap-malformed-2xx", "/api/v1/bootstrap"),
@@ -1323,6 +1361,7 @@ final class StubURLProtocol: URLProtocol {
             taskAcknowledgements: [],
             durationAcknowledgements: [],
             autoStartAcknowledgements: [],
+            selectedTaskAcknowledgements: [],
             tasks: []
         )
         switch scenario {
@@ -1347,6 +1386,12 @@ final class StubURLProtocol: URLProtocol {
         case "apple-api-coverage-bootstrap-nonempty-auto-start-ack":
             response["autoStartAcknowledgements"] = [[
                 "operationId": "00000000-0000-4000-8000-000000000001",
+                "outcome": "applied",
+                "reason": ""
+            ]]
+        case "apple-api-coverage-bootstrap-nonempty-selected-task-ack":
+            response["selectedTaskAcknowledgements"] = [[
+                "operationId": "00000000-0000-4000-8000-000000000002",
                 "outcome": "applied",
                 "reason": ""
             ]]
@@ -1405,6 +1450,21 @@ final class StubURLProtocol: URLProtocol {
             "id": "53bef65b-b59f-8614-9a1c-68951ad20089",
             "title": "Remote task"
         ]
+    }
+
+    private static var selectedPreferenceTask: [String: Any] {
+        let task = FocusTask(title: "Central selection")!
+        return ["id": task.id.uuidString.lowercased(), "title": task.title]
+    }
+
+    private static var selectedBuildTask: [String: Any] {
+        let task = FocusTask(title: "Captured build")!
+        return ["id": task.id.uuidString.lowercased(), "title": task.title]
+    }
+
+    private static var selectedReviewTask: [String: Any] {
+        let task = FocusTask(title: "Next review")!
+        return ["id": task.id.uuidString.lowercased(), "title": task.title]
     }
 
     private static var associatedTimer: [String: Any] {
@@ -1663,6 +1723,8 @@ final class StubURLProtocol: URLProtocol {
         }
         var history: [[String: Any]] = []
         if scenario.contains("-long-") {
+            let completedAt = focusFinish?["occurredAt"] as? String
+                ?? "1970-01-01T00:00:00.000Z"
             for index in 1...3 {
                 history.append([
                     "id": "matrix-prior-\(index)",
@@ -1671,7 +1733,10 @@ final class StubURLProtocol: URLProtocol {
                     "phase": "focus",
                     "status": "completed",
                     "plannedDurationMs": 60_000,
-                    "completedAt": "1970-01-01T00:0\(index):00.000Z"
+                    "completedAt": completionTimestamp(
+                        before: completedAt,
+                        milliseconds: 4 - index
+                    )
                 ])
             }
         }
@@ -1813,6 +1878,8 @@ final class StubURLProtocol: URLProtocol {
             history.append(completion)
         }
         if scenario == "auto-start-stale-fourth" {
+            let completedAt = focusFinish?["occurredAt"] as? String
+                ?? "2026-07-20T00:00:00.000Z"
             for index in 1...3 {
                 history.append([
                     "id": "remote-focus-\(index)",
@@ -1821,7 +1888,10 @@ final class StubURLProtocol: URLProtocol {
                     "phase": "focus",
                     "status": "completed",
                     "plannedDurationMs": 60_000,
-                    "completedAt": "2026-07-20T0\(index):00:00.000Z"
+                    "completedAt": completionTimestamp(
+                        before: completedAt,
+                        milliseconds: 4 - index
+                    )
                 ])
             }
         }
@@ -1901,6 +1971,18 @@ final class StubURLProtocol: URLProtocol {
         ]
     }
 
+    private static func completionTimestamp(
+        before timestamp: String,
+        milliseconds: Int
+    ) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: timestamp) else { return timestamp }
+        return formatter.string(
+            from: date.addingTimeInterval(-Double(milliseconds) / 1_000)
+        )
+    }
+
     private static func timerCycleResponse(
         scenario: String,
         request: [String: Any]?
@@ -1922,7 +2004,13 @@ final class StubURLProtocol: URLProtocol {
                 key: "autoStartOperations",
                 idKey: "operationId"
             ),
+            selectedTaskAcknowledgements: acknowledgements(
+                from: request,
+                key: "selectedTaskOperations",
+                idKey: "operationId"
+            ),
             autoStartBreaks: cumulativeAutoStartValue(for: scenario),
+            selectedTaskId: cumulativeSelectedTaskID(for: scenario),
             tasks: cumulativeTasks(for: scenario),
             canonicalTimer: state.timer
         )
@@ -1945,6 +2033,14 @@ final class StubURLProtocol: URLProtocol {
             }
         }
         return durations
+    }
+
+    private static func cumulativeSelectedTaskID(for scenario: String) -> String? {
+        let operations = StubRequestRecorder.shared.requests(for: scenario)
+            .filter { $0.path == "/api/v1/sync" }
+            .flatMap { requestObject($0.body)?["selectedTaskOperations"] as? [[String: Any]] ?? [] }
+        guard let operation = operations.max(by: autoStartPrecedes) else { return nil }
+        return operation["taskId"] is NSNull ? nil : operation["taskId"] as? String
     }
 
     private static func timerState(for scenario: String) -> (timer: Any, history: [[String: Any]]) {
@@ -2016,12 +2112,23 @@ final class StubURLProtocol: URLProtocol {
             key: "taskOperations",
             idKey: "operationId"
         )
+        let selectedTaskAcknowledgements = acknowledgements(
+            from: request,
+            key: "selectedTaskOperations",
+            idKey: "operationId"
+        )
+        let requestedSelection = (request?["selectedTaskOperations"] as? [[String: Any]])?.last
+        let requestedSelectedTaskID: String? = requestedSelection.flatMap { operation in
+            operation["taskId"] is NSNull ? nil : operation["taskId"] as? String
+        }
         switch scenario {
         case "task-sync-delete-wire":
             return syncResponse(
                 revision: 12,
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
+                selectedTaskAcknowledgements: selectedTaskAcknowledgements,
+                selectedTaskId: requestedSelectedTaskID,
                 tasks: []
             )
         case "task-sync-remote-lifecycle":
@@ -2029,6 +2136,8 @@ final class StubURLProtocol: URLProtocol {
                 revision: Int64(11 + pathAttempt),
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
+                selectedTaskAcknowledgements: selectedTaskAcknowledgements,
+                selectedTaskId: pathAttempt == 1 ? requestedSelectedTaskID : nil,
                 tasks: pathAttempt == 1 ? [remoteTask] : []
             )
         case "task-sync-in-flight-rebase":
@@ -2037,6 +2146,8 @@ final class StubURLProtocol: URLProtocol {
                 revision: Int64(11 + pathAttempt),
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
+                selectedTaskAcknowledgements: selectedTaskAcknowledgements,
+                selectedTaskId: requestedSelectedTaskID,
                 tasks: [remoteTask] + cumulativeTasks(for: scenario)
             )
         case _ where scenario?.hasPrefix("task-sync-batching-") == true:
@@ -2044,6 +2155,8 @@ final class StubURLProtocol: URLProtocol {
                 revision: Int64(11 + pathAttempt),
                 history: [],
                 taskAcknowledgements: taskAcknowledgements,
+                selectedTaskAcknowledgements: selectedTaskAcknowledgements,
+                selectedTaskId: requestedSelectedTaskID,
                 tasks: cumulativeTasks(for: scenario)
             )
         case "task-sync-associations":
@@ -2051,6 +2164,8 @@ final class StubURLProtocol: URLProtocol {
                 revision: 12,
                 history: [associatedHistory],
                 taskAcknowledgements: taskAcknowledgements,
+                selectedTaskAcknowledgements: selectedTaskAcknowledgements,
+                selectedTaskId: requestedSelectedTaskID,
                 tasks: [remoteTask],
                 canonicalTimer: associatedTimer
             )
@@ -2059,9 +2174,52 @@ final class StubURLProtocol: URLProtocol {
                 revision: 12,
                 history: [remoteHistory],
                 taskAcknowledgements: taskAcknowledgements,
+                selectedTaskAcknowledgements: selectedTaskAcknowledgements,
+                selectedTaskId: requestedSelectedTaskID,
                 tasks: [remoteTask]
             )
         }
+    }
+
+    private static func selectedTaskSyncResponse(
+        scenario: String,
+        request: [String: Any]?
+    ) -> Data {
+        let acknowledgements = acknowledgements(
+            from: request,
+            key: "selectedTaskOperations",
+            idKey: "operationId"
+        )
+        if scenario == "selected-task-sync-active-timer" {
+            return syncResponse(
+                revision: 12,
+                history: [],
+                selectedTaskAcknowledgements: acknowledgements,
+                selectedTaskId: selectedReviewTask["id"] as? String,
+                tasks: [selectedBuildTask, selectedReviewTask],
+                canonicalTimer: [
+                    "id": "selected-active-timer",
+                    "taskId": selectedBuildTask["id"]!,
+                    "phase": "focus",
+                    "status": "running",
+                    "plannedDurationMs": 1_500_000,
+                    "elapsedAtAnchorMs": 120_000,
+                    "anchorAt": "2026-07-21T08:00:00.000Z",
+                    "lastIntent": NSNull()
+                ]
+            )
+        }
+        let operations = request?["selectedTaskOperations"] as? [[String: Any]] ?? []
+        let selectedTaskId: String? = operations.last.flatMap { operation in
+            operation["taskId"] is NSNull ? nil : operation["taskId"] as? String
+        }
+        return syncResponse(
+            revision: 12,
+            history: [],
+            selectedTaskAcknowledgements: acknowledgements,
+            selectedTaskId: selectedTaskId,
+            tasks: [selectedPreferenceTask]
+        )
     }
 
     private static func syncContractResponse(
@@ -2131,6 +2289,11 @@ final class StubURLProtocol: URLProtocol {
         var taskAcknowledgements = acknowledgements(from: request, key: "taskOperations", idKey: "operationId")
         var durationAcknowledgements = acknowledgements(from: request, key: "durationOperations", idKey: "operationId")
         var autoStartAcknowledgements = acknowledgements(from: request, key: "autoStartOperations", idKey: "operationId")
+        var selectedTaskAcknowledgements = acknowledgements(
+            from: request,
+            key: "selectedTaskOperations",
+            idKey: "operationId"
+        )
         let outcome = String(scenario.dropFirst("sync-contract-ack-".count))
         if ["applied", "ignored", "rejected"].contains(outcome) {
             for index in timerAcknowledgements.indices {
@@ -2149,11 +2312,16 @@ final class StubURLProtocol: URLProtocol {
                 autoStartAcknowledgements[index]["outcome"] = outcome
                 autoStartAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
             }
+            for index in selectedTaskAcknowledgements.indices {
+                selectedTaskAcknowledgements[index]["outcome"] = outcome
+                selectedTaskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
         } else if scenario == "sync-contract-ack-reordered" {
             timerAcknowledgements.reverse()
             taskAcknowledgements.reverse()
             durationAcknowledgements.reverse()
             autoStartAcknowledgements.reverse()
+            selectedTaskAcknowledgements.reverse()
             let outcomes = ["applied", "ignored", "rejected"]
             for index in timerAcknowledgements.indices {
                 let outcome = outcomes[index % 3]
@@ -2175,6 +2343,11 @@ final class StubURLProtocol: URLProtocol {
                 autoStartAcknowledgements[index]["outcome"] = outcome
                 autoStartAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
             }
+            for index in selectedTaskAcknowledgements.indices {
+                let outcome = outcomes[(index + 1) % 3]
+                selectedTaskAcknowledgements[index]["outcome"] = outcome
+                selectedTaskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
+            }
         } else if scenario.hasPrefix("sync-contract-unknown-") {
             switch scenario {
             case "sync-contract-unknown-timer": timerAcknowledgements[0]["outcome"] = "unknown"
@@ -2190,6 +2363,7 @@ final class StubURLProtocol: URLProtocol {
             taskAcknowledgements: taskAcknowledgements,
             durationAcknowledgements: durationAcknowledgements,
             autoStartAcknowledgements: autoStartAcknowledgements,
+            selectedTaskAcknowledgements: selectedTaskAcknowledgements,
             tasks: []
         )
     }
@@ -2236,6 +2410,11 @@ final class StubURLProtocol: URLProtocol {
             autoStartAcknowledgements: acknowledgements(
                 from: request,
                 key: "autoStartOperations",
+                idKey: "operationId"
+            ),
+            selectedTaskAcknowledgements: acknowledgements(
+                from: request,
+                key: "selectedTaskOperations",
                 idKey: "operationId"
             ),
             autoStartBreaks: bootstrapAutoStartValue(
@@ -2334,7 +2513,9 @@ final class StubURLProtocol: URLProtocol {
         taskAcknowledgements: [[String: Any]] = [],
         durationAcknowledgements: [[String: Any]] = [],
         autoStartAcknowledgements: [[String: Any]] = [],
+        selectedTaskAcknowledgements: [[String: Any]] = [],
         autoStartBreaks: Bool = false,
+        selectedTaskId: String? = nil,
         tasks: [[String: Any]] = [],
         canonicalTimer: Any = NSNull()
     ) -> Data {
@@ -2345,7 +2526,9 @@ final class StubURLProtocol: URLProtocol {
             taskAcknowledgements: taskAcknowledgements,
             durationAcknowledgements: durationAcknowledgements,
             autoStartAcknowledgements: autoStartAcknowledgements,
+            selectedTaskAcknowledgements: selectedTaskAcknowledgements,
             autoStartBreaks: autoStartBreaks,
+            selectedTaskId: selectedTaskId,
             tasks: tasks,
             canonicalTimer: canonicalTimer
         ))
@@ -2358,7 +2541,9 @@ final class StubURLProtocol: URLProtocol {
         taskAcknowledgements: [[String: Any]],
         durationAcknowledgements: [[String: Any]],
         autoStartAcknowledgements: [[String: Any]] = [],
+        selectedTaskAcknowledgements: [[String: Any]] = [],
         autoStartBreaks: Bool = false,
+        selectedTaskId: String? = nil,
         tasks: [[String: Any]],
         canonicalTimer: Any = NSNull()
     ) -> [String: Any] {
@@ -2367,12 +2552,14 @@ final class StubURLProtocol: URLProtocol {
             "taskAcknowledgements": taskAcknowledgements,
             "durationAcknowledgements": durationAcknowledgements,
             "autoStartAcknowledgements": autoStartAcknowledgements,
+            "selectedTaskAcknowledgements": selectedTaskAcknowledgements,
             "durationsMs": [
                 "focus": 1_500_000,
                 "short_break": 300_000,
                 "long_break": 900_000
             ],
             "autoStartBreaks": autoStartBreaks,
+            "selectedTaskId": selectedTaskId ?? NSNull(),
             "revision": revision,
             "canonicalTimer": canonicalTimer,
             "history": history,

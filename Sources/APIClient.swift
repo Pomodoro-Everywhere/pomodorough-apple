@@ -57,7 +57,12 @@ actor APIClient {
 
     func sync(_ request: SyncRequest) async throws -> TimedHTTPResponse<SyncResponse> {
         do {
-            return try await sendTimed("/api/v1/sync", method: "POST", body: request, authenticated: true)
+            return try await sendTimed(
+                "/api/v1/sync",
+                method: "POST",
+                body: SyncAPIRequest(request),
+                authenticated: true
+            )
         } catch is DecodingError {
             throw AppError.invalidResponse
         }
@@ -83,7 +88,7 @@ actor APIClient {
             return try await sendTimed(
                 "/api/v1/bootstrap/resolve",
                 method: "POST",
-                body: request,
+                body: BootstrapResolveAPIRequest(request),
                 authenticated: true,
                 reportsMissingRoute: true
             )
@@ -309,6 +314,99 @@ actor APIClient {
     }
 }
 
+private struct SyncAPIRequest: Encodable {
+    let deviceId: String
+    let lastRevision: Int64
+    let commands: [TimerCommand]
+    let taskOperations: [TaskOperation]
+    let durationOperations: [DurationOperation]
+    let autoStartOperations: [AutoStartAPIRequest]?
+    let selectedTaskOperations: [SelectedTaskAPIRequest]
+
+    init(_ request: SyncRequest) {
+        deviceId = request.deviceId
+        lastRevision = request.lastRevision
+        commands = request.commands
+        taskOperations = request.taskOperations
+        durationOperations = request.durationOperations
+        autoStartOperations = request.autoStartOperations?.map(AutoStartAPIRequest.init)
+        selectedTaskOperations = request.selectedTaskOperations.map(SelectedTaskAPIRequest.init)
+    }
+}
+
+private struct BootstrapResolveAPIRequest: Encodable {
+    let requestId: String
+    let deviceId: String
+    let expectedRevision: Int64
+    let strategy: BootstrapResolutionStrategy
+    let commands: [TimerCommand]
+    let taskOperations: [TaskOperation]
+    let durationOperations: [DurationOperation]
+    let autoStartOperations: [AutoStartAPIRequest]?
+    let selectedTaskOperations: [SelectedTaskAPIRequest]?
+
+    init(_ request: BootstrapResolveRequest) {
+        requestId = request.requestId
+        deviceId = request.deviceId
+        expectedRevision = request.expectedRevision
+        strategy = request.strategy
+        commands = request.commands
+        taskOperations = request.taskOperations
+        durationOperations = request.durationOperations
+        autoStartOperations = request.autoStartOperations?.map(AutoStartAPIRequest.init)
+        selectedTaskOperations = request.selectedTaskOperations?.map(SelectedTaskAPIRequest.init)
+    }
+}
+
+private struct AutoStartAPIRequest: Encodable {
+    let id: UUID
+    let enabled: Bool
+    let occurredAt: Date
+    let hlcWallMs: Int64
+    let hlcCounter: Int64
+
+    init(_ operation: AutoStartOperation) {
+        id = operation.id
+        enabled = operation.enabled
+        occurredAt = operation.occurredAt
+        hlcWallMs = operation.hlcWallMs
+        hlcCounter = operation.hlcCounter
+    }
+}
+
+private struct SelectedTaskAPIRequest: Encodable {
+    let id: UUID
+    let taskId: String?
+    let occurredAt: Date
+    let hlcWallMs: Int64
+    let hlcCounter: Int64
+
+    init(_ operation: SelectedTaskOperation) {
+        id = operation.id
+        taskId = operation.taskId
+        occurredAt = operation.occurredAt
+        hlcWallMs = operation.hlcWallMs
+        hlcCounter = operation.hlcCounter
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, taskId, occurredAt, hlcWallMs, hlcCounter
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        if let taskId {
+            try values.encode(taskId, forKey: .taskId)
+        } else {
+            try values.encodeNil(forKey: .taskId)
+        }
+        try values.encode(occurredAt, forKey: .occurredAt)
+        try values.encode(hlcWallMs, forKey: .hlcWallMs)
+        try values.encode(hlcCounter, forKey: .hlcCounter)
+    }
+}
+
 struct TimedHTTPResponse<Value: Sendable>: Sendable {
     let value: Value
     let requestWall: Date
@@ -340,7 +438,8 @@ private extension BootstrapResponse {
         guard acknowledgements.isEmpty,
               taskAcknowledgements.isEmpty,
               durationAcknowledgements.isEmpty,
-              autoStartAcknowledgements.isEmpty else {
+              autoStartAcknowledgements.isEmpty,
+              selectedTaskAcknowledgements.isEmpty else {
             throw AppError.invalidResponse
         }
         return self

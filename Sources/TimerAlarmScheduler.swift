@@ -3,7 +3,14 @@ import Foundation
 #if os(iOS)
 import AlarmKit
 import SwiftUI
+#endif
+
+#if os(iOS) || os(macOS)
 import UserNotifications
+#endif
+
+#if os(macOS)
+import AppKit
 #endif
 
 @MainActor
@@ -54,7 +61,7 @@ protocol TimerSystemAlarmBackend: Sendable {
 
 struct SystemTimerNotificationBackend: TimerNotificationBackend {
     var isSupported: Bool {
-#if os(iOS)
+#if os(iOS) || os(macOS)
         true
 #else
         false
@@ -62,47 +69,168 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
     }
 
     func requestAuthorization() async throws -> Bool {
-#if os(iOS)
-        try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+#if os(iOS) || os(macOS)
+#if os(macOS)
+        _ = MacTimerNotificationCoordinator.shared
+#endif
+        return try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
 #else
         false
 #endif
     }
 
     func canSchedule() async -> Bool {
+#if os(iOS) || os(macOS)
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        if status == .authorized || status == .provisional { return true }
 #if os(iOS)
-        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
-        case .authorized, .provisional, .ephemeral: true
-        default: false
-        }
+        return status == .ephemeral
+#else
+        return false
+#endif
 #else
         false
 #endif
     }
 
     func schedule(identifier: String, phase: TimerPhase, duration: TimeInterval) async throws {
-#if os(iOS)
+#if os(iOS) || os(macOS)
         let content = UNMutableNotificationContent()
         content.title = TimerAlarmScheduler.title(for: phase)
         content.body = "Your next Pomodorough interval is ready."
         content.sound = .default
+#if os(macOS)
+        content.categoryIdentifier = MacTimerNotificationCoordinator.categoryIdentifier
+        let coordinator = MacTimerNotificationCoordinator.shared
+        coordinator.prepare(identifier: identifier)
+#endif
         let request = UNNotificationRequest(
             identifier: identifier,
             content: content,
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1, duration), repeats: false)
         )
-        try await UNUserNotificationCenter.current().add(request)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+#if os(macOS)
+            coordinator.arm(identifier: identifier, duration: duration)
+#endif
+        } catch {
+#if os(macOS)
+            coordinator.stop(identifier: identifier)
+#endif
+            throw error
+        }
 #endif
     }
 
     func remove(identifier: String) {
-#if os(iOS)
+#if os(iOS) || os(macOS)
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
+#if os(macOS)
+        MacTimerNotificationCoordinator.shared.stop(identifier: identifier)
+#endif
 #endif
     }
 }
+
+#if os(macOS)
+@MainActor
+private final class MacTimerNotificationCoordinator: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = MacTimerNotificationCoordinator()
+    static let categoryIdentifier = "pomodorough.timer.complete"
+
+    private static let dismissActionIdentifier = "pomodorough.timer.dismiss"
+    private let center = UNUserNotificationCenter.current()
+    private var alarmTasks: [String: Task<Void, Never>] = [:]
+    private var activeSoundIdentifier: String?
+    private var sound: NSSound?
+
+    override private init() {
+        super.init()
+        center.delegate = self
+        let dismissAction = UNNotificationAction(
+            identifier: Self.dismissActionIdentifier,
+            title: TimerAlarmScheduler.stopSoundTitle
+        )
+        center.setNotificationCategories([
+            UNNotificationCategory(
+                identifier: Self.categoryIdentifier,
+                actions: [dismissAction],
+                intentIdentifiers: [],
+                options: [.customDismissAction]
+            )
+        ])
+    }
+
+    func prepare(identifier: String) {
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+        stop(identifier: identifier)
+    }
+
+    func arm(identifier: String, duration: TimeInterval) {
+        alarmTasks[identifier]?.cancel()
+        alarmTasks[identifier] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(max(1, duration)))
+            } catch {
+                return
+            }
+            guard let self, self.alarmTasks.removeValue(forKey: identifier) != nil else { return }
+            self.playSound(identifier: identifier)
+        }
+    }
+
+    func stop(identifier: String) {
+        alarmTasks.removeValue(forKey: identifier)?.cancel()
+        if activeSoundIdentifier == identifier { stopSound() }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list]
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        await dismiss(identifier: response.notification.request.identifier)
+    }
+
+    private func dismiss(identifier: String) {
+        stop(identifier: identifier)
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+    }
+
+    private func playSound(identifier: String) {
+        stopSound()
+        let sound = NSSound(
+            contentsOfFile: "/System/Library/Sounds/Glass.aiff",
+            byReference: true
+        ) ?? NSSound(named: NSSound.Name("Glass"))
+        guard let sound else {
+            NSSound.beep()
+            return
+        }
+        sound.loops = true
+        activeSoundIdentifier = identifier
+        self.sound = sound
+        sound.play()
+    }
+
+    private func stopSound() {
+        sound?.stop()
+        sound = nil
+        activeSoundIdentifier = nil
+    }
+}
+#endif
 
 struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     var authorizationState: TimerSystemAlarmAuthorizationState {
@@ -326,6 +454,8 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
         case .longBreak: "Long break complete"
         }
     }
+
+    nonisolated static var stopSoundTitle: String { "Stop sound" }
 }
 
 #if os(iOS)
@@ -353,7 +483,7 @@ private extension SystemTimerAlarmBackend {
     static func legacyAlert(title: LocalizedStringResource) -> AlarmPresentation.Alert {
         AlarmPresentation.Alert(
             title: title,
-            stopButton: AlarmButton(text: "Done", textColor: .white, systemImageName: "stop.circle.fill")
+            stopButton: AlarmButton(text: "Stop sound", textColor: .white, systemImageName: "stop.circle.fill")
         )
     }
 }

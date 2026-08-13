@@ -534,8 +534,10 @@ struct UnitNegativeTests {
             "taskAcknowledgements",
             "durationAcknowledgements",
             "autoStartAcknowledgements",
+            "selectedTaskAcknowledgements",
             "durationsMs",
             "autoStartBreaks",
+            "selectedTaskId",
             "revision",
             "canonicalTimer",
             "history",
@@ -547,7 +549,7 @@ struct UnitNegativeTests {
     )
     func bootstrapResponseRequiresEveryCanonicalField(_ missingKey: String) throws {
         let complete = Data(
-            #"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":1,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":0}"#.utf8
+            #"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"selectedTaskAcknowledgements":[],"selectedTaskId":null,"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":1,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":0}"#.utf8
         )
         var object = try #require(JSONSerialization.jsonObject(with: complete) as? [String: Any])
         object.removeValue(forKey: missingKey)
@@ -560,7 +562,7 @@ struct UnitNegativeTests {
 
     @Test func bootstrapResponseRejectsMalformedCanonicalTimer() throws {
         let json = Data(
-            #"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":1,"canonicalTimer":"invalid","history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":0}"#.utf8
+            #"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"selectedTaskAcknowledgements":[],"selectedTaskId":null,"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":1,"canonicalTimer":"invalid","history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":0}"#.utf8
         )
 
         #expect(throws: DecodingError.self) {
@@ -645,6 +647,49 @@ struct UnitNegativeTests {
         #expect(state == original)
     }
 
+    @Test func selectedTaskSyncRejectsDuplicateAcknowledgementsWithoutMutatingState() throws {
+        let task = try #require(FocusTask(title: "Selection validation"))
+        var state = PersistedTimerState.fresh()
+        let operation = TestFixtures.selectedTaskOperation(
+            deviceID: state.deviceId,
+            taskID: task.id,
+            wallMs: 1
+        )
+        let acknowledgement = SelectedTaskAcknowledgement(
+            operationId: operation.id,
+            outcome: .applied,
+            reason: ""
+        )
+        state.pendingSelectedTaskOperations = [operation]
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.applySelectedTaskSync(
+                canonicalTaskId: task.id.uuidString.lowercased(),
+                canonicalTasks: [task],
+                sentOperations: [operation],
+                acknowledgements: [acknowledgement, acknowledgement]
+            )
+        }
+        #expect(state == original)
+    }
+
+    @Test func selectedTaskSyncRejectsCanonicalSelectionMissingFromTasks() throws {
+        let task = try #require(FocusTask(title: "Missing canonical selection"))
+        var state = PersistedTimerState.fresh()
+        let original = state
+
+        #expect(throws: AppError.self) {
+            try state.applySelectedTaskSync(
+                canonicalTaskId: task.id.uuidString.lowercased(),
+                canonicalTasks: [],
+                sentOperations: [],
+                acknowledgements: []
+            )
+        }
+        #expect(state == original)
+    }
+
     @Test func syncResponseRejectsUnknownAutoStartAcknowledgementOutcome() {
         let operationID = UUID().uuidString.lowercased()
         let json = Data(
@@ -656,13 +701,15 @@ struct UnitNegativeTests {
         }
     }
 
-    @Test(arguments: ["acknowledgements", "taskAcknowledgements", "durationAcknowledgements"])
+    @Test(arguments: ["acknowledgements", "taskAcknowledgements", "durationAcknowledgements", "selectedTaskAcknowledgements"])
     func syncResponseRejectsUnknownStringAcknowledgementOutcomes(_ key: String) throws {
         var object: [String: Any] = [
             "acknowledgements": [],
             "taskAcknowledgements": [],
             "durationAcknowledgements": [],
             "autoStartAcknowledgements": [],
+            "selectedTaskAcknowledgements": [],
+            "selectedTaskId": NSNull(),
             "durationsMs": ["focus": 1_500_000, "short_break": 300_000, "long_break": 900_000],
             "autoStartBreaks": false,
             "revision": 1,

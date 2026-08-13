@@ -686,6 +686,7 @@ final class IrohRoomStore: @unchecked Sendable {
         workspace.roomState.pendingTaskOperations = []
         workspace.roomState.pendingDurationOperations = []
         workspace.roomState.pendingAutoStartOperations = []
+        workspace.roomState.pendingSelectedTaskOperations = []
         workspace.roomState.provisionalBreaks = []
         workspace = try inserting(records, into: workspace)
         if workspace.genesis != nil {
@@ -785,6 +786,7 @@ final class IrohRoomStore: @unchecked Sendable {
         state.pendingTaskOperations = []
         state.pendingDurationOperations = []
         state.pendingAutoStartOperations = []
+        state.pendingSelectedTaskOperations = []
         state.localTimerOwners = [:]
         state.provisionalBreaks = []
         state.bootstrapUser = nil
@@ -930,6 +932,7 @@ enum IrohRoomProjection {
         state.pendingTaskOperations = []
         state.pendingDurationOperations = []
         state.pendingAutoStartOperations = []
+        state.pendingSelectedTaskOperations = []
         state.provisionalBreaks = []
         if let selected = state.selectedTaskID, !tasks.contains(where: { $0.id == selected }) {
             state.selectedTaskID = nil

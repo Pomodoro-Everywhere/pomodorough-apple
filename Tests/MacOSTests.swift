@@ -149,8 +149,15 @@ struct MacOSTests {
         }
     }
 
-    @Test func alarmSchedulerOperationsAreSafeWithoutAlarmKit() async throws {
-        let scheduler = TimerAlarmScheduler()
+    @Test @MainActor
+    func alarmSchedulerUsesNotificationsWithoutAlarmKit() async throws {
+        let notifications = RecordingNotificationBackend()
+        notifications.authorizationResult = true
+        notifications.canScheduleResult = true
+        let scheduler = TimerAlarmScheduler(
+            notifications: notifications,
+            alarms: RecordingSystemAlarmBackend()
+        )
         let timerID = "timer-83a06d73-1d2d-441e-afc2-e36da0518613"
 
         try await scheduler.requestAuthorization()
@@ -158,6 +165,17 @@ struct MacOSTests {
         try await scheduler.pause(timerID: timerID)
         try await scheduler.resume(timerID: timerID, phase: .focus, duration: 30)
         try await scheduler.cancel(timerID: timerID)
+
+        #expect(SystemTimerNotificationBackend().isSupported)
+        #expect(notifications.operations == [
+            .requestAuthorization,
+            .canSchedule,
+            .schedule(identifier: "pomodorough.\(timerID)", phase: .focus, duration: 60),
+            .remove(identifier: "pomodorough.\(timerID)"),
+            .canSchedule,
+            .schedule(identifier: "pomodorough.\(timerID)", phase: .focus, duration: 30),
+            .remove(identifier: "pomodorough.\(timerID)"),
+        ])
     }
 }
 #endif

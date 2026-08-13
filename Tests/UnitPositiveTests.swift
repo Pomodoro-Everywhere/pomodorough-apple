@@ -379,6 +379,25 @@ struct UnitPositiveTests {
         #expect((state.hlcWallMs, state.hlcCounter) > canonicalClock)
     }
 
+    @Test func legacySelectionMigrationIncludesPendingTaskUpsert() throws {
+        let task = try #require(FocusTask(title: "Pending selected task"))
+        var state = PersistedTimerState.fresh()
+        state.selectedTaskID = task.id
+        state.pendingTaskOperations = [TaskOperation(
+            id: "pending-selected-task-upsert",
+            taskId: task.id.uuidString.lowercased(),
+            type: .upsert,
+            title: task.title,
+            occurredAt: TestFixtures.anchor,
+            hlcWallMs: 1_000_000,
+            hlcCounter: 0
+        )]
+
+        #expect(try state.migrateLegacySelectedTask(at: TestFixtures.anchor))
+        #expect(state.pendingSelectedTaskOperations.count == 1)
+        #expect(state.pendingSelectedTaskOperations[0].taskId == task.id.uuidString.lowercased())
+    }
+
     @Test func newerSampleCannotRegressLastEmittedTrustedTime() throws {
         let serverTime = Date(timeIntervalSince1970: 2_000)
         var state = PersistedTimerState.fresh()
@@ -944,6 +963,7 @@ struct UnitPositiveTests {
         #expect(TimerAlarmScheduler.title(for: .focus) == "Focus complete")
         #expect(TimerAlarmScheduler.title(for: .shortBreak) == "Short break complete")
         #expect(TimerAlarmScheduler.title(for: .longBreak) == "Long break complete")
+        #expect(TimerAlarmScheduler.stopSoundTitle == "Stop sound")
     }
 
     @Test func runningTimerClampsAtPlannedDuration() {
@@ -1006,7 +1026,7 @@ struct UnitPositiveTests {
 
     @Test func syncResponseDecodesFixedDurationContract() throws {
         let json = Data(
-            #"{"acknowledgements":[],"durationAcknowledgements":[{"operationId":"duration-operation-test","outcome":"applied","reason":""}],"autoStartAcknowledgements":[],"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":0,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":7}"#.utf8
+            #"{"acknowledgements":[],"durationAcknowledgements":[{"operationId":"duration-operation-test","outcome":"applied","reason":""}],"autoStartAcknowledgements":[],"selectedTaskAcknowledgements":[],"selectedTaskId":null,"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":0,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-07-21T08:00:00.000Z","serverHlcWallMs":1784620800000,"serverHlcCounter":7}"#.utf8
         )
 
         let response = try JSONDecoder.api.decode(SyncResponse.self, from: json)
@@ -1021,7 +1041,7 @@ struct UnitPositiveTests {
         #expect(response.serverHlcCounter == 7)
     }
 
-    @Test func syncRequestEncodesExactAutoStartOperationContract() throws {
+    @Test func persistedAutoStartOperationRetainsDeviceIdentity() throws {
         let operationID = try #require(UUID(uuidString: "2ddbd077-3814-4a1f-bbd7-41c4ef26432a"))
         let operation = TestFixtures.autoStartOperation(
             id: operationID,
@@ -1030,19 +1050,8 @@ struct UnitPositiveTests {
             wallMs: 1_234,
             counter: 2
         )
-        let request = SyncRequest(
-            deviceId: "device-wire",
-            lastRevision: 4,
-            commands: [],
-            taskOperations: [],
-            durationOperations: [],
-            autoStartOperations: [operation]
-        )
-
-        let data = try JSONEncoder.api.encode(request)
-        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let operations = try #require(json["autoStartOperations"] as? [[String: Any]])
-        let encoded = try #require(operations.first)
+        let data = try JSONEncoder.api.encode(operation)
+        let encoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(Set(encoded.keys) == ["id", "deviceId", "enabled", "occurredAt", "hlcWallMs", "hlcCounter"])
         #expect(UUID(uuidString: encoded["id"] as? String ?? "") == operationID)
@@ -1051,6 +1060,46 @@ struct UnitPositiveTests {
         #expect(encoded["hlcWallMs"] as? Int == 1_234)
         #expect(encoded["hlcCounter"] as? Int == 2)
         #expect(encoded["occurredAt"] as? String == "1970-01-01T00:00:01.000Z")
+    }
+
+    @Test func persistedSelectedTaskOperationRetainsDeviceIdentityAndNullableTask() throws {
+        let operation = TestFixtures.selectedTaskOperation(
+            deviceID: "device-selection-wire",
+            taskID: nil,
+            wallMs: 1_234,
+            counter: 2
+        )
+        let data = try JSONEncoder.api.encode(operation)
+        let encoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(Set(encoded.keys) == ["id", "deviceId", "occurredAt", "hlcWallMs", "hlcCounter"])
+        #expect(encoded["deviceId"] as? String == "device-selection-wire")
+        #expect(encoded["taskId"] == nil)
+        #expect(encoded["hlcWallMs"] as? Int == 1_234)
+        #expect(encoded["hlcCounter"] as? Int == 2)
+    }
+
+    @Test func selectedTaskReducerUsesHLCDeviceAndOperationOrdering() throws {
+        let firstTask = try #require(FocusTask(title: "First selection"))
+        let secondTask = try #require(FocusTask(title: "Second selection"))
+        let firstID = try #require(UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
+        let secondID = try #require(UUID(uuidString: "00000000-0000-4000-8000-000000000002"))
+        let first = TestFixtures.selectedTaskOperation(
+            id: firstID,
+            deviceID: "device-a",
+            taskID: firstTask.id,
+            wallMs: 10,
+            counter: 2
+        )
+        let second = TestFixtures.selectedTaskOperation(
+            id: secondID,
+            deviceID: "device-b",
+            taskID: secondTask.id,
+            wallMs: 10,
+            counter: 2
+        )
+
+        #expect(SelectedTaskReducer.applying([second, first], to: nil) == secondTask.id)
     }
 
     @Test func bootstrapAutoStartPresenceDistinguishesLegacyOmissionFromExplicitDefault() throws {
