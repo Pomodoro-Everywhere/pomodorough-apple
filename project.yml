@@ -31,8 +31,8 @@ settings:
   base:
     SWIFT_VERSION: 6.0
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: 0.2.3
-    CURRENT_PROJECT_VERSION: 12
+    MARKETING_VERSION: 0.2.4
+    CURRENT_PROJECT_VERSION: 13
     GOOGLE_CLIENT_ID: "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com"
     GOOGLE_REVERSED_CLIENT_ID: "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr"
 targets:
@@ -112,6 +112,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac
         PRODUCT_NAME: Pomodorough
+        ARCHS: arm64
         CODE_SIGN_ENTITLEMENTS: Pomodorough-macOS.entitlements
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
