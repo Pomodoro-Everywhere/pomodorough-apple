@@ -590,12 +590,16 @@ struct IntegrationPositiveTests {
                 model.completeIfNeeded(timerID: focus.id, at: focus.anchorAt.addingTimeInterval(60))
             }
             #expect(model.selectedPhase == expectedBreak)
+            #expect(model.activeTimer == nil)
+            #expect(model.durationMinutes(for: model.selectedPhase) == 1)
 
             model.start()
             let breakTimer = try #require(model.canonicalTimer)
             #expect(breakTimer.phase == expectedBreak)
             model.finish(at: breakTimer.anchorAt.addingTimeInterval(60))
             #expect(model.selectedPhase == .focus)
+            #expect(model.activeTimer == nil)
+            #expect(model.durationMinutes(for: model.selectedPhase) == 1)
 
             if index < expectedBreaks.count - 1 {
                 model.start()

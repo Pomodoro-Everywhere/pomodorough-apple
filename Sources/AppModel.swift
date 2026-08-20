@@ -2690,3 +2690,57 @@ final class AppModel {
 #endif
     }
 }
+
+#if DEBUG
+extension AppModel {
+    enum PreviewScenario {
+        case local
+        case populated
+        case running
+        case resolving
+        case signedIn
+    }
+
+    static func preview(_ scenario: PreviewScenario = .populated) -> AppModel {
+        let defaults = UserDefaults(suiteName: "PomodoroughPreview-\(UUID().uuidString)")!
+        let roomURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pomodorough-preview-\(UUID().uuidString).json")
+        let roomStore = IrohRoomStore(fileURL: roomURL, secretStore: PreviewRoomSecretStore())
+        let api = APIClient(keychain: PreviewTokenStore())
+        let model = AppModel(
+            api: api,
+            defaults: defaults,
+            roomStore: roomStore,
+            endpointKeyStore: PreviewEndpointKeyStore(),
+            alarmScheduler: PreviewAlarmScheduler(),
+            googleIdentityProvider: PreviewGoogleIdentityProvider(),
+            retryDelay: .seconds(60),
+            now: { PreviewFixtures.now },
+            uptime: { 10_000 }
+        )
+
+        var state = PersistedTimerState.fresh()
+        state.deviceId = "preview-device"
+        state.tasks = [PreviewFixtures.task, PreviewFixtures.secondTask]
+        state.knownTasks = state.tasks
+        state.selectedTaskID = PreviewFixtures.task.id
+        state.history = PreviewFixtures.history
+        state.settings.autoStartBreaks = true
+        if scenario == .running {
+            state.canonicalTimer = PreviewFixtures.runningTimer
+        }
+
+        model.timerState = state
+        model.replicationMode = scenario == .resolving || scenario == .signedIn ? .centralized : .offline
+        model.sessionState = scenario == .resolving || scenario == .signedIn
+            ? .signedIn(User(id: "preview-user", email: "alex@example.com", name: "Alex", avatarUrl: ""))
+            : .localOnly
+        model.needsPermissionIntroduction = false
+        model.historyResolutionState = scenario == .resolving ? .choosing : .none
+        model.localHistoryResolutionCount = scenario == .resolving ? 2 : 0
+        model.remoteHistoryResolutionCount = scenario == .resolving ? 4 : 0
+        model.rebuildOptimisticState()
+        return model
+    }
+}
+#endif

@@ -9,14 +9,14 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         launchAndWaitForTimer(app)
 
         XCTAssertEqual(elements(labelled: "Focus timer", in: app).count, 1)
-        XCTAssertTrue(app.buttons["Start Focus"].exists)
+        XCTAssertTrue(app.buttons["Start focus"].exists)
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).count, 1)
         assertOneElementPerTab(in: app)
 
         app.buttons["Tasks"].tap()
-        XCTAssertEqual(elements(labelled: "Today's routes", in: app).count, 1)
+        XCTAssertEqual(elements(labelled: "Task board", in: app).count, 1)
         XCTAssertEqual(elements(labelled: "New task", in: app).count, 1)
-        XCTAssertEqual(elements(labelled: "No routes posted", in: app).count, 1)
+        XCTAssertEqual(elements(labelled: "No tasks yet", in: app).count, 1)
 
         app.buttons["Pattern"].tap()
         assertPhase(label: "Focus", value: "25 minutes", in: app)
@@ -37,10 +37,10 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         launchAndWaitForTimer(app)
 
         XCTAssertTrue(app.navigationBars["Timer"].exists)
-        XCTAssertTrue(app.buttons["Start Focus"].isHittable)
+        XCTAssertTrue(app.buttons["Start focus"].isHittable)
 
         app.buttons["Tasks"].tap()
-        XCTAssertTrue(elements(labelled: "Today's routes", in: app).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(elements(labelled: "Task board", in: app).firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(elements(labelled: "New task", in: app).firstMatch.exists)
 
         app.buttons["Pattern"].tap()
@@ -78,7 +78,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
 
     private func launchAndWaitForTimer(_ app: XCUIApplication) {
         app.launch()
-        XCTAssertTrue(app.buttons["Start Focus"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
     }
 
     private func elements(labelled label: String, in app: XCUIApplication) -> XCUIElementQuery {
