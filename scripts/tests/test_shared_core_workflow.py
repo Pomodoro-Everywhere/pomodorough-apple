@@ -5,7 +5,7 @@ import unittest
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-CORE_COMMIT = "a78a312314dd9466557c3dbdd12184b698c3d156"
+CORE_COMMIT = "9a01dc8da0f1612e7a301c19cf42f3b522e61684"
 CORE_SHA256 = "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"
 
 
@@ -24,6 +24,7 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
         self.assertIn("cd .build/pomodorough-core", workflow)
         self.assertIn("Rebuild and verify pinned shared core", workflow)
+        self.assertIn("verify_wasm_artifact.py", workflow)
         self.assertIn("Verify shared core in staged release applications", workflow)
         self.assertIn('test "$verified_apps" -eq 3', workflow)
 

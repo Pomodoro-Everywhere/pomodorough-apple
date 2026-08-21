@@ -47,7 +47,7 @@ enum SharedCoreError: Error, Equatable, LocalizedError, Sendable {
 }
 
 actor SharedCore {
-    static let coreCommit = "a78a312314dd9466557c3dbdd12184b698c3d156"
+    static let coreCommit = "9a01dc8da0f1612e7a301c19cf42f3b522e61684"
     static let coreSHA256 = "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"
     private static let maxTransferBytes = 16 * 1024 * 1024
 
