@@ -25,6 +25,7 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn("cd .build/pomodorough-core", workflow)
         self.assertIn("Rebuild and verify pinned shared core", workflow)
         self.assertIn("verify_wasm_artifact.py", workflow)
+        self.assertIn("SWIFT_SUPPRESS_WARNINGS=NO", workflow)
         self.assertIn("Verify shared core in staged release applications", workflow)
         self.assertIn('test "$verified_apps" -eq 3', workflow)
 

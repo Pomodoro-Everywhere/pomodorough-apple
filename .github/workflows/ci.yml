@@ -89,6 +89,7 @@ jobs:
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
           CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
           test
 
       - name: Build iOS
@@ -99,6 +100,7 @@ jobs:
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
           CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
           build
 
       - name: Build macOS
@@ -109,6 +111,7 @@ jobs:
           -configuration Debug
           -derivedDataPath "$DERIVED_DATA_PATH"
           CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
           build
 
       - name: Verify shared core in built applications
@@ -131,6 +134,7 @@ jobs:
           -destination "platform=macOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
           CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
           test
 
   dependency-review:
