@@ -59,11 +59,13 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal
           rustup target add wasm32-unknown-unknown --toolchain 1.97.1
           pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
-          RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
-            --manifest-path .build/pomodorough-core/Cargo.toml \
-            --release \
-            --target wasm32-unknown-unknown \
-            --locked
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
           rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
           actual_sha=$(shasum -a 256 "$rebuilt" | awk '{print $1}')
           test "$actual_sha" = "$CORE_SHA256"

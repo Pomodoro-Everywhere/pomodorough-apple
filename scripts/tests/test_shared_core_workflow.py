@@ -14,6 +14,7 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(f'CORE_COMMIT: "{CORE_COMMIT}"', workflow)
         self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
+        self.assertIn("cd .build/pomodorough-core", workflow)
         self.assertNotIn("ref: 05bb0cf7e73c99d1ef6c0acbd41a9798614a4359", workflow)
 
     def test_release_rebuilds_core_and_checks_packaged_apps(self) -> None:
@@ -21,6 +22,7 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn(f'CORE_COMMIT: "{CORE_COMMIT}"', workflow)
         self.assertIn(f'CORE_SHA256: "{CORE_SHA256}"', workflow)
         self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
+        self.assertIn("cd .build/pomodorough-core", workflow)
         self.assertIn("Rebuild and verify pinned shared core", workflow)
         self.assertIn("Verify shared core in staged release applications", workflow)
         self.assertIn('test "$verified_apps" -eq 3', workflow)
