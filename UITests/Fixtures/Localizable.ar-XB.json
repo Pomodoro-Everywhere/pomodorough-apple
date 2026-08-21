@@ -656,6 +656,12 @@
         "value": "‏⟦BEFORE DEPARTURE⟧"
       }
     },
+    "Bundled pomodorough_core.wasm resource is missing.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Bundled pomodorough_core.wasm resource is missing.⟧"
+      }
+    },
     "CHECKING LINE": {
       "stringUnit": {
         "state": "translated",
@@ -1602,6 +1608,72 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Share invite⟧"
+      }
+    },
+    "Shared core SHA-256 mismatch: expected %@, got %@.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core SHA-256 mismatch: expected %@, got %@.⟧"
+      }
+    },
+    "Shared core WebAssembly export has an invalid signature: %@.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core WebAssembly export has an invalid signature: %@.⟧"
+      }
+    },
+    "Shared core WebAssembly export is missing: %@.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core WebAssembly export is missing: %@.⟧"
+      }
+    },
+    "Shared core WebAssembly initialization failed: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core WebAssembly initialization failed: %@⟧"
+      }
+    },
+    "Shared core failed to allocate %lld bytes.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core failed to allocate %lld bytes.⟧"
+      }
+    },
+    "Shared core input exceeds the 32-bit ABI length: %lld bytes.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core input exceeds the 32-bit ABI length: %lld bytes.⟧"
+      }
+    },
+    "Shared core input is invalid: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core input is invalid: %@⟧"
+      }
+    },
+    "Shared core memory range %u..<%llu exceeds %lld bytes.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core memory range %u..<%llu exceeds %lld bytes.⟧"
+      }
+    },
+    "Shared core rejected the operation: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core rejected the operation: %@⟧"
+      }
+    },
+    "Shared core returned an invalid ABI result: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core returned an invalid ABI result: %@⟧"
+      }
+    },
+    "Shared core returned an invalid response: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shared core returned an invalid response: %@⟧"
       }
     },
     "Short after focus. Long every fourth completed focus.": {

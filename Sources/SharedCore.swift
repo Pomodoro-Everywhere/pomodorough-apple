@@ -19,29 +19,29 @@ enum SharedCoreError: Error, Equatable, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .resourceMissing:
-            "Bundled pomodorough_core.wasm resource is missing."
+            String(localized: "Bundled pomodorough_core.wasm resource is missing.")
         case .runtimeInitializationFailed(let message):
-            "Shared core WebAssembly initialization failed: \(message)"
+            String(localized: "Shared core WebAssembly initialization failed: \(message)")
         case .checksumMismatch(let expected, let actual):
-            "Shared core SHA-256 mismatch: expected \(expected), got \(actual)."
+            String(localized: "Shared core SHA-256 mismatch: expected \(expected), got \(actual).")
         case .missingExport(let name):
-            "Shared core WebAssembly export is missing: \(name)."
+            String(localized: "Shared core WebAssembly export is missing: \(name).")
         case .invalidExportSignature(let name):
-            "Shared core WebAssembly export has an invalid signature: \(name)."
+            String(localized: "Shared core WebAssembly export has an invalid signature: \(name).")
         case .inputTooLarge(let length):
-            "Shared core input exceeds the 32-bit ABI length: \(length) bytes."
+            String(localized: "Shared core input exceeds the 32-bit ABI length: \(length) bytes.")
         case .allocationFailed(let length):
-            "Shared core failed to allocate \(length) bytes."
+            String(localized: "Shared core failed to allocate \(length) bytes.")
         case .memoryOutOfBounds(let pointer, let length, let byteCount):
-            "Shared core memory range \(pointer)..<\(UInt64(pointer) + UInt64(length)) exceeds \(byteCount) bytes."
+            String(localized: "Shared core memory range \(pointer)..<\(UInt64(pointer) + UInt64(length)) exceeds \(byteCount) bytes.")
         case .invalidABIResult(let message):
-            "Shared core returned an invalid ABI result: \(message)"
+            String(localized: "Shared core returned an invalid ABI result: \(message)")
         case .invalidInput(let message):
-            "Shared core input is invalid: \(message)"
+            String(localized: "Shared core input is invalid: \(message)")
         case .core(let message):
-            "Shared core rejected the operation: \(message)"
+            String(localized: "Shared core rejected the operation: \(message)")
         case .invalidResponse(let message):
-            "Shared core returned an invalid response: \(message)"
+            String(localized: "Shared core returned an invalid response: \(message)")
         }
     }
 }

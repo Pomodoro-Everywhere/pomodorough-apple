@@ -515,6 +515,16 @@
         }
       }
     },
+    "Bundled pomodorough_core.wasm resource is missing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bundled pomodorough_core.wasm resource is missing."
+          }
+        }
+      }
+    },
     "CHECKING LINE": {
       "localizations": {
         "en": {
@@ -2091,6 +2101,116 @@
           "stringUnit": {
             "state": "translated",
             "value": "Share invite"
+          }
+        }
+      }
+    },
+    "Shared core SHA-256 mismatch: expected %@, got %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core SHA-256 mismatch: expected %@, got %@."
+          }
+        }
+      }
+    },
+    "Shared core WebAssembly export has an invalid signature: %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core WebAssembly export has an invalid signature: %@."
+          }
+        }
+      }
+    },
+    "Shared core WebAssembly export is missing: %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core WebAssembly export is missing: %@."
+          }
+        }
+      }
+    },
+    "Shared core WebAssembly initialization failed: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core WebAssembly initialization failed: %@"
+          }
+        }
+      }
+    },
+    "Shared core failed to allocate %lld bytes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core failed to allocate %lld bytes."
+          }
+        }
+      }
+    },
+    "Shared core input exceeds the 32-bit ABI length: %lld bytes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core input exceeds the 32-bit ABI length: %lld bytes."
+          }
+        }
+      }
+    },
+    "Shared core input is invalid: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core input is invalid: %@"
+          }
+        }
+      }
+    },
+    "Shared core memory range %u..<%llu exceeds %lld bytes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core memory range %u..<%llu exceeds %lld bytes."
+          }
+        }
+      }
+    },
+    "Shared core rejected the operation: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core rejected the operation: %@"
+          }
+        }
+      }
+    },
+    "Shared core returned an invalid ABI result: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core returned an invalid ABI result: %@"
+          }
+        }
+      }
+    },
+    "Shared core returned an invalid response: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared core returned an invalid response: %@"
           }
         }
       }
