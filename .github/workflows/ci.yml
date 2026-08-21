@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: Pomodoro-Everywhere/pomodorough-core
-          ref: 05bb0cf7e73c99d1ef6c0acbd41a9798614a4359
+          ref: ${{ env.CORE_COMMIT }}
           path: .build/pomodorough-core
           persist-credentials: false
 
@@ -107,6 +107,18 @@ jobs:
           -derivedDataPath "$DERIVED_DATA_PATH"
           CODE_SIGNING_ALLOWED=NO
           build
+
+      - name: Verify shared core in built applications
+        shell: bash
+        run: |
+          set -euo pipefail
+          verified_apps=0
+          while IFS= read -r wasm; do
+            actual_sha=$(shasum -a 256 "$wasm" | awk '{print $1}')
+            test "$actual_sha" = "$CORE_SHA256"
+            verified_apps=$((verified_apps + 1))
+          done < <(find "$DERIVED_DATA_PATH/Build/Products" -type f -name 'pomodorough_core.wasm' -print)
+          test "$verified_apps" -eq 2
 
       - name: Test macOS
         run: >-
