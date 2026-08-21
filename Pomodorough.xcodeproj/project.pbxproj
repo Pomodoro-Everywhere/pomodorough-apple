@@ -56,6 +56,7 @@
 		4A9136A6FAC18DF7D451623B /* UnitPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */; };
 		4CC85E4693F29E76A2E7DD32 /* Localizable.ar-XB.json in Resources */ = {isa = PBXBuildFile; fileRef = 2E9EE6D33C5F45430FDF22C6 /* Localizable.ar-XB.json */; };
 		4DF41F0D10A1F1338E2ADE85 /* LandscapeDialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1BDE2B23EECA56B289F6B0 /* LandscapeDialFace.swift */; };
+		4FAA27BF7055B29C21B03200 /* pomodorough_core.wasm in Resources */ = {isa = PBXBuildFile; fileRef = 83402C8BC26381491CFC050B /* pomodorough_core.wasm */; };
 		505B2B0AF04A88EB671C899A /* IrohLib in Frameworks */ = {isa = PBXBuildFile; productRef = F883AB1431F3186814AACEF4 /* IrohLib */; };
 		570A96C71EC12D92DC7E0536 /* NetworkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54E2C7C5FCA242076B7751F /* NetworkScreen.swift */; };
 		57D8E1F2CF24C7AADEC1CB78 /* JoinIrohRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */; };
@@ -65,6 +66,7 @@
 		59D6F412C4DCC2152CFD9E51 /* TaskBoardHero.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3E9897B5BCD498F85742F6 /* TaskBoardHero.swift */; };
 		5C333AB5EA1A01C470B1A7FF /* MainContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8F4B9B9BCCA8F2070D63D3 /* MainContainer.swift */; };
 		5C5F3C5C652265C7C81ACB31 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D641D6CAC2F40A338AAC120 /* AppModel.swift */; };
+		636FC1EB4790528FB52E9BAB /* SharedCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */; };
 		6489DB8DEDA781EDD7C19DF6 /* GoogleAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C24F7A45B3B70459A21180A /* GoogleAuthService.swift */; };
 		64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C3F5C1F22298E87DE9EE29 /* SectionHeading.swift */; };
 		676287219F6B9615143E7180 /* View+Pomodorough.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */; };
@@ -105,8 +107,10 @@
 		94DAD594DE4C0DDB7BC40D7A /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5763B6AA139E86DBCDE4D11C /* APIClient.swift */; };
 		97B1F312919CD776AD2FBEAE /* PermissionIntroductionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08440620A367A61F70C60A9B /* PermissionIntroductionView.swift */; };
 		98B4B39B908271919830386D /* IntegrationNegativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */; };
+		99EFFE32E536E90D52596E0D /* SharedCoreWASMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */; };
 		9A3F6412761CF6AECF47718C /* PermissionIntroductionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08440620A367A61F70C60A9B /* PermissionIntroductionView.swift */; };
 		9FF47C6A4203DB33009536D0 /* NetworkSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36A8F361E21D197A0C56D2CA /* NetworkSectionView.swift */; };
+		A1332F63477B2332EF05279D /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 2334730AA8BEE8CA1C39A2AD /* WasmKit */; };
 		A57B33DD61AE790852ADDADD /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 4643BFF347477A2FCDE31755 /* Localizable.xcstrings */; };
 		A66A91713F118C99C8C039CC /* MainContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8F4B9B9BCCA8F2070D63D3 /* MainContainer.swift */; };
 		A77B9E5B4D71B5AD19D2D931 /* GoogleAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C24F7A45B3B70459A21180A /* GoogleAuthService.swift */; };
@@ -142,16 +146,20 @@
 		D155CCC910C659FB1682A82D /* TaskBoardMetric.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF71D90D91524E90632E916 /* TaskBoardMetric.swift */; };
 		D31A942F600F2AD2BD57150D /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 0EE041835DA15370CCB79786 /* GoogleSignInSwift */; };
 		D33FAB5D214DE97A6B1B9AC7 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D641D6CAC2F40A338AAC120 /* AppModel.swift */; };
+		D4711C68D5C327020D8C7571 /* SharedCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */; };
 		D5071DB2C40264352505834B /* TimerLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448CD0D656DE714580FA048E /* TimerLayout.swift */; };
 		D57C860FE1F2B0024B505D5F /* LongBreakProgressIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5AB84018A35FDAF73AA0418 /* LongBreakProgressIndicator.swift */; };
 		D5C32DBB4C9015F58CA59E14 /* PortraitDialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB75F33697B6208245E8B417 /* PortraitDialFace.swift */; };
 		D609FCF16D8D6E68089319AE /* uuidv7-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EE9592BD58F7F316E722046D /* uuidv7-v1.json */; };
 		D66ACE3D1488CAF5B712287F /* TimerTaskPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E68FD6BB00A16B79EFC34AC7 /* TimerTaskPicker.swift */; };
 		D71BC324CAE1DF74369577E1 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */; };
+		D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */; };
 		DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2455C8C8ECE4B1401FA78CC8 /* RouteClockMark.swift */; };
+		DBE062F45B36BEB21BF35F20 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A2F56FE27D4AA634729FFC7 /* WasmKit */; };
 		DD29161686649850AAB2B663 /* MainTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D3135F1B6D83A65E0B57E63 /* MainTab.swift */; };
 		DE4287D68F65F02C32291ED7 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7E580D67B2F342466E4D82 /* KeychainStore.swift */; };
 		DEA6A2F49A75DAEF77A8FB55 /* TimerAccessibilityElement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0303C97930C62DA9D021350B /* TimerAccessibilityElement.swift */; };
+		E07F159A47806F5FD2494D5A /* pomodorough_core.wasm in Resources */ = {isa = PBXBuildFile; fileRef = 83402C8BC26381491CFC050B /* pomodorough_core.wasm */; };
 		E26B237BB09C48CF4C1741AD /* LaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A06BAAC59FEFFB625D50DE7 /* LaunchView.swift */; };
 		E36FC5A38CB3A63556554C32 /* DialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E2B967974C1E80FDE7E8EE /* DialFace.swift */; };
 		E575B00BC377E0AE8C9AEA4F /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 4643BFF347477A2FCDE31755 /* Localizable.xcstrings */; };
@@ -207,6 +215,7 @@
 		2455C8C8ECE4B1401FA78CC8 /* RouteClockMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteClockMark.swift; sourceTree = "<group>"; };
 		24F72CA3CA502137F9C4EF44 /* TimerMachineCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerMachineCard.swift; sourceTree = "<group>"; };
 		27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinIrohRoomView.swift; sourceTree = "<group>"; };
+		29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCore.swift; sourceTree = "<group>"; };
 		2BA65CB22541A1FAD6009384 /* TaskBoardEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardEmptyState.swift; sourceTree = "<group>"; };
 		2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationPositiveTests.swift; sourceTree = "<group>"; };
 		2E9EE6D33C5F45430FDF22C6 /* Localizable.ar-XB.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Localizable.ar-XB.json"; sourceTree = "<group>"; };
@@ -214,6 +223,7 @@
 		339967D3D78893FBEB4565F6 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
 		36A8F361E21D197A0C56D2CA /* NetworkSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkSectionView.swift; sourceTree = "<group>"; };
 		38E2B967974C1E80FDE7E8EE /* DialFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialFace.swift; sourceTree = "<group>"; };
+		39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCoreWASMTests.swift; sourceTree = "<group>"; };
 		3A79EE92914204BD6B846A11 /* convergence-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "convergence-v1.json"; sourceTree = "<group>"; };
 		3C24F7A45B3B70459A21180A /* GoogleAuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleAuthService.swift; sourceTree = "<group>"; };
 		3D3135F1B6D83A65E0B57E63 /* MainTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTab.swift; sourceTree = "<group>"; };
@@ -240,6 +250,7 @@
 		7A8EC0FFF7A089F16E6CA30F /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationNegativeTests.swift; sourceTree = "<group>"; };
 		80A775511EF0C665343A6BF3 /* Pomodorough.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pomodorough.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		83402C8BC26381491CFC050B /* pomodorough_core.wasm */ = {isa = PBXFileReference; path = pomodorough_core.wasm; sourceTree = "<group>"; };
 		867BAD619534F559090B4BFC /* TaskSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskSummaryRow.swift; sourceTree = "<group>"; };
 		8A7019E349578A8ECD708783 /* HistoryResolutionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryResolutionView.swift; sourceTree = "<group>"; };
 		8C3454A72650907D5ABE4854 /* HistoryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRow.swift; sourceTree = "<group>"; };
@@ -290,6 +301,7 @@
 				D71BC324CAE1DF74369577E1 /* GoogleSignIn in Frameworks */,
 				AB492C16E7AF250315F8F18C /* GoogleSignInSwift in Frameworks */,
 				505B2B0AF04A88EB671C899A /* IrohLib in Frameworks */,
+				A1332F63477B2332EF05279D /* WasmKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -300,6 +312,7 @@
 				2BE5CDEF3D373057F72AF294 /* GoogleSignIn in Frameworks */,
 				D31A942F600F2AD2BD57150D /* GoogleSignInSwift in Frameworks */,
 				8F896A75991DA7E095E805E0 /* IrohLib in Frameworks */,
+				DBE062F45B36BEB21BF35F20 /* WasmKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -321,6 +334,7 @@
 				EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */,
 				4755E1928278877B4EA62348 /* PomodoroughTheme.swift */,
 				F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */,
+				29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */,
 				C3A937878674AD4167D99AF8 /* TaskTimeText.swift */,
 				0BA59D00B6874FCABDC0711C /* TickMarks.swift */,
 				6FCD013ABB0FD83204A7E89B /* TimerAlarmScheduler.swift */,
@@ -347,6 +361,7 @@
 				2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */,
 				3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */,
 				6D043EE67CA1960F20CF2749 /* MacOSTests.swift */,
+				39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */,
 				6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */,
 				DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */,
 				DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */,
@@ -444,6 +459,7 @@
 			children = (
 				1929D0207FFBB402D14BC5B0 /* Fixtures */,
 				9BBA3A2B7D99B694F81414BB /* Resources */,
+				D4D637DAB9614A0500DD3B4F /* SharedCore */,
 				0B5585A033F128E98794CA04 /* Sources */,
 				2161B27974D486AF4BE739FF /* Tests */,
 				2C491A7EBDD54BCCE5842DC1 /* UITests */,
@@ -459,6 +475,15 @@
 				4643BFF347477A2FCDE31755 /* Localizable.xcstrings */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		D4D637DAB9614A0500DD3B4F /* SharedCore */ = {
+			isa = PBXGroup;
+			children = (
+				83402C8BC26381491CFC050B /* pomodorough_core.wasm */,
+			);
+			name = SharedCore;
+			path = Resources/SharedCore;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -519,6 +544,7 @@
 				7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */,
 				35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */,
 				F883AB1431F3186814AACEF4 /* IrohLib */,
+				2334730AA8BEE8CA1C39A2AD /* WasmKit */,
 			);
 			productName = "Pomodorough-macOS";
 			productReference = 05C431FDA9B5C4273A3A48BC /* Pomodorough.app */;
@@ -560,6 +586,7 @@
 				1B2F658FFCC6E497932EB5E1 /* GoogleSignIn */,
 				0EE041835DA15370CCB79786 /* GoogleSignInSwift */,
 				8314F34588484234E7441061 /* IrohLib */,
+				0A2F56FE27D4AA634729FFC7 /* WasmKit */,
 			);
 			productName = "Pomodorough-iOS";
 			productReference = 80A775511EF0C665343A6BF3 /* Pomodorough.app */;
@@ -599,6 +626,7 @@
 			packageReferences = (
 				4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				8B8C149D80299360883ECC8B /* XCRemoteSwiftPackageReference "iroh-ffi" */,
+				A22EC1D57EC781DF67C044B8 /* XCRemoteSwiftPackageReference "WasmKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 780FBA18FDFC7FA9013B67B0 /* Products */;
@@ -640,6 +668,7 @@
 				3B9C80CC0469781B09D176CA /* Assets.xcassets in Resources */,
 				10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 				E575B00BC377E0AE8C9AEA4F /* Localizable.xcstrings in Resources */,
+				4FAA27BF7055B29C21B03200 /* pomodorough_core.wasm in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -660,6 +689,7 @@
 				C0725FE9385C24B7F5C728E8 /* Assets.xcassets in Resources */,
 				2EC15A7B22650818465F13BE /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 				A57B33DD61AE790852ADDADD /* Localizable.xcstrings in Resources */,
+				E07F159A47806F5FD2494D5A /* pomodorough_core.wasm in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -674,6 +704,7 @@
 				F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */,
 				84B131A8A1403C42A16AFB5C /* IrohReplicationTests.swift in Sources */,
 				586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */,
+				D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */,
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
 				4255112A51D66FBEC7FFA25E /* UnitNegativeTests.swift in Sources */,
 				4A9136A6FAC18DF7D451623B /* UnitPositiveTests.swift in Sources */,
@@ -688,6 +719,7 @@
 				3FFA600ACA6A8AA43B56AF17 /* IntegrationPositiveTests.swift in Sources */,
 				87BDDCCB865B8A72DD4AEBFC /* IrohReplicationTests.swift in Sources */,
 				74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */,
+				99EFFE32E536E90D52596E0D /* SharedCoreWASMTests.swift in Sources */,
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
 				25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */,
 				05ADF2030E5861781198DA1B /* UnitPositiveTests.swift in Sources */,
@@ -741,6 +773,7 @@
 				F7538DA7270901F11D96D9F8 /* SectionHeading.swift in Sources */,
 				AFA72B55F24D175A803F93BF /* ServicePatternCard.swift in Sources */,
 				388A95C362B47A5F9C63E734 /* ServicePatternScreen.swift in Sources */,
+				636FC1EB4790528FB52E9BAB /* SharedCore.swift in Sources */,
 				8CF07ED3A9E4017A0B73A201 /* StepButton.swift in Sources */,
 				3F20315C0C580DCC7A8946BA /* SyncToolbarStatus.swift in Sources */,
 				A853A7EDF1E69F38044925B8 /* TaskBoardEmptyState.swift in Sources */,
@@ -820,6 +853,7 @@
 				64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */,
 				CBD6A118EB50CD13A585FD53 /* ServicePatternCard.swift in Sources */,
 				BE2AFABAAE1ADE3CC7C78A1B /* ServicePatternScreen.swift in Sources */,
+				D4711C68D5C327020D8C7571 /* SharedCore.swift in Sources */,
 				C6E287C347E7FFCC158CD69B /* StepButton.swift in Sources */,
 				9060EBDDBA5D69C550834BBB /* SyncToolbarStatus.swift in Sources */,
 				1BDC228041E27AA1232A9C07 /* TaskBoardEmptyState.swift in Sources */,
@@ -1025,8 +1059,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GOOGLE_CLIENT_ID = "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com";
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
-				MACOSX_DEPLOYMENT_TARGET = 14.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 0.3.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -1144,8 +1178,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GOOGLE_CLIENT_ID = "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com";
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
-				MACOSX_DEPLOYMENT_TARGET = 14.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 0.3.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -1250,9 +1284,22 @@
 				version = 1.1.0;
 			};
 		};
+		A22EC1D57EC781DF67C044B8 /* XCRemoteSwiftPackageReference "WasmKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftwasm/WasmKit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.3.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		0A2F56FE27D4AA634729FFC7 /* WasmKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A22EC1D57EC781DF67C044B8 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WasmKit;
+		};
 		0EE041835DA15370CCB79786 /* GoogleSignInSwift */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
@@ -1262,6 +1309,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignIn;
+		};
+		2334730AA8BEE8CA1C39A2AD /* WasmKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A22EC1D57EC781DF67C044B8 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WasmKit;
 		};
 		35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */ = {
 			isa = XCSwiftPackageProductDependency;

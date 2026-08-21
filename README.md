@@ -37,8 +37,8 @@ local-first synchronization with the Pomodorough service.
 
 | Target | Minimum version | Interface |
 | --- | --- | --- |
-| iPhone and iPad | iOS/iPadOS 17 | Adaptive SwiftUI application |
-| Mac | macOS 14 | Native SwiftUI application |
+| iPhone and iPad | iOS/iPadOS 18 | Adaptive SwiftUI application |
+| Mac | macOS 15 | Native SwiftUI application |
 
 The project uses Swift 6 with complete strict-concurrency checking.
 
@@ -49,6 +49,7 @@ The project uses Swift 6 with complete strict-concurrency checking.
 | `Sources/AppModel.swift` | Application state, optimistic replay, authentication, and synchronization |
 | `Sources/APIClient.swift` | JSON API, token refresh, and revision stream transport |
 | `Sources/Models.swift` | Wire contracts, local models, and deterministic reducers |
+| `Sources/SharedCore.swift` | Serialized WasmKit host for the pinned shared-core WebAssembly module |
 | `Sources/Views.swift` | Adaptive timer, pattern, task, history, and account interfaces |
 | `Tests/` | Reducer, persistence, API-contract, migration, and integration coverage |
 

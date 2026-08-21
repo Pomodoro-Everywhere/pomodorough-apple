@@ -16,6 +16,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     env:
+      CORE_COMMIT: "a78a312314dd9466557c3dbdd12184b698c3d156"
+      CORE_SHA256: "89fb6300324042b61d62070242cccad10e30f125885bb1b7a05af67b077bac83"
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughDerivedData
       IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
@@ -24,6 +26,32 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: 05bb0cf7e73c99d1ef6c0acbd41a9798614a4359
+          path: .build/pomodorough-core
+          persist-credentials: false
+
+      - name: Rebuild and verify pinned shared core
+        run: |
+          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
+          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
+          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+            --manifest-path .build/pomodorough-core/Cargo.toml \
+            --release \
+            --target wasm32-unknown-unknown \
+            --locked
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          actual_sha=$(shasum -a 256 "$rebuilt" | awk '{print $1}')
+          test "$actual_sha" = "$CORE_SHA256"
+          cmp Resources/SharedCore/pomodorough_core.wasm "$rebuilt"
 
       - name: Check documentation links
         run: python3 scripts/check_docs.py
