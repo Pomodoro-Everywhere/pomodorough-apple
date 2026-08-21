@@ -20,7 +20,7 @@ struct PermissionIntroductionView: View {
                             .font(.largeTitle.bold())
                             .multilineTextAlignment(.center)
                             .foregroundStyle(PomodoroughTheme.porcelain)
-                        Text("Pomodorough can alert you when a focus run or break ends, even when you leave the app.")
+                        Text("Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.")
                             .font(.body)
                             .multilineTextAlignment(.center)
                             .foregroundStyle(PomodoroughTheme.sky)
@@ -28,7 +28,7 @@ struct PermissionIntroductionView: View {
                     .accessibilityRepresentation {
                         Text("Hear when time is up")
                             .accessibilityValue(
-                                "Pomodorough can alert you when a focus run or break ends, even when you leave the app."
+                                "Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy."
                             )
                     }
 
@@ -44,7 +44,7 @@ struct PermissionIntroductionView: View {
                             PermissionIntroductionCard(
                                 icon: "alarm.fill",
                                 title: "Alarms",
-                                detail: "Plays a system timer alarm at the end, including while Pomodorough is not open.",
+                                detail: "Requests a system timer alarm at the end, including while Pomodorough is not open. Delivery is controlled by iOS.",
                                 color: PomodoroughTheme.signal
                             )
                         }
@@ -99,9 +99,9 @@ struct PermissionIntroductionView: View {
 
     private var notificationDetail: String {
 #if os(iOS)
-        "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable."
+        String(localized: "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable.")
 #else
-        "Sends an alert and plays a sound until you dismiss it or start another timer."
+        String(localized: "Sends an alert and plays a sound until you dismiss it or start another timer.")
 #endif
     }
 }

@@ -7,6 +7,101 @@ import Testing
 @Suite("Iroh Replication")
 struct IrohReplicationTests {
     @Test @MainActor
+    func cancellingRequestedRoomLeavePreservesActiveRoomWorkspace() throws {
+        let suiteName = "PomodoroughTests.IrohLeaveCancel.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let store = temporaryStore()
+        let returnTask = try #require(FocusTask(title: "Previous workspace"))
+        var returnState = PersistedTimerState.fresh()
+        returnState.tasks = [returnTask]
+        returnState.knownTasks = [returnTask]
+        let roomTask = try #require(FocusTask(title: "Room workspace"))
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Leave confirmation",
+            returnState: returnState,
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [roomTask],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        model.requestIrohRoomLeave()
+        #expect(model.isIrohRoomLeaveConfirmationPresented)
+        model.cancelIrohRoomLeave()
+
+        #expect(!model.isIrohRoomLeaveConfirmationPresented)
+        #expect(model.replicationMode == .iroh)
+        #expect(model.tasks == [roomTask])
+        #expect(model.activeRoom?.roomID == roomID)
+        #expect(store.roomSnapshot(roomID: roomID) != nil)
+    }
+
+    @Test @MainActor
+    func confirmedRoomLeaveRestoresPreviousWorkspaceAndRetainsRoomLog() async throws {
+        let suiteName = "PomodoroughTests.IrohLeaveConfirm.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let store = temporaryStore()
+        let returnTask = try #require(FocusTask(title: "Previous workspace"))
+        var returnState = PersistedTimerState.fresh()
+        returnState.tasks = [returnTask]
+        returnState.knownTasks = [returnTask]
+        let roomTask = try #require(FocusTask(title: "Room workspace"))
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Retained room log",
+            returnState: returnState,
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [roomTask],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        model.requestIrohRoomLeave()
+
+        await model.confirmIrohRoomLeave()
+        await model.confirmIrohRoomLeave()
+
+        #expect(!model.isIrohRoomLeaveConfirmationPresented)
+        #expect(!model.isLeavingIrohRoom)
+        #expect(model.replicationMode == .offline)
+        #expect(model.tasks == [returnTask])
+        #expect(model.activeRoom == nil)
+        let retainedRoom = try #require(store.roomSnapshot(roomID: roomID))
+        #expect(retainedRoom.roomName == "Retained room log")
+        #expect(retainedRoom.operationCount > 0)
+    }
+
+    @Test @MainActor
     func replicationModePersistsOutsideSynchronizedTimerState() async throws {
         let suiteName = "PomodoroughTests.IrohMode.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -184,13 +279,327 @@ struct IrohReplicationTests {
         #expect(TestFixtures.recordedRequests(for: scenario).contains { $0.path == "/api/v1/bootstrap" })
     }
 
+    @Test func canonicalProtocolFixtureDecodesIrohSelectedTaskRecords() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/protocol-fixtures-v1.json")
+        let data = try Data(contentsOf: fixtureURL)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        #expect(digest == "544fa8a8f33361e80421e1f8395223c6a1e1ff243f9583b6baee6d2a1f1112d0")
+        let fixture = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let roomID = try IrohProtocolV1.roomID(for: Data(0...31))
+        let requestID = try IrohProtocolV1.makeRequestID(at: Date(timeIntervalSince1970: 1_000))
+        func decodeRecord(_ record: [String: Any]) throws -> IrohOperationRecord {
+            let message = try JSONSerialization.data(withJSONObject: [
+                "protocolVersion": 1,
+                "roomId": roomID,
+                "requestId": requestID,
+                "kind": "operationsResult",
+                "records": [record],
+            ])
+            guard case .operationsResult(let result) = try IrohMessageCodec.decode(message),
+                  let decoded = result.records.first else {
+                throw IrohProtocolError.invalidMessage("fixture record did not decode")
+            }
+            return decoded
+        }
+
+        let genesisRecord = try #require(fixture["irohGenesisRecord"] as? [String: Any])
+        let genesis = try decodeRecord(genesisRecord)
+        guard case .genesis(let genesisValue) = genesis.payload else {
+            Issue.record("Expected canonical fixture genesis")
+            return
+        }
+        #expect(genesisValue.selectedTaskId == nil)
+        #expect(genesis.isValid)
+        var legacyGenesisRecord = genesisRecord
+        var legacyGenesisOperation = try #require(legacyGenesisRecord["operation"] as? [String: Any])
+        legacyGenesisOperation.removeValue(forKey: "selectedTaskId")
+        legacyGenesisRecord["operation"] = legacyGenesisOperation
+        guard case .genesis(let legacyGenesis) = try decodeRecord(legacyGenesisRecord).payload else {
+            Issue.record("Expected pre-selected-task genesis compatibility")
+            return
+        }
+        #expect(legacyGenesis.selectedTaskId == nil)
+
+        let selectedRecord = try #require(fixture["irohSelectedTaskRecord"] as? [String: Any])
+        let selected = try decodeRecord(selectedRecord)
+        guard case .selectedTask(let selectedValue) = selected.payload else {
+            Issue.record("Expected canonical fixture selected-task operation")
+            return
+        }
+        #expect(selectedValue.id == "01a0219e-0800-7006-8000-000000000006")
+        #expect(selectedValue.taskId == nil)
+        #expect(selected.isValid)
+        #expect(try selected.canonicalBytes() == JSONCanonicalizer.encodeJSONObject(
+            fixture["irohSelectedTaskRecord"] as Any
+        ))
+    }
+
+    @Test func selectedTaskWireRequiresNullableTaskIdentityAndRejectsUnknownFields() throws {
+        let roomID = try IrohProtocolV1.roomID(for: Data(0...31))
+        let requestID = try IrohProtocolV1.makeRequestID(at: Date(timeIntervalSince1970: 1_000))
+        func message(operation: String) -> Data {
+            Data("""
+            {"protocolVersion":1,"roomId":"\(roomID)","requestId":"\(requestID)","kind":"operationsResult","records":[{"domain":"selectedTask","deviceId":"device-test0001","operation":\(operation)}]}
+            """.utf8)
+        }
+        let valid = #"{"id":"selected-task-operation-peer0001","taskId":null,"occurredAt":"1970-01-01T00:16:40Z","hlcWallMs":1000000,"hlcCounter":0}"#
+        guard case .operationsResult(let decoded) = try IrohMessageCodec.decode(message(operation: valid)),
+              case .selectedTask(let operation) = decoded.records.first?.payload else {
+            Issue.record("Expected strict selected-task record")
+            return
+        }
+        #expect(operation.taskId == nil)
+        let localClear = IrohOperationRecord(
+            domain: .selectedTask,
+            deviceId: "device-test0001",
+            payload: .selectedTask(IrohSelectedTaskOperation(
+                id: "selected-task-operation-local-clear",
+                taskId: nil,
+                occurredAt: Date(timeIntervalSince1970: 1_000),
+                hlcWallMs: 1_000_000,
+                hlcCounter: 0
+            ))
+        )
+        let encodedClear = try #require(
+            (JSONSerialization.jsonObject(with: JSONEncoder.api.encode(localClear)) as? [String: Any])?["operation"]
+                as? [String: Any]
+        )
+        #expect(encodedClear["taskId"] is NSNull)
+        #expect(throws: IrohProtocolError.self) {
+            try IrohMessageCodec.decode(message(operation: #"{"id":"selected-task-operation-peer0001","occurredAt":"1970-01-01T00:16:40Z","hlcWallMs":1000000,"hlcCounter":0}"#))
+        }
+        #expect(throws: IrohProtocolError.self) {
+            try IrohMessageCodec.decode(message(operation: #"{"id":"selected-task-operation-peer0001","taskId":null,"occurredAt":"1970-01-01T00:16:40Z","hlcWallMs":1000000,"hlcCounter":0,"extra":true}"#))
+        }
+    }
+
+    @Test func roomProjectionReducesSelectedTaskByHLCDeviceAndOperationAndSurvivesRestart() throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let first = try #require(FocusTask(title: "First selected task"))
+        let second = try #require(FocusTask(title: "Second selected task"))
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [first, second],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                selectedTaskId: first.id.uuidString.lowercased(),
+                hlcWallMs: 1_000_000,
+                hlcCounter: 0
+            )
+        )
+        let lowerDeviceLaterID = IrohOperationRecord(
+            domain: .selectedTask,
+            deviceId: "device-a0001",
+            payload: .selectedTask(IrohSelectedTaskOperation(
+                id: "selected-task-operation-z",
+                taskId: nil,
+                occurredAt: Date(timeIntervalSince1970: 1_001),
+                hlcWallMs: 1_001_000,
+                hlcCounter: 0
+            ))
+        )
+        let higherDeviceEarlierID = IrohOperationRecord(
+            domain: .selectedTask,
+            deviceId: "device-z0001",
+            payload: .selectedTask(IrohSelectedTaskOperation(
+                id: "selected-task-operation-a",
+                taskId: second.id.uuidString.lowercased(),
+                occurredAt: Date(timeIntervalSince1970: 1_001),
+                hlcWallMs: 1_001_000,
+                hlcCounter: 0
+            ))
+        )
+        let deletion = TaskOperation(
+            id: "task-operation-delete-selected",
+            taskId: second.id.uuidString.lowercased(),
+            type: .delete,
+            title: nil,
+            occurredAt: Date(timeIntervalSince1970: 1_002),
+            hlcWallMs: 1_002_000,
+            hlcCounter: 0
+        )
+
+        let projected = try store.insertRemoteRecords([
+            higherDeviceEarlierID,
+            lowerDeviceLaterID,
+            IrohOperationRecord(domain: .task, deviceId: "device-a0001", payload: .task(deletion)),
+        ], roomID: roomID)
+
+        #expect(projected.selectedTaskID == second.id)
+        #expect(!projected.tasks.contains(second))
+        #expect(projected.knownTasks.contains(second))
+        #expect(projected.hlcWallMs == 1_002_000)
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.selectedTaskID == second.id)
+        #expect(restarted.activeRoomState?.knownTasks.contains(second) == true)
+    }
+
+    @Test func roomCaptureDurablyStoresSelectedTaskOperationsIncludingClear() throws {
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = temporaryStore()
+        let task = try #require(FocusTask(title: "Durable selection"))
+        var state = PersistedTimerState.fresh()
+        state.tasks = [task]
+        state.knownTasks = [task]
+        state = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: state,
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [task],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        state.pendingSelectedTaskOperations = [SelectedTaskOperation(
+            id: try #require(UUID(uuidString: "01a0219e-0800-7006-8000-000000000006")),
+            deviceId: state.deviceId,
+            taskId: task.id.uuidString.lowercased(),
+            occurredAt: Date(timeIntervalSince1970: 1_000),
+            hlcWallMs: 1_000_000,
+            hlcCounter: 0
+        )]
+
+        let selected = try store.captureLocalOperations(from: state)
+        #expect(selected.selectedTaskID == task.id)
+        #expect(selected.pendingSelectedTaskOperations.isEmpty)
+        let records = try store.operations(
+            roomID: roomID,
+            references: [IrohInventoryReference(
+                domain: .selectedTask,
+                id: "01a0219e-0800-7006-8000-000000000006"
+            )]
+        )
+        guard case .selectedTask(let captured) = records.first?.payload else {
+            Issue.record("Expected captured selected-task operation")
+            return
+        }
+        #expect(captured.taskId == task.id.uuidString.lowercased())
+    }
+
+    @Test @MainActor
+    func appModelSelectionAndDeletionCaptureRestoreAcrossIrohRestart() throws {
+        let suiteName = "PomodoroughTests.IrohSelectionRestart.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let store = temporaryStore()
+        let task = try #require(FocusTask(title: "Restarted room selection"))
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [task],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        model.selectedTaskID = task.id
+        #expect(model.selectedTaskID == task.id)
+        #expect(store.activeRoomState?.selectedTaskID == task.id)
+        #expect(store.activeRoomState?.pendingSelectedTaskOperations.isEmpty == true)
+
+        let restarted = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        #expect(restarted.selectedTaskID == task.id)
+        restarted.deleteTask(id: task.id)
+        #expect(restarted.selectedTaskID == nil)
+        #expect(restarted.tasks.isEmpty)
+        #expect(store.activeRoomState?.selectedTaskID == nil)
+        let selectedEntries = try store.inventory(roomID: roomID, after: nil, limit: 20).entries
+            .filter { $0.domain == .selectedTask }
+        #expect(selectedEntries.count == 2)
+    }
+
+    @Test @MainActor
+    func irohSignOutClearsAccountWithoutDiscardingRoomOrLocalReturnSelection() throws {
+        let suiteName = "PomodoroughTests.IrohAccountClear.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let store = temporaryStore()
+        let returnTask = try #require(FocusTask(title: "Local return selection"))
+        var returnState = PersistedTimerState.fresh()
+        returnState.tasks = [returnTask]
+        returnState.knownTasks = [returnTask]
+        returnState.selectedTaskID = returnTask.id
+        let roomTask = try #require(FocusTask(title: "Room selection"))
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: returnState,
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [roomTask],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                selectedTaskId: roomTask.id.uuidString.lowercased(),
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        model.signOut()
+
+        #expect(model.replicationMode == .iroh)
+        #expect(model.selectedTaskID == roomTask.id)
+        #expect(model.tasks == [roomTask])
+        #expect(store.activeRoomState?.cachedUser == nil)
+        #expect(store.activeReturnState?.selectedTaskID == returnTask.id)
+        #expect(store.activeReturnState?.tasks == [returnTask])
+    }
+
     @Test func roomIDMatchesProtocolVector() throws {
         let secret = Data(0...31)
         #expect(try IrohProtocolV1.roomID(for: secret) == "Z_qLtnvZQsi-d2Giw1lvj7yy1x20hyE4jUgODkFsQBs")
     }
 
     @Test func inviteRejectsUnknownFieldsAndMalformedBase64() throws {
-        let unknownFieldJSON = Data(#"{"v":1,"roomId":"Z_qLtnvZQsi-d2Giw1lvj7yy1x20hyE4jUgODkFsQBs","endpointTicket":"endpoint","roomSecret":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","extra":true}"#.utf8)
+        let unknownFieldJSON = Data(#"{"v":1,"roomId":"Z_qLtnvZQsi-d2Giw1lvj7yy1x20hyE4jUgODkFsQBs","endpointTicket":"endpoint","roomSecret":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","extra":true}"#.utf8) // gitleaks:allow -- deterministic public protocol vector
         let invite = IrohProtocolV1.invitePrefix + Base64URL.encode(unknownFieldJSON)
 
         #expect(throws: IrohProtocolError.self) { try IrohRoomInvite.decode(invite) }
@@ -889,6 +1298,62 @@ struct IrohReplicationTests {
     }
 
     @Test @MainActor
+    func incomingPeerFirstFocusCompletionAdvancesDefaultSelectionToShortBreak() throws {
+        let fixture = try incomingPeerCompletionFixture(
+            phase: .focus,
+            priorCompletedFocusCount: 0,
+            selectedPhase: .focus,
+            hasExplicitPhaseSelection: false
+        )
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+
+        #expect(fixture.model.canonicalTimer?.status == .completed)
+        #expect(fixture.model.selectedPhase == .shortBreak)
+    }
+
+    @Test @MainActor
+    func incomingPeerFourthFocusCompletionAdvancesDefaultSelectionToLongBreak() throws {
+        let fixture = try incomingPeerCompletionFixture(
+            phase: .focus,
+            priorCompletedFocusCount: 3,
+            selectedPhase: .focus,
+            hasExplicitPhaseSelection: false
+        )
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+
+        #expect(fixture.model.canonicalTimer?.status == .completed)
+        #expect(fixture.model.selectedPhase == .longBreak)
+    }
+
+    @Test @MainActor
+    func incomingPeerBreakCompletionAdvancesDefaultSelectionToFocus() throws {
+        let fixture = try incomingPeerCompletionFixture(
+            phase: .shortBreak,
+            priorCompletedFocusCount: 1,
+            selectedPhase: .shortBreak,
+            hasExplicitPhaseSelection: false
+        )
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+
+        #expect(fixture.model.canonicalTimer?.status == .completed)
+        #expect(fixture.model.selectedPhase == .focus)
+    }
+
+    @Test @MainActor
+    func incomingPeerCompletionPreservesExplicitPhaseSelection() throws {
+        let fixture = try incomingPeerCompletionFixture(
+            phase: .focus,
+            priorCompletedFocusCount: 0,
+            selectedPhase: .longBreak,
+            hasExplicitPhaseSelection: true
+        )
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+
+        #expect(fixture.model.canonicalTimer?.status == .completed)
+        #expect(fixture.model.selectedPhase == .longBreak)
+    }
+
+    @Test @MainActor
     func irohDeadlineProjectsCompletionAndAtomicallyStartsOwnedBreak() async throws {
         let suiteName = "PomodoroughTests.IrohDeadline.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -896,6 +1361,8 @@ struct IrohReplicationTests {
         defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
         let state = PersistedTimerState.fresh()
         let deadline = TestFixtures.anchor.addingTimeInterval(60)
+        var currentDate = TestFixtures.anchor.addingTimeInterval(30)
+        var currentUptime: TimeInterval = 100
         let timer = CanonicalTimer(
             id: "timer-iroh-owned",
             taskId: nil,
@@ -935,10 +1402,13 @@ struct IrohReplicationTests {
             defaults: defaults,
             roomStore: store,
             alarmScheduler: scheduler,
-            now: { deadline },
-            uptime: { 100 }
+            now: { currentDate },
+            uptime: { currentUptime }
         )
 
+        model.selectPhase(.longBreak)
+        currentDate = deadline
+        currentUptime = 130
         model.completeIfNeeded(timerID: timer.id, at: deadline)
         await model.waitForAlarmOperations()
 
@@ -952,6 +1422,7 @@ struct IrohReplicationTests {
         }
         #expect(breakStart.type == .start)
         #expect(breakStart.phase == .shortBreak)
+        #expect(model.selectedPhase == .longBreak)
         #expect(model.canonicalTimer?.id == breakStart.timerId)
         #expect(model.canonicalTimer?.status == .running)
         #expect(model.history.first?.timerId == timer.id)
@@ -1211,6 +1682,91 @@ struct IrohReplicationTests {
         #expect(IrohReplicationService.retryDelaySeconds(base: 30, jitterUnit: 1) == 36)
         #expect(IrohReplicationService.retryDelaySeconds(base: 60, jitterUnit: 1) == 60)
         #expect(IrohReplicationService.retryDelaySeconds(base: 120, jitterUnit: 1) == 60)
+    }
+
+    private struct IncomingPeerCompletionFixture {
+        let model: AppModel
+        let defaults: UserDefaults
+        let suiteName: String
+    }
+
+    @MainActor
+    private func incomingPeerCompletionFixture(
+        phase: TimerPhase,
+        priorCompletedFocusCount: Int,
+        selectedPhase: TimerPhase,
+        hasExplicitPhaseSelection: Bool
+    ) throws -> IncomingPeerCompletionFixture {
+        let suiteName = "PomodoroughTests.IrohPeerCompletion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        var state = PersistedTimerState.fresh()
+        state.settings.selectedPhase = selectedPhase
+        state.hasExplicitPhaseSelection = hasExplicitPhaseSelection
+        let timerID = "timer-peer-completion"
+        let timer = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            phase: phase,
+            timerID: timerID
+        )
+        let priorHistory = (0..<priorCompletedFocusCount).map { index in
+            TestFixtures.history(
+                id: "peer-prior-focus-\(index)",
+                durationMs: 60_000,
+                date: TestFixtures.anchor.addingTimeInterval(-Double(index + 1))
+            )
+        }
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = temporaryStore()
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: state,
+            genesis: IrohGenesis(
+                canonicalTimer: timer,
+                history: priorHistory,
+                tasks: [],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let finish = TimerCommand(
+            id: "command-peer-finish",
+            deviceSequence: 1,
+            timerId: timerID,
+            taskId: nil,
+            type: .finish,
+            phase: phase,
+            plannedDurationMs: 60_000,
+            occurredAt: TestFixtures.anchor.addingTimeInterval(60),
+            hlcWallMs: 1_060_000,
+            hlcCounter: 0,
+            observedElapsedMs: 60_000
+        )
+        _ = try store.insertRemoteRecords([
+            IrohOperationRecord(
+                domain: .timer,
+                deviceId: "device-peer0001",
+                payload: .timer(finish)
+            )
+        ], roomID: roomID)
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { TestFixtures.anchor.addingTimeInterval(60) },
+            uptime: { 100 }
+        )
+        return IncomingPeerCompletionFixture(
+            model: model,
+            defaults: defaults,
+            suiteName: suiteName
+        )
     }
 
     private func temporaryURL() -> URL {

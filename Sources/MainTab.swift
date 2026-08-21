@@ -3,4 +3,5 @@ enum MainTab: Hashable {
     case tasks
     case pattern
     case history
+    case network
 }

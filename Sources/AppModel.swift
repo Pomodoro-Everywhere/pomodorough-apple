@@ -68,6 +68,8 @@ final class AppModel {
     private(set) var irohStatus: IrohConnectionStatus = .stopped
     private(set) var roomInvite: String?
     private(set) var completionAlertTimerID: String?
+    private(set) var isIrohRoomLeaveConfirmationPresented = false
+    private(set) var isLeavingIrohRoom = false
     var errorMessage: String?
 
     init(
@@ -106,6 +108,9 @@ final class AppModel {
         var stagedState = decodedState ?? .fresh()
         if initialReplicationMode == .iroh, let roomState = roomStore.activeRoomState {
             stagedState = roomState
+            if Self.advanceDefaultPhaseAfterIrohCompletion(in: &stagedState) {
+                _ = try? roomStore.captureLocalOperations(from: stagedState)
+            }
         } else if initialReplicationMode == .iroh {
             initialReplicationMode = .offline
             defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
@@ -219,12 +224,16 @@ final class AppModel {
     var selectedPhase: TimerPhase {
         get { timerState.settings.selectedPhase }
         set {
-            guard !isTimerActive, !isHistoryResolutionBlocking,
+            guard !isWorkspaceMutationBlocked,
                   timerState.hasValidPendingWireOperations else {
                 if !timerState.hasValidPendingWireOperations { reportInvalidLocalClock() }
                 return
             }
+            timerState.selectedPhaseGeneration = nextPhaseGeneration(
+                after: timerState.selectedPhaseGeneration
+            )
             timerState.settings.selectedPhase = newValue
+            timerState.hasExplicitPhaseSelection = true
             persist()
         }
     }
@@ -232,15 +241,10 @@ final class AppModel {
     var selectedTaskID: UUID? {
         get { timerState.selectedTaskID }
         set {
-            guard !isTimerActive, !isHistoryResolutionBlocking,
+            guard !isWorkspaceMutationBlocked,
                    timerState.hasValidPendingWireOperations,
                    newValue != timerState.selectedTaskID,
                    newValue == nil || tasks.contains(where: { $0.id == newValue }) else { return }
-            if replicationMode == .iroh {
-                timerState.selectedTaskID = newValue
-                _ = persist()
-                return
-            }
             let localDate = effectivePhysicalNow() ?? now()
             let occurredAt: Date
             do {
@@ -270,7 +274,7 @@ final class AppModel {
             )
         }
         set {
-            guard !isHistoryResolutionBlocking, newValue != autoStartBreaks else { return }
+            guard !isWorkspaceMutationBlocked, newValue != autoStartBreaks else { return }
             let now = effectivePhysicalNow() ?? now()
             let occurredAt: Date
             do {
@@ -337,6 +341,10 @@ final class AppModel {
     }
     var hasIrohRoom: Bool { preferredRoom != nil }
     var irohStatusLabel: String { irohStatus.label }
+    var pendingAccountSwitchUser: User? { timerState.pendingAccountSwitchUser }
+    var isWorkspaceMutationBlocked: Bool {
+        isHistoryResolutionBlocking || pendingAccountSwitchUser != nil
+    }
     var isHistoryResolutionBlocking: Bool {
         replicationMode == .centralized && (historyResolutionState != .none
             || timerState.bootstrapUser != nil
@@ -353,31 +361,35 @@ final class AppModel {
 
     var syncLabel: String {
         if replicationMode == .iroh {
-            if activeRoom?.conflict != nil { return "Room repair needed" }
+            if activeRoom?.conflict != nil { return String(localized: "Room repair needed") }
             return irohStatus.label
         }
-        if replicationMode == .offline { return "On device" }
-        if !isSignedIn { return "On device" }
+        if replicationMode == .offline { return String(localized: "On device") }
+        if !isSignedIn { return String(localized: "On device") }
         if isHistoryResolutionBlocking {
             switch historyResolutionState {
-            case .preflighting: return "Checking history"
-            case .choosing, .confirming: return "Choose history"
-            case .submitting: return "Resolving history"
-            case .retryable: return "History retry needed"
+            case .preflighting: return String(localized: "Checking history")
+            case .choosing, .confirming: return String(localized: "Choose history")
+            case .submitting: return String(localized: "Resolving history")
+            case .retryable: return String(localized: "History retry needed")
             case .none: break
             }
         }
-        if conflictMessage != nil { return "Review conflict" }
-        if pendingChangeCount > 0 { return "\(pendingChangeCount) queued" }
-        if isOffline { return "Offline" }
-        if isSyncing { return "Syncing" }
-        return "In sync"
+        if conflictMessage != nil { return String(localized: "Review conflict") }
+        if pendingChangeCount > 0 { return String(localized: "\(pendingChangeCount) queued") }
+        if isOffline { return String(localized: "Offline") }
+        if isSyncing { return String(localized: "Syncing") }
+        return String(localized: "In sync")
     }
 
     func durationMinutes(for phase: TimerPhase) -> Int { timerState.settings.minutes(for: phase) }
 
     func selectPhase(_ phase: TimerPhase) {
-        guard !isTimerActive, !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
+        if isTimerActive {
+            selectedPhase = phase
+            return
+        }
         guard let timer = canonicalTimer else {
             selectedPhase = phase
             return
@@ -401,6 +413,10 @@ final class AppModel {
                 to: &updated
             )
             updated.settings.selectedPhase = phase
+            updated.selectedPhaseGeneration = nextPhaseGeneration(
+                after: updated.selectedPhaseGeneration
+            )
+            updated.hasExplicitPhaseSelection = true
         } catch {
             reportInvalidLocalClock()
             return
@@ -411,7 +427,7 @@ final class AppModel {
     }
 
     func setDurationMinutes(_ minutes: Int, for phase: TimerPhase) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         let clamped = min(180, max(1, minutes))
         let durationMs = Int64(clamped) * 60_000
         guard timerState.settings.durationMs(for: phase) != durationMs else { return }
@@ -464,14 +480,14 @@ final class AppModel {
 
     @discardableResult
     func addTask(_ title: String) -> Bool {
-        guard !isHistoryResolutionBlocking else { return false }
+        guard !isWorkspaceMutationBlocked else { return false }
         guard let task = FocusTask(title: title) else { return false }
         guard !tasks.contains(where: { $0.id == task.id }) else { return true }
         return enqueueTaskOperation(.upsert, task: task)
     }
 
     func deleteTask(id: UUID) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         guard let task = tasks.first(where: { $0.id == id }) else { return }
         _ = enqueueTaskOperation(.delete, task: task)
     }
@@ -518,6 +534,17 @@ final class AppModel {
         }) { item in
             let taskID = item.taskId.flatMap(UUID.init(uuidString:)) ?? legacyAssignments[item.timerId]
             return taskID.flatMap { taskByID[$0] }
+        }
+    }
+
+    func taskContext(for item: HistoryItem) -> String {
+        let taskID = item.taskId.flatMap(UUID.init(uuidString:))
+            ?? timerState.legacyTaskAssignments[item.timerId]
+        let taskByID = (timerState.knownTasks + tasks).reduce(into: [UUID: FocusTask]()) { lookup, task in
+            lookup[task.id] = task
+        }
+        return HistoryAnalytics.taskContext(for: item) { _ in
+            taskID.flatMap { taskByID[$0] }
         }
     }
 
@@ -597,6 +624,47 @@ final class AppModel {
         }
     }
 
+    func confirmAccountSwitch() async {
+        guard let authenticatedUser = timerState.pendingAccountSwitchUser,
+              user?.id == authenticatedUser.id else { return }
+        if let timer = canonicalTimer {
+            cancelAlarm(timerID: timer.id, reportsError: false)
+        }
+        var updated = timerState
+        updated.prepare(for: authenticatedUser)
+        guard let data = try? JSONEncoder.api.encode(updated) else {
+            errorMessage = String(localized: "Account switch paused because local data could not be saved.")
+            return
+        }
+        defaults.set(data, forKey: Self.storageKey)
+        timerState = updated
+        historyResolutionState = .none
+        bootstrapSnapshot = nil
+        localHistoryResolutionCount = 0
+        remoteHistoryResolutionCount = 0
+        rebuildOptimisticState()
+        await sync(force: true)
+    }
+
+    func cancelAccountSwitch() async {
+        guard timerState.pendingAccountSwitchUser != nil, !isWorking else { return }
+        sessionGeneration += 1
+        sessionState = .localOnly
+        sessionVerification.invalidate()
+        sessionVerificationOwner = nil
+        syncOwnership.invalidate()
+        isSyncing = false
+        retryTask?.cancel()
+        retryTask = nil
+        cancelRevisionStream()
+        googleIdentityProvider.signOut()
+        timerState.pendingAccountSwitchUser = nil
+        persist()
+        isWorking = true
+        defer { isWorking = false }
+        do { try await api.logout() } catch { try? await api.clearTokens() }
+    }
+
     func signOut() {
         guard !isWorking else { return }
         let preservesBootstrapResolution = timerState.cachedUser == nil && timerState.bootstrapUser != nil
@@ -626,8 +694,17 @@ final class AppModel {
             timerState.cachedUser = nil
             timerState.bootstrapUser = nil
             timerState.pendingBootstrapResolution = nil
-            var clearedReturnState = PersistedTimerState.fresh()
-            clearedReturnState.deviceId = timerState.deviceId
+            var clearedReturnState = roomStore.activeReturnState ?? PersistedTimerState.fresh()
+            if clearedReturnState.cachedUser != nil {
+                let preservedDeviceID = clearedReturnState.deviceId
+                clearedReturnState = .fresh()
+                clearedReturnState.deviceId = preservedDeviceID
+            } else {
+                clearedReturnState.cachedUser = nil
+                clearedReturnState.pendingAccountSwitchUser = nil
+                clearedReturnState.bootstrapUser = nil
+                clearedReturnState.pendingBootstrapResolution = nil
+            }
             try? roomStore.replaceActiveReturnState(clearedReturnState)
             persist()
         } else if preservesBootstrapResolution {
@@ -644,13 +721,49 @@ final class AppModel {
         }
     }
 
+    func deleteAccount(confirmation: String) async {
+        guard confirmation == "DELETE", isSignedIn, !isWorking else { return }
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        do {
+            try await api.deleteAccount(confirmation: confirmation)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+
+        if let timer = canonicalTimer {
+            cancelAlarm(timerID: timer.id, reportsError: false)
+        }
+        sessionGeneration += 1
+        sessionState = .localOnly
+        isOffline = false
+        sessionVerification.invalidate()
+        sessionVerificationOwner = nil
+        syncOwnership.invalidate()
+        isSyncing = false
+        historyResolutionState = .none
+        bootstrapSnapshot = nil
+        localHistoryResolutionCount = 0
+        remoteHistoryResolutionCount = 0
+        revisionHints = RevisionHintCoalescer()
+        retryTask?.cancel()
+        retryTask = nil
+        cancelRevisionStream()
+        googleIdentityProvider.signOut()
+        timerState = .fresh()
+        rebuildOptimisticState()
+        persist()
+    }
+
     @discardableResult
     func handleGoogleSignInURL(_ url: URL) -> Bool {
         googleIdentityProvider.handle(url)
     }
 
     func start() {
-        guard !isHistoryResolutionBlocking, !isTimerActive else { return }
+        guard !isWorkspaceMutationBlocked, !isTimerActive else { return }
         let timerID = "timer-\(UUID().uuidString.lowercased())"
         let phase = selectedPhase
         let duration = TimeInterval(timerState.settings.durationMs(for: phase)) / 1_000
@@ -667,13 +780,15 @@ final class AppModel {
             duration: duration,
             elapsed: 0
         ) else { return }
+        timerState.hasExplicitPhaseSelection = false
+        _ = persist()
         enqueueAlarmOperation { [alarmScheduler] in
             try await alarmScheduler.schedule(timerID: timerID, phase: phase, duration: duration)
         }
     }
 
     func pause(at explicitDate: Date? = nil) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         guard let timer = canonicalTimer, timer.status == .running else { return }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
         guard enqueue(.pause, timer: timer, elapsed: timer.elapsed(at: date)) else { return }
@@ -683,7 +798,7 @@ final class AppModel {
     }
 
     func resume(at explicitDate: Date? = nil) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         guard let timer = canonicalTimer, timer.status == .paused else { return }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
         let remainingDuration = max(1, timer.remaining(at: date))
@@ -698,7 +813,7 @@ final class AppModel {
     }
 
     func finish(at explicitDate: Date? = nil) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
         finish(at: date, cancelsAlarm: true)
     }
@@ -709,7 +824,7 @@ final class AppModel {
         cancelsAlarm: Bool,
         timer explicitTimer: CanonicalTimer? = nil
     ) -> Bool {
-        guard !isHistoryResolutionBlocking else { return false }
+        guard !isWorkspaceMutationBlocked else { return false }
         guard let timer = explicitTimer ?? canonicalTimer,
               timer.status == .running || timer.status == .paused else { return false }
         let localDate = effectivePhysicalNow() ?? now()
@@ -753,7 +868,22 @@ final class AppModel {
         } else {
             nextPhase = .focus
         }
-        updated.settings.selectedPhase = nextPhase
+        let previousPhase = updated.settings.selectedPhase
+        if !updated.hasExplicitPhaseSelection {
+            updated.selectedPhaseGeneration = nextPhaseGeneration(
+                after: updated.selectedPhaseGeneration
+            )
+            updated.settings.selectedPhase = nextPhase
+        }
+        if replicationMode == .centralized, !updated.hasExplicitPhaseSelection {
+            updated.provisionalPhaseAdvances.append(ProvisionalPhaseAdvance(
+                sourceTimerId: timer.id,
+                finishCommandId: finishCommand.id,
+                previousPhase: previousPhase,
+                advancedPhase: nextPhase,
+                generation: updated.selectedPhaseGeneration
+            ))
+        }
 
         guard timer.phase == .focus, autoStartBreaks else {
             timerState = updated
@@ -827,7 +957,7 @@ final class AppModel {
     }
 
     func cancel(at explicitDate: Date? = nil) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         guard let timer = canonicalTimer,
               timer.status == .running || timer.status == .paused else { return }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
@@ -868,7 +998,7 @@ final class AppModel {
     }
 
     func clear() {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         guard let timer = canonicalTimer, !isTimerActive else { return }
         let date = effectivePhysicalNow() ?? now()
         guard enqueue(.clear, timer: timer, elapsed: timer.elapsed(at: date)) else { return }
@@ -879,7 +1009,7 @@ final class AppModel {
     }
 
     func stopSound() {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         let alertTimerID = completionAlertTimerID
         completionAlertTimerID = nil
         if let alertTimerID {
@@ -894,7 +1024,7 @@ final class AppModel {
     }
 
     func completeIfNeeded(timerID: String, at date: Date) {
-        guard !isHistoryResolutionBlocking else { return }
+        guard !isWorkspaceMutationBlocked else { return }
         guard let timer = durableIrohTimerNeedingCompletion ?? canonicalTimer,
               timer.id == timerID,
               timer.status == .running,
@@ -925,7 +1055,9 @@ final class AppModel {
             })
             : .focus
         var updated = timerState
-        updated.settings.selectedPhase = nextPhase
+        if !updated.hasExplicitPhaseSelection {
+            updated.settings.selectedPhase = nextPhase
+        }
 
         guard timer.phase == .focus, autoStartBreaks else {
             timerState = updated
@@ -1022,7 +1154,7 @@ final class AppModel {
     }
 
     func sync(force: Bool = false, showsActivity: Bool = true) async {
-        guard replicationMode == .centralized, isSignedIn, !isHistoryResolutionBlocking else { return }
+        guard replicationMode == .centralized, isSignedIn, !isWorkspaceMutationBlocked else { return }
         let generation = sessionGeneration
         let modeGeneration = replicationGeneration
         guard sessionVerification.allows(generation: generation) else {
@@ -1142,6 +1274,12 @@ final class AppModel {
                     canonicalHistory: response.history,
                     canonicalTimer: response.canonicalTimer
                 )
+                resolveProvisionalPhaseAdvances(
+                    in: &syncedState,
+                    acknowledgements: response.acknowledgements,
+                    canonicalHistory: response.history,
+                    canonicalTimer: response.canonicalTimer
+                )
                 updateLocalTimerOwnership(
                     in: &syncedState,
                     sentCommands: batch,
@@ -1159,18 +1297,18 @@ final class AppModel {
                     serverTime: response.serverTime
                 )
                 if let conflict = response.acknowledgements.first(where: { $0.outcome != .applied }) {
-                    conflictMessage = conflict.reason.isEmpty ? "Server resolved a timer action as \(conflict.outcome.rawValue)." : conflict.reason
+                    conflictMessage = conflict.reason.isEmpty ? String(localized: "Server resolved a timer action as \(conflict.outcome.rawValue).") : conflict.reason
                 } else if let conflict = response.taskAcknowledgements.first(where: { $0.outcome != .applied }) {
-                    conflictMessage = conflict.reason.isEmpty ? "Server resolved a task change as \(conflict.outcome.rawValue)." : conflict.reason
+                    conflictMessage = conflict.reason.isEmpty ? String(localized: "Server resolved a task change as \(conflict.outcome.rawValue).") : conflict.reason
                 } else if let conflict = response.durationAcknowledgements.first(where: { $0.outcome != .applied }) {
-                    conflictMessage = conflict.reason.isEmpty ? "Server resolved a duration change as \(conflict.outcome.rawValue)." : conflict.reason
+                    conflictMessage = conflict.reason.isEmpty ? String(localized: "Server resolved a duration change as \(conflict.outcome.rawValue).") : conflict.reason
                 } else if let conflict = response.autoStartAcknowledgements.first(where: { $0.outcome != .applied }) {
                     conflictMessage = conflict.reason.isEmpty
-                        ? "Server resolved an auto-start change as \(conflict.outcome.rawValue)."
+                        ? String(localized: "Server resolved an auto-start change as \(conflict.outcome.rawValue).")
                         : conflict.reason
                 } else if let conflict = response.selectedTaskAcknowledgements.first(where: { $0.outcome != .applied }) {
                     conflictMessage = conflict.reason.isEmpty
-                        ? "Server resolved a selected-task change as \(conflict.outcome.rawValue)."
+                        ? String(localized: "Server resolved a selected-task change as \(conflict.outcome.rawValue).")
                         : conflict.reason
                 }
                 syncedState.revision = response.revision
@@ -1205,7 +1343,7 @@ final class AppModel {
                   isSignedIn else { return }
             allowsFollowUpSync = false
             isOffline = false
-            errorMessage = "Sync paused because the server response did not match queued changes. \(pendingChangeCount) queued changes remain on this device."
+            errorMessage = String(localized: "Sync paused because the server response did not match queued changes. \(pendingChangeCount) queued changes remain on this device.")
             cancelRevisionStream()
         } catch {
             guard generation == sessionGeneration,
@@ -1225,7 +1363,7 @@ final class AppModel {
             return
         }
         guard replicationMode == .centralized, isSignedIn else { return }
-        if !isHistoryResolutionBlocking {
+        if !isWorkspaceMutationBlocked {
             startRevisionStream()
             startRemotePolling()
         }
@@ -1283,7 +1421,7 @@ final class AppModel {
         if mode == .iroh {
             guard let roomID = roomStore.preferredRoomID else {
                 if resumesCentralizedReplication { resumeCentralizedReplication() }
-                errorMessage = "Create or join an Iroh room before selecting Iroh mode."
+                errorMessage = String(localized: "Create or join an Iroh room before selecting Iroh mode.")
                 return
             }
             do {
@@ -1312,7 +1450,7 @@ final class AppModel {
     func createIrohRoom(name rawName: String) async -> Bool {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.unicodeScalars.count <= 64 else {
-            errorMessage = "Room name must be 64 characters or fewer."
+            errorMessage = String(localized: "Room name must be 64 characters or fewer.")
             return false
         }
         let resumesCentralizedReplication = replicationMode == .centralized
@@ -1331,6 +1469,7 @@ final class AppModel {
                 tasks: tasks,
                 durationsMs: timerState.settings.durationsMs,
                 autoStartBreaks: autoStartBreaks,
+                selectedTaskId: timerState.selectedTaskID?.uuidString.lowercased(),
                 hlcWallMs: timerState.hlcWallMs,
                 hlcCounter: timerState.hlcCounter
             )
@@ -1420,8 +1559,23 @@ final class AppModel {
         }
     }
 
-    func leaveIrohRoom() async {
-        guard replicationMode == .iroh else { return }
+    func requestIrohRoomLeave() {
+        guard replicationMode == .iroh, !isLeavingIrohRoom else { return }
+        isIrohRoomLeaveConfirmationPresented = true
+    }
+
+    func cancelIrohRoomLeave() {
+        guard !isLeavingIrohRoom else { return }
+        isIrohRoomLeaveConfirmationPresented = false
+    }
+
+    func confirmIrohRoomLeave() async {
+        guard replicationMode == .iroh,
+              isIrohRoomLeaveConfirmationPresented,
+              !isLeavingIrohRoom else { return }
+        isIrohRoomLeaveConfirmationPresented = false
+        isLeavingIrohRoom = true
+        defer { isLeavingIrohRoom = false }
         await irohService.stop()
         do {
             timerState = try roomStore.captureAndSuspendActiveRoom(from: timerState)
@@ -1728,7 +1882,9 @@ final class AppModel {
                             )
                         )
                     }
-                    state.settings.selectedPhase = breakPhase
+                    if !state.hasExplicitPhaseSelection {
+                        state.settings.selectedPhase = breakPhase
+                    }
                 }
             }
         }
@@ -1737,6 +1893,62 @@ final class AppModel {
         state.provisionalBreaks = unresolved.filter {
             pendingCommandIDs.contains($0.startCommandId)
         }
+    }
+
+    private func resolveProvisionalPhaseAdvances(
+        in state: inout PersistedTimerState,
+        acknowledgements: [Acknowledgement],
+        canonicalHistory: [HistoryItem],
+        canonicalTimer: CanonicalTimer?
+    ) {
+        let acknowledgementsByID = Dictionary(
+            uniqueKeysWithValues: acknowledgements.map { ($0.commandId, $0) }
+        )
+        let advances = state.provisionalPhaseAdvances
+        let earliestInvalidIndex = advances.indices.first { index in
+            let provisional = advances[index]
+            guard let acknowledgement = acknowledgementsByID[provisional.finishCommandId] else {
+                return false
+            }
+            let canonicalHistoryFinish = canonicalHistory.contains {
+                $0.timerId == provisional.sourceTimerId
+                    && $0.commandId == provisional.finishCommandId
+                    && $0.status == CanonicalTimer.Status.completed.rawValue
+            }
+            let canonicalTimerFinish = canonicalTimer.map {
+                $0.id == provisional.sourceTimerId
+                    && $0.status == .completed
+                    && $0.lastIntent?.type == .finish
+                    && $0.lastIntent?.commandId == provisional.finishCommandId
+            } ?? false
+            return acknowledgement.outcome == .rejected
+                || (!canonicalHistoryFinish && !canonicalTimerFinish)
+        }
+
+        var unresolvedReversed: [ProvisionalPhaseAdvance] = []
+        for index in advances.indices.reversed() {
+            let provisional = advances[index]
+            let invalidatedByDependency = earliestInvalidIndex.map { index >= $0 } ?? false
+            let acknowledgement = acknowledgementsByID[provisional.finishCommandId]
+            let shouldResolve = invalidatedByDependency || acknowledgement != nil
+            guard shouldResolve else {
+                unresolvedReversed.append(provisional)
+                continue
+            }
+            if invalidatedByDependency,
+               state.selectedPhaseGeneration == provisional.generation,
+               state.settings.selectedPhase == provisional.advancedPhase {
+                state.settings.selectedPhase = provisional.previousPhase
+                state.selectedPhaseGeneration = provisional.generation == 0
+                    ? .max
+                    : provisional.generation - 1
+            }
+        }
+        state.provisionalPhaseAdvances = unresolvedReversed.reversed()
+    }
+
+    private func nextPhaseGeneration(after generation: Int64) -> Int64 {
+        generation == .max ? 0 : generation + 1
     }
 
     private static func canonicalBreakPhase(
@@ -1873,11 +2085,7 @@ final class AppModel {
                 hlcCounter: updated.hlcCounter
             ))
             if type == .delete, updated.selectedTaskID == task.id {
-                if replicationMode == .iroh {
-                    updated.selectedTaskID = nil
-                } else {
-                    try appendSelectedTaskOperation(nil, at: occurredAt, to: &updated)
-                }
+                try appendSelectedTaskOperation(nil, at: occurredAt, to: &updated)
             }
         } catch {
             reportInvalidLocalClock()
@@ -1939,7 +2147,7 @@ final class AppModel {
                 try await operation()
             } catch {
                 if reportsError {
-                    self?.errorMessage = "Timer continues in Pomodorough, but its system alarm could not be updated. \(error.localizedDescription)"
+                    self?.errorMessage = String(localized: "Timer continues in Pomodorough, but its system alarm could not be updated. \(error.localizedDescription)")
                 }
             }
         }
@@ -2003,6 +2211,18 @@ final class AppModel {
         guard generation == sessionGeneration, isSignedIn else { return }
         guard timerState.hasValidPendingWireOperationsForResample else {
             reportInvalidPendingOperations()
+            return
+        }
+        if let previousUser = timerState.cachedUser, previousUser.id != user.id {
+            timerState.pendingAccountSwitchUser = user
+            timerState.bootstrapUser = nil
+            timerState.pendingBootstrapResolution = nil
+            historyResolutionState = .none
+            bootstrapSnapshot = nil
+            localHistoryResolutionCount = 0
+            remoteHistoryResolutionCount = 0
+            cancelRevisionStream()
+            persist()
             return
         }
         if replicationMode != .centralized {
@@ -2117,7 +2337,7 @@ final class AppModel {
             guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(nil)
             isOffline = false
-            errorMessage = "History setup paused because the server returned an invalid response. Local data remains on this device."
+            errorMessage = String(localized: "History setup paused because the server returned an invalid response. Local data remains on this device.")
         } catch AppError.historyReplacementUnavailable {
             guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(nil)
@@ -2245,7 +2465,7 @@ final class AppModel {
             guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(request.strategy)
             isOffline = false
-            errorMessage = "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved."
+            errorMessage = String(localized: "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved.")
         } catch AppError.historyReplacementUnavailable {
             guard ownsCentralizedReplication(generation: generation, modeGeneration: modeGeneration), isSignedIn else { return }
             historyResolutionState = .retryable(request.strategy)
@@ -2470,7 +2690,7 @@ final class AppModel {
     private func startRemotePolling() {
         guard replicationMode == .centralized,
               isSignedIn,
-              !isHistoryResolutionBlocking,
+              !isWorkspaceMutationBlocked,
               sessionVerification.allows(generation: sessionGeneration),
               revisionLifecycle.isActive,
               remotePollingTask == nil else { return }
@@ -2499,7 +2719,7 @@ final class AppModel {
     private func startRevisionStream() {
         guard replicationMode == .centralized,
               isSignedIn,
-              !isHistoryResolutionBlocking,
+              !isWorkspaceMutationBlocked,
               sessionVerification.allows(generation: sessionGeneration),
               let streamID = revisionLifecycle.begin() else { return }
         let generation = sessionGeneration
@@ -2624,9 +2844,42 @@ final class AppModel {
               roomStore.activeRoomID == roomID,
               let state = roomStore.activeRoomState else { return }
         let previous = activeTimer
-        timerState = state
+        var updated = state
+        if Self.advanceDefaultPhaseAfterIrohCompletion(in: &updated) {
+            do {
+                updated = try roomStore.captureLocalOperations(from: updated)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+        timerState = updated
         rebuildOptimisticState()
         reconcileAlarm(from: previous, to: activeTimer, at: effectivePhysicalNow() ?? now())
+    }
+
+    private static func advanceDefaultPhaseAfterIrohCompletion(
+        in state: inout PersistedTimerState
+    ) -> Bool {
+        guard !state.hasExplicitPhaseSelection,
+              let timer = state.canonicalTimer,
+              timer.status == .completed else { return false }
+        let nextPhase: TimerPhase
+        if timer.phase == .focus {
+            let completionDate = state.history.first {
+                $0.timerId == timer.id && $0.status == CanonicalTimer.Status.completed.rawValue
+            }.flatMap { $0.completedAt ?? $0.endedAt } ?? timer.anchorAt
+            nextPhase = TimerReducer.breakPhase(
+                afterCompletedFocusCount: completedFocusCount(
+                    in: state.history,
+                    on: completionDate
+                )
+            )
+        } else {
+            nextPhase = .focus
+        }
+        guard state.settings.selectedPhase != nextPhase else { return false }
+        state.settings.selectedPhase = nextPhase
+        return true
     }
 
     private func irohContext(roomID: String, secret: Data) -> IrohServiceContext {
@@ -2645,13 +2898,13 @@ final class AppModel {
     }
 
     private func reportInvalidLocalClock() {
-        conflictMessage = "Saved sequence or trusted-time state is invalid. No local change was saved."
+        conflictMessage = String(localized: "Saved sequence or trusted-time state is invalid. No local change was saved.")
         errorMessage = AppError.invalidLocalClock.localizedDescription
     }
 
     private func reportInvalidPendingOperations() {
-        conflictMessage = "Queued changes contain invalid sequence or trusted-time values."
-        errorMessage = "Sync paused because queued changes failed local validation. No queued changes were sent or modified."
+        conflictMessage = String(localized: "Queued changes contain invalid sequence or trusted-time values.")
+        errorMessage = String(localized: "Sync paused because queued changes failed local validation. No queued changes were sent or modified.")
         isOffline = false
         cancelRevisionStream()
     }

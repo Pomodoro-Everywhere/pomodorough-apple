@@ -80,10 +80,7 @@ struct HistoryResolutionView: View {
         .padding(20)
         .background(PomodoroughTheme.platform.opacity(0.94), in: .rect(cornerRadius: 22))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "History conflict. This device has \(model.localHistoryResolutionCount) completed entries. " +
-                "Your account has \(model.remoteHistoryResolutionCount)."
-        )
+        .accessibilityLabel("History conflict. This device has \(model.localHistoryResolutionCount) completed entries. Your account has \(model.remoteHistoryResolutionCount).")
     }
 
     private func resolutionButton(
@@ -143,11 +140,11 @@ struct HistoryResolutionView: View {
     private func confirmationMessage(for strategy: BootstrapResolutionStrategy) -> String {
         switch strategy {
         case .replaceRemote:
-            "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data."
+            String(localized: "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data.")
         case .keepRemote:
-            "This device's timer, history, tasks, settings, and queued changes will be replaced by account data."
+            String(localized: "This device's timer, history, tasks, settings, and queued changes will be replaced by account data.")
         case .merge:
-            "Queued local changes will be merged into account data. Conflicts or rejected changes are possible."
+            String(localized: "Queued local changes will be merged into account data. Conflicts or rejected changes are possible.")
         }
     }
 
@@ -203,9 +200,9 @@ struct HistoryResolutionView: View {
 
     private func retryMessage(for strategy: BootstrapResolutionStrategy?) -> String {
         guard let strategy else {
-            return "Remote history could not be checked. Local data remains unchanged."
+            return String(localized: "Remote history could not be checked. Local data remains unchanged.")
         }
-        return "Your \(strategy.title) request is saved exactly and local data remains unchanged."
+        return String(localized: "Your \(strategy.title) request is saved exactly and local data remains unchanged.")
     }
 }
 

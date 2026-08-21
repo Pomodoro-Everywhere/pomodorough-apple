@@ -4,7 +4,6 @@ struct TimerScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: AppModel
-    @State private var showsAccount = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -46,25 +45,7 @@ struct TimerScreen: View {
         .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Timer" : "Pomodorough")
         .inlineNavigationTitleIfSupported()
         .refreshable { await model.sync(force: true) }
-#if os(iOS)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                SyncToolbarStatus(model: model)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button("Account", systemImage: "person.crop.circle") { showsAccount = true }
-                    .accessibilityValue(model.syncLabel)
-                    .accessibilityActions {
-                        if model.isSignedIn && !model.isSyncing && !model.isHistoryResolutionBlocking {
-                            Button("Sync now") {
-                                Task { await model.sync(force: true) }
-                            }
-                        }
-                    }
-            }
-        }
-        .sheet(isPresented: $showsAccount) { AccountView(model: model) }
-#endif
+        .primaryRouteAccountToolbar(model: model)
     }
 }
 

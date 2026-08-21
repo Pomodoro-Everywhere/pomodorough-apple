@@ -53,6 +53,130 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func accountSwitchRequiresDurableConfirmationBeforeRemovingOrMutatingLocalWorkspace() async throws {
+        let scenario = "apple-api-coverage-model-sign-in"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let oldUser = User(id: "old-user", email: "old@example.com", name: "Old", avatarUrl: "")
+        let oldTask = try #require(FocusTask(title: "Previous account task"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = oldUser
+        state.tasks = [oldTask]
+        state.knownTasks = [oldTask]
+        state.history = [TestFixtures.history(
+            id: "previous-account-history",
+            durationMs: 25 * 60_000,
+            date: TestFixtures.anchor,
+            taskID: oldTask.id.uuidString.lowercased()
+        )]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: RecordingTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+
+        model.signIn()
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(model.user == TestFixtures.user)
+        #expect(model.tasks == [oldTask])
+        #expect(model.history.map(\.id) == ["previous-account-history"])
+        #expect(!model.addTask("Must remain blocked"))
+        let persistedData = try #require(defaults.data(forKey: "timer-state-v2"))
+        let persisted = try #require(JSONSerialization.jsonObject(with: persistedData) as? [String: Any])
+        let pendingUser = try #require(persisted["pendingAccountSwitchUser"] as? [String: Any])
+        #expect(pendingUser["id"] as? String == TestFixtures.user.id)
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy { $0.path != "/api/v1/sync" })
+
+        let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        #expect(relaunched.tasks == [oldTask])
+        #expect(!relaunched.addTask("Still blocked after relaunch"))
+    }
+
+    @Test @MainActor
+    func cancellingAccountSwitchKeepsPreviousWorkspaceAndClearsDurablePrompt() async throws {
+        let scenario = "apple-api-coverage-model-sign-in"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let oldUser = User(id: "old-user", email: "old@example.com", name: "Old", avatarUrl: "")
+        let oldTask = try #require(FocusTask(title: "Previous account task"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = oldUser
+        state.tasks = [oldTask]
+        state.knownTasks = [oldTask]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: RecordingTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        model.signIn()
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        await model.cancelAccountSwitch()
+
+        #expect(model.sessionState == .localOnly)
+        #expect(model.tasks == [oldTask])
+        #expect(try persistedState(defaults).pendingAccountSwitchUser == nil)
+        let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        #expect(relaunched.tasks == [oldTask])
+        #expect(relaunched.pendingAccountSwitchUser == nil)
+        #expect(relaunched.addTask("Local work resumes"))
+    }
+
+    @Test @MainActor
+    func confirmingAccountSwitchDurablyRemovesPreviousWorkspaceBeforeSyncing() async throws {
+        let scenario = "apple-api-coverage-model-sign-in"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let oldUser = User(id: "old-user", email: "old@example.com", name: "Old", avatarUrl: "")
+        let oldTask = try #require(FocusTask(title: "Previous account task"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = oldUser
+        state.tasks = [oldTask]
+        state.knownTasks = [oldTask]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: RecordingTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        model.signIn()
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        await model.confirmAccountSwitch()
+
+        let persisted = try persistedState(defaults)
+        #expect(persisted.cachedUser == TestFixtures.user)
+        #expect(persisted.pendingAccountSwitchUser == nil)
+        #expect(!persisted.knownTasks.contains(oldTask))
+        #expect(!model.tasks.contains(oldTask))
+        #expect(TestFixtures.recordedRequests(for: scenario).contains { $0.path == "/api/v1/sync" })
+        let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        #expect(!relaunched.tasks.contains(oldTask))
+        #expect(relaunched.pendingAccountSwitchUser == nil)
+    }
+
+    @Test @MainActor
     func timerCommandAllocationReachesMaxSafeSequenceExactly() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -568,6 +692,42 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func manualCompletionPreservesPhaseExplicitlySelectedDuringActiveTimer() throws {
+        let suiteName = "PomodoroughTests.ExplicitPhaseManual.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        model.setDurationMinutes(1, for: .focus)
+        model.start()
+        let focus = try #require(model.canonicalTimer)
+
+        model.selectPhase(.longBreak)
+        model.finish(at: focus.anchorAt.addingTimeInterval(60))
+
+        #expect(model.canonicalTimer?.status == .completed)
+        #expect(model.selectedPhase == .longBreak)
+    }
+
+    @Test @MainActor
+    func automaticCompletionPreservesExplicitPhaseWhileStartingComputedBreak() throws {
+        let suiteName = "PomodoroughTests.ExplicitPhaseAutomatic.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        model.setDurationMinutes(1, for: .focus)
+        model.autoStartBreaks = true
+        model.start()
+        let focus = try #require(model.canonicalTimer)
+
+        model.selectPhase(.longBreak)
+        model.completeIfNeeded(timerID: focus.id, at: focus.anchorAt.addingTimeInterval(60))
+
+        #expect(model.canonicalTimer?.status == .running)
+        #expect(model.canonicalTimer?.phase == .shortBreak)
+        #expect(model.selectedPhase == .longBreak)
+    }
+
+    @Test @MainActor
     func completionAdvancesThroughRepeatingPomodoroCycle() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -992,6 +1152,99 @@ struct IntegrationPositiveTests {
         #expect(request.contentType == nil)
         #expect(request.authorization == "Bearer logout-access")
         #expect(request.body == nil)
+    }
+
+    @Test func accountDeletionSendsExactConfirmationAndDeletesTokensAfterServerSuccess() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        try await client.deleteAccount(confirmation: "DELETE")
+
+        #expect(store.operations == [.load, .delete])
+        #expect(store.tokens == nil)
+        let request = try #require(TestFixtures.recordedRequests(for: scenario).first)
+        #expect(request.url == "https://pomodorough.egigoka.me/api/v1/account")
+        #expect(request.method == "DELETE")
+        #expect(request.accept == "application/json")
+        #expect(request.contentType == "application/json")
+        #expect(request.authorization == "Bearer delete-access")
+        #expect(request.body == Data(#"{"confirmation":"DELETE"}"#.utf8))
+    }
+
+    @Test func accountDeletionRemainsSuccessfulWhenLocalTokenCleanupFails() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(
+            tokens: TokenPair(
+                accessToken: "delete-access",
+                accessTokenExpiresAt: .distantFuture,
+                refreshToken: "delete-refresh",
+                refreshTokenExpiresAt: .distantFuture
+            ),
+            failures: [.delete]
+        )
+        let client = APIClient(session: session, keychain: store)
+        #expect(try await client.restoreTokens())
+
+        try await client.deleteAccount(confirmation: "DELETE")
+
+        #expect(store.operations == [.load, .delete])
+    }
+
+    @Test @MainActor
+    func successfulAccountDeletionClearsLocalAccountWorkspace() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let task = try #require(FocusTask(title: "Private local task"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        state.history = [TestFixtures.history(
+            id: "private-history",
+            durationMs: 25 * 60_000,
+            date: TestFixtures.anchor,
+            taskID: task.id.uuidString
+        )]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokens = TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        )
+        let identity = RecordingGoogleIdentityProvider()
+        let model = AppModel(
+            api: APIClient(session: session, keychain: RecordingTokenStore(tokens: tokens)),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: identity
+        )
+        await model.restore()
+        #expect(model.isSignedIn)
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(model.sessionState == .localOnly)
+        #expect(model.tasks.isEmpty)
+        #expect(model.history.isEmpty)
+        #expect(model.pendingChangeCount == 0)
+        #expect(identity.signOutCount == 1)
+        #expect(try persistedState(defaults).cachedUser == nil)
     }
 
     @Test @MainActor
@@ -2014,7 +2267,7 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
-    func differentEstablishedOwnerNeverOffersPreviousAccountHistory() async throws {
+    func differentEstablishedOwnerRequiresAccountSwitchConfirmationWithoutOfferingHistoryMerge() async throws {
         let scenario = "task-sync-different-owner"
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -2039,8 +2292,154 @@ struct IntegrationPositiveTests {
 
         #expect(model.sessionState == .signedIn(TestFixtures.user))
         #expect(model.historyResolutionState == .none)
-        #expect(model.history.map(\.id) == ["remote-history"])
+        #expect(model.pendingAccountSwitchUser == TestFixtures.user)
+        #expect(model.history.map(\.id) == ["old-account-history"])
+        #expect(!model.addTask("Must remain blocked"))
         #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy { $0.path != "/api/v1/bootstrap" })
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy { $0.path != "/api/v1/sync" })
+    }
+
+    @Test @MainActor
+    func activeTimerEditsApplyOnlyToNextTimer() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let activeTask = try #require(FocusTask(title: "Active assignment"))
+        let nextTask = try #require(FocusTask(title: "Next assignment"))
+        var state = PersistedTimerState.fresh()
+        state.tasks = [activeTask, nextTask]
+        state.knownTasks = state.tasks
+        state.selectedTaskID = activeTask.id
+        state.canonicalTimer = TestFixtures.timer(
+            status: .paused,
+            elapsed: 15_000,
+            timerID: "timer-next-settings",
+            taskID: activeTask.id.uuidString.lowercased()
+        )
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        let originalTimer = try #require(model.canonicalTimer)
+
+        model.selectedTaskID = nextTask.id
+        model.selectPhase(.longBreak)
+        model.setDurationMinutes(42, for: .focus)
+        model.autoStartBreaks = true
+
+        #expect(model.canonicalTimer == originalTimer)
+        #expect(model.task(forTimerID: originalTimer.id)?.id == activeTask.id)
+        #expect(model.selectedTaskID == nextTask.id)
+        #expect(model.selectedPhase == .longBreak)
+        #expect(model.durationMinutes(for: .focus) == 42)
+        #expect(model.autoStartBreaks)
+    }
+
+    @Test @MainActor
+    func rejectedFinishRollsBackDurableOptimisticPhaseAdvanceAfterRestart() async throws {
+        let scenario = "auto-start-finish-rejected-no-previous"
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.canonicalTimer = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            timerID: "timer-rejected-finish-phase"
+        )
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        let timer = try #require(offline.canonicalTimer)
+
+        offline.finish(at: timer.anchorAt.addingTimeInterval(timer.plannedDuration))
+
+        #expect(offline.selectedPhase == .shortBreak)
+        let optimisticState = try persistedState(defaults)
+        let provenance = try #require(optimisticState.provisionalPhaseAdvances.first)
+        #expect(provenance.sourceTimerId == timer.id)
+        #expect(provenance.previousPhase == .focus)
+        #expect(provenance.advancedPhase == .shortBreak)
+        #expect(provenance.generation == optimisticState.selectedPhaseGeneration)
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let restored = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await restored.restore()
+        await waitForSyncToDrain(restored)
+
+        #expect(restored.canonicalTimer?.status == .running)
+        #expect(restored.selectedPhase == .focus)
+    }
+
+    @Test @MainActor
+    func rejectedFinishUnwindsDependentPhaseAdvanceProvenance() async throws {
+        let scenario = "auto-start-provisional-finish-rejected"
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.autoStartBreaks = true
+        state.canonicalTimer = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            timerID: "timer-rejected-finish-chain"
+        )
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        let focus = try #require(offline.canonicalTimer)
+        offline.finish(at: focus.anchorAt.addingTimeInterval(focus.plannedDuration))
+        let provisionalBreak = try #require(offline.canonicalTimer)
+        offline.finish(at: provisionalBreak.anchorAt.addingTimeInterval(provisionalBreak.plannedDuration))
+        #expect(try persistedState(defaults).provisionalPhaseAdvances.count == 2)
+
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let restored = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await restored.restore()
+        await waitForSyncToDrain(restored)
+
+        let reconciled = try persistedState(defaults)
+        #expect(reconciled.provisionalPhaseAdvances.isEmpty)
+        #expect(restored.selectedPhase == .focus)
+    }
+
+    @Test @MainActor
+    func rejectedFinishDoesNotOverwriteLaterExplicitPhaseSelection() async throws {
+        let scenario = "auto-start-finish-rejected-no-previous"
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.canonicalTimer = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            timerID: "timer-rejected-finish-later-selection"
+        )
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        let timer = try #require(offline.canonicalTimer)
+        offline.finish(at: timer.anchorAt.addingTimeInterval(timer.plannedDuration))
+        offline.selectedPhase = .longBreak
+
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let restored = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await restored.restore()
+        await waitForSyncToDrain(restored)
+
+        #expect(restored.selectedPhase == .longBreak)
     }
 
     @Test @MainActor
@@ -2625,6 +3024,47 @@ struct IntegrationPositiveTests {
         #expect(!commandBatches[0].contains { $0["id"] as? String == provisional.startCommandId })
         #expect(commandBatches[1].contains { $0["id"] as? String == provisional.startCommandId })
         #expect(try persistedState(defaults).provisionalBreaks.isEmpty)
+    }
+
+    @Test @MainActor
+    func acceptedProvisionalBreakAcknowledgementPreservesLaterExplicitPhaseSelection() async throws {
+        let scenario = "auto-start-dependency-boundary"
+        let suiteName = "PomodoroughTests.ExplicitAcceptedBreak.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.autoStartBreaks = true
+        let focus = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            timerID: "timer-explicit-accepted-break"
+        )
+        state.canonicalTimer = focus
+        state.localTimerOwners[focus.id] = state.deviceId
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        offline.completeIfNeeded(
+            timerID: focus.id,
+            at: focus.anchorAt.addingTimeInterval(focus.plannedDuration)
+        )
+        offline.selectPhase(.longBreak)
+        #expect(try persistedState(defaults).hasExplicitPhaseSelection)
+
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let restored = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await restored.restore()
+        await waitForSyncToDrain(restored)
+
+        #expect(restored.canonicalTimer?.phase == .shortBreak)
+        #expect(restored.canonicalTimer?.status == .running)
+        #expect(restored.selectedPhase == .longBreak)
+        #expect(try persistedState(defaults).hasExplicitPhaseSelection)
     }
 
     @Test @MainActor

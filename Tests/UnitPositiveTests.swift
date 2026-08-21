@@ -6,6 +6,33 @@ import Testing
 
 @Suite("Unit Positive")
 struct UnitPositiveTests {
+    private struct ProtocolFixtureEnvelope: Decodable {
+        let formatVersion: Int
+        let syncResponse: SyncResponse
+    }
+
+    @Test func canonicalShippingFixtureUsesProductionSyncDecoder() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appending(path: "Fixtures/protocol-fixtures-v1.json")
+        let fixture = try JSONDecoder.api.decode(
+            ProtocolFixtureEnvelope.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+
+        #expect(fixture.formatVersion == 1)
+        #expect(fixture.syncResponse.revision == 5)
+        #expect(fixture.syncResponse.canonicalTimer?.id == "01a0219e-0800-7002-8000-000000000002")
+        #expect(fixture.syncResponse.tasks.map(\.title) == ["Ship release"])
+        #expect(fixture.syncResponse.acknowledgements.count == 1)
+        #expect(fixture.syncResponse.taskAcknowledgements.count == 1)
+        #expect(fixture.syncResponse.durationAcknowledgements.count == 1)
+        #expect(fixture.syncResponse.autoStartAcknowledgements.count == 1)
+        #expect(fixture.syncResponse.selectedTaskAcknowledgements.count == 1)
+        #expect(fixture.syncResponse.selectedTaskId == nil)
+        #expect(fixture.syncResponse.hasValidCanonicalSnapshot)
+    }
+
     @Test func keychainLoadReturnsMissingAndDecodesStoredTokens() throws {
         let missingSecurity = RecordingKeychainSecurity()
         #expect(try KeychainStore(security: missingSecurity).load() == nil)
@@ -1517,6 +1544,31 @@ struct UnitPositiveTests {
                 timeSpentMs: 15 * 60_000
             )
         ])
+    }
+
+    @Test func historyTaskContextDistinguishesResolvedDeletedAndUnassignedTasks() throws {
+        let retainedTask = try #require(FocusTask(title: "Retained title"))
+        let retained = TestFixtures.history(
+            id: "retained-task-history",
+            durationMs: 25 * 60_000,
+            date: TestFixtures.anchor,
+            taskID: retainedTask.id.uuidString
+        )
+        let deleted = TestFixtures.history(
+            id: "deleted-task-history",
+            durationMs: 25 * 60_000,
+            date: TestFixtures.anchor,
+            taskID: "11111111-2222-3333-4444-555555555555"
+        )
+        let unassigned = TestFixtures.history(
+            id: "unassigned-task-history",
+            durationMs: 25 * 60_000,
+            date: TestFixtures.anchor
+        )
+
+        #expect(HistoryAnalytics.taskContext(for: retained) { _ in retainedTask } == "Retained title")
+        #expect(HistoryAnalytics.taskContext(for: deleted) { _ in nil } == "Deleted task")
+        #expect(HistoryAnalytics.taskContext(for: unassigned) { _ in nil } == "Unassigned")
     }
 
     @Test func reducerAppliesCommandsInDeviceSequenceOrder() {

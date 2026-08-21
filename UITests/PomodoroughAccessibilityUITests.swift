@@ -56,6 +56,8 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         launchAndWaitForTimer(app)
 
         app.buttons["Account"].tap()
+        XCTAssertTrue(app.buttons["Network"].waitForExistence(timeout: 5))
+        app.buttons["Network"].tap()
 
         XCTAssertTrue(elements(labelled: "Network replication", in: app).firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["On device"].exists)
@@ -69,9 +71,48 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         )).firstMatch.exists)
     }
 
+    func testEveryPrimaryRouteExposesAccountAndNetworkHierarchy() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+
+        for route in ["Timer", "Tasks", "Pattern", "Arrivals"] {
+            app.buttons[route].tap()
+            XCTAssertTrue(app.buttons["Account"].waitForExistence(timeout: 5), "Missing Account on \(route)")
+            app.buttons["Account"].tap()
+            XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Network"].exists)
+            XCTAssertTrue(app.staticTexts["Timer alert limits"].exists)
+            app.buttons["Done"].tap()
+            XCTAssertFalse(app.navigationBars["Account"].waitForExistence(timeout: 1))
+        }
+    }
+
+    func testForcedRTLTestConfigurationMirrorsAndKeepsEnglishRoutesReachable() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        app.launchArguments += [
+            "-NSForceRightToLeftWritingDirection", "YES",
+            "-AppleTextDirection", "YES",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Account"].waitForExistence(timeout: 10))
+        for route in ["Timer", "Tasks", "Pattern", "Arrivals"] {
+            XCTAssertTrue(app.buttons[route].exists, "Missing RTL route \(route)")
+        }
+        XCTAssertGreaterThan(app.buttons["Timer"].frame.midX, app.buttons["Arrivals"].frame.midX)
+    }
+
     private func makeApplication() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-permission-introduction-completed-v1", "YES"]
+        app.launchArguments = [
+            "-permission-introduction-completed-v1", "YES",
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
         app.launchEnvironment["POMODOROUGH_UI_TEST_RESET"] = "1"
         return app
     }

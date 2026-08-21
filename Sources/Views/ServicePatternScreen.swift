@@ -14,8 +14,9 @@ struct ServicePatternScreen: View {
                 .frame(maxWidth: .infinity)
         }
         .background(TimerBackdrop())
-        .navigationTitle("Service pattern")
+        .navigationTitle("Pattern")
         .inlineNavigationTitleIfSupported()
+        .primaryRouteAccountToolbar(model: model)
     }
 }
 

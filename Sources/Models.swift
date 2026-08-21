@@ -427,17 +427,17 @@ enum TimerPhase: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .focus: "Focus"
-        case .shortBreak: "Short break"
-        case .longBreak: "Long break"
+        case .focus: String(localized: "Focus")
+        case .shortBreak: String(localized: "Short break")
+        case .longBreak: String(localized: "Long break")
         }
     }
 
     var routeLabel: String {
         switch self {
-        case .focus: "Work"
-        case .shortBreak: "Reset"
-        case .longBreak: "Recover"
+        case .focus: String(localized: "Work")
+        case .shortBreak: String(localized: "Reset")
+        case .longBreak: String(localized: "Recover")
         }
     }
 
@@ -684,9 +684,9 @@ enum BootstrapResolutionStrategy: String, Codable, Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .keepRemote: "Keep Remote"
-        case .replaceRemote: "Keep Local"
-        case .merge: "Keep Both"
+        case .keepRemote: String(localized: "Keep Remote")
+        case .replaceRemote: String(localized: "Keep Local")
+        case .merge: String(localized: "Keep Both")
         }
     }
 }
@@ -749,10 +749,36 @@ struct BootstrapResolveRequest: Codable, Equatable, Sendable {
     }
 }
 
+@propertyWrapper
+struct EmptyStringIfMissing: Codable, Equatable, Sendable {
+    var wrappedValue: String
+
+    init(wrappedValue: String) {
+        self.wrappedValue = wrappedValue
+    }
+
+    init(from decoder: Decoder) throws {
+        wrappedValue = try decoder.singleValueContainer().decode(String.self)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decode(_ type: EmptyStringIfMissing.Type, forKey key: Key) throws -> EmptyStringIfMissing {
+        guard contains(key) else { return EmptyStringIfMissing(wrappedValue: "") }
+        guard let value = try decodeIfPresent(String.self, forKey: key) else {
+            throw DecodingError.valueNotFound(
+                String.self,
+                .init(codingPath: codingPath + [key], debugDescription: "Acknowledgement reason cannot be null.")
+            )
+        }
+        return EmptyStringIfMissing(wrappedValue: value)
+    }
+}
+
 struct Acknowledgement: Codable, Equatable, Sendable {
     let commandId: String
     let outcome: AcknowledgementOutcome
-    let reason: String
+    @EmptyStringIfMissing var reason: String
 }
 
 enum TaskOperationType: String, Codable, Sendable {
@@ -782,7 +808,7 @@ struct TaskOperation: Codable, Identifiable, Equatable, Sendable {
 struct TaskAcknowledgement: Codable, Equatable, Sendable {
     let operationId: String
     let outcome: AcknowledgementOutcome
-    let reason: String
+    @EmptyStringIfMissing var reason: String
 }
 
 struct DurationOperation: Codable, Identifiable, Equatable, Sendable {
@@ -814,7 +840,7 @@ struct DurationOperation: Codable, Identifiable, Equatable, Sendable {
 struct DurationAcknowledgement: Codable, Equatable, Sendable {
     let operationId: String
     let outcome: AcknowledgementOutcome
-    let reason: String
+    @EmptyStringIfMissing var reason: String
 }
 
 struct AutoStartOperation: Codable, Identifiable, Equatable, Sendable {
@@ -849,7 +875,7 @@ enum AcknowledgementOutcome: String, Codable, Equatable, Sendable {
 struct AutoStartAcknowledgement: Codable, Equatable, Sendable {
     let operationId: UUID
     let outcome: AcknowledgementOutcome
-    let reason: String
+    @EmptyStringIfMissing var reason: String
 }
 
 struct SelectedTaskOperation: Codable, Identifiable, Equatable, Sendable {
@@ -881,7 +907,7 @@ struct SelectedTaskOperation: Codable, Identifiable, Equatable, Sendable {
 struct SelectedTaskAcknowledgement: Codable, Equatable, Sendable {
     let operationId: UUID
     let outcome: AcknowledgementOutcome
-    let reason: String
+    @EmptyStringIfMissing var reason: String
 }
 
 struct ProvisionalBreak: Codable, Equatable, Sendable {
@@ -889,6 +915,14 @@ struct ProvisionalBreak: Codable, Equatable, Sendable {
     let finishCommandId: String
     let breakTimerId: String
     let startCommandId: String
+}
+
+struct ProvisionalPhaseAdvance: Codable, Equatable, Sendable {
+    let sourceTimerId: String
+    let finishCommandId: String
+    let previousPhase: TimerPhase
+    let advancedPhase: TimerPhase
+    let generation: Int64
 }
 
 enum AcknowledgementSet {
@@ -1083,6 +1117,15 @@ struct CompletedFocusSummary: Identifiable, Equatable, Sendable {
 }
 
 enum HistoryAnalytics {
+    static func taskContext(
+        for item: HistoryItem,
+        taskForItem: (HistoryItem) -> FocusTask?
+    ) -> String {
+        if let task = taskForItem(item) { return task.title }
+        let taskID = item.taskId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return taskID?.isEmpty == false ? String(localized: "Deleted task") : String(localized: "Unassigned")
+    }
+
     static func completedFocusSummaries(
         from history: [HistoryItem],
         taskIDForItem: (HistoryItem) -> String? = { $0.taskId },
@@ -1096,7 +1139,9 @@ enum HistoryAnalytics {
             let id = task?.id.uuidString.lowercased()
                 ?? unresolvedTaskID.flatMap { $0.isEmpty ? nil : "task:\($0.lowercased())" }
                 ?? "unassigned"
-            let title = task?.title ?? (id == "unassigned" ? "Unassigned" : "Deleted task")
+            let title = task?.title ?? (id == "unassigned"
+                ? String(localized: "Unassigned")
+                : String(localized: "Deleted task"))
             let current = totals[id] ?? (title, 0, 0)
             totals[id] = (current.title, current.count + 1, current.timeMs + item.plannedDurationMs)
         }
@@ -1302,6 +1347,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var autoStartBreaks: Bool
     var localTimerOwners: [String: String]
     var provisionalBreaks: [ProvisionalBreak]
+    var provisionalPhaseAdvances: [ProvisionalPhaseAdvance]
+    var selectedPhaseGeneration: Int64
+    var hasExplicitPhaseSelection: Bool
     var canonicalTimer: CanonicalTimer?
     var history: [HistoryItem]
     var tasks: [FocusTask]
@@ -1311,6 +1359,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var hasCorruptPendingOperations: Bool
     var settings: TimerSettings
     var cachedUser: User?
+    var pendingAccountSwitchUser: User?
     var bootstrapUser: User?
     var pendingBootstrapResolution: BootstrapResolveRequest?
 
@@ -1337,6 +1386,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             autoStartBreaks: false,
             localTimerOwners: [:],
             provisionalBreaks: [],
+            provisionalPhaseAdvances: [],
+            selectedPhaseGeneration: 0,
+            hasExplicitPhaseSelection: false,
             canonicalTimer: nil,
             history: [],
             tasks: [],
@@ -1346,6 +1398,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             hasCorruptPendingOperations: false,
             settings: TimerSettings(),
             cachedUser: nil,
+            pendingAccountSwitchUser: nil,
             bootstrapUser: nil,
             pendingBootstrapResolution: nil
         )
@@ -1375,6 +1428,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             lastUuidV7 = existingLastUuidV7
         }
         cachedUser = authenticatedUser
+        pendingAccountSwitchUser = nil
         bootstrapUser = nil
         pendingBootstrapResolution = nil
     }
@@ -1385,9 +1439,10 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case serverTimeAnchorUptime, lastTrustedTimeMs, lastUuidV7, localCommandDates
         case pendingCommands, pendingTaskOperations, pendingDurationOperations, pendingAutoStartOperations
         case pendingSelectedTaskOperations
-        case autoStartBreaks, localTimerOwners, provisionalBreaks, canonicalTimer, history
+        case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
+        case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
         case tasks, knownTasks, selectedTaskID, legacyTaskAssignments, hasCorruptPendingOperations
-        case settings, cachedUser
+        case settings, cachedUser, pendingAccountSwitchUser
         case bootstrapUser, pendingBootstrapResolution
     }
 
@@ -1413,6 +1468,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         autoStartBreaks: Bool,
         localTimerOwners: [String: String],
         provisionalBreaks: [ProvisionalBreak],
+        provisionalPhaseAdvances: [ProvisionalPhaseAdvance] = [],
+        selectedPhaseGeneration: Int64 = 0,
+        hasExplicitPhaseSelection: Bool = false,
         canonicalTimer: CanonicalTimer?,
         history: [HistoryItem],
         tasks: [FocusTask],
@@ -1422,6 +1480,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         hasCorruptPendingOperations: Bool = false,
         settings: TimerSettings,
         cachedUser: User?,
+        pendingAccountSwitchUser: User? = nil,
         bootstrapUser: User?,
         pendingBootstrapResolution: BootstrapResolveRequest?
     ) {
@@ -1446,6 +1505,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self.autoStartBreaks = autoStartBreaks
         self.localTimerOwners = localTimerOwners
         self.provisionalBreaks = provisionalBreaks
+        self.provisionalPhaseAdvances = provisionalPhaseAdvances
+        self.selectedPhaseGeneration = selectedPhaseGeneration
+        self.hasExplicitPhaseSelection = hasExplicitPhaseSelection
         self.canonicalTimer = canonicalTimer
         self.history = history
         self.tasks = tasks
@@ -1455,6 +1517,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self.hasCorruptPendingOperations = hasCorruptPendingOperations
         self.settings = settings
         self.cachedUser = cachedUser
+        self.pendingAccountSwitchUser = pendingAccountSwitchUser
         self.bootstrapUser = bootstrapUser
         self.pendingBootstrapResolution = pendingBootstrapResolution
     }
@@ -1513,6 +1576,18 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
             [ProvisionalBreak].self,
             forKey: .provisionalBreaks
         ) ?? []
+        provisionalPhaseAdvances = try values.decodeIfPresent(
+            [ProvisionalPhaseAdvance].self,
+            forKey: .provisionalPhaseAdvances
+        ) ?? []
+        selectedPhaseGeneration = try values.decodeIfPresent(
+            Int64.self,
+            forKey: .selectedPhaseGeneration
+        ) ?? 0
+        hasExplicitPhaseSelection = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .hasExplicitPhaseSelection
+        ) ?? false
         canonicalTimer = try values.decodeIfPresent(CanonicalTimer.self, forKey: .canonicalTimer)
         history = try values.decode([HistoryItem].self, forKey: .history)
         tasks = try values.decodeIfPresent([FocusTask].self, forKey: .tasks) ?? []
@@ -1521,6 +1596,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         legacyTaskAssignments = try values.decodeIfPresent([String: UUID].self, forKey: .legacyTaskAssignments) ?? [:]
         settings = try values.decodeIfPresent(TimerSettings.self, forKey: .settings) ?? TimerSettings()
         cachedUser = try values.decodeIfPresent(User.self, forKey: .cachedUser)
+        pendingAccountSwitchUser = try values.decodeIfPresent(User.self, forKey: .pendingAccountSwitchUser)
         bootstrapUser = try values.decodeIfPresent(User.self, forKey: .bootstrapUser)
         pendingBootstrapResolution = try values.decodeIfPresent(
             BootstrapResolveRequest.self,
@@ -2623,17 +2699,17 @@ enum AppError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .configuration: "Google Sign-In is not configured for this build."
-        case .missingPresentationAnchor: "No window is available for Google Sign-In."
-        case .missingIDToken: "Google did not return an identity token."
-        case .unauthorized: "Session expired. Sign in again."
+        case .configuration: String(localized: "Google Sign-In is not configured for this build.")
+        case .missingPresentationAnchor: String(localized: "No window is available for Google Sign-In.")
+        case .missingIDToken: String(localized: "Google did not return an identity token.")
+        case .unauthorized: String(localized: "Session expired. Sign in again.")
         case .conflict(let message): message
         case .server(let message): message
         case .historyReplacementUnavailable:
-            "Keeping local history requires a server update. Your saved choice and local data remain on this device."
-        case .invalidResponse: "Server returned an invalid response."
+            String(localized: "Keeping local history requires a server update. Your saved choice and local data remain on this device.")
+        case .invalidResponse: String(localized: "Server returned an invalid response.")
         case .invalidLocalClock:
-            "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified."
+            String(localized: "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified.")
         }
     }
 }

@@ -54,6 +54,7 @@ struct TasksScreen: View {
         .background(TimerBackdrop())
         .navigationTitle("Tasks")
         .inlineNavigationTitleIfSupported()
+        .primaryRouteAccountToolbar(model: model)
     }
 
     private var summaries: [TaskDailySummary] {

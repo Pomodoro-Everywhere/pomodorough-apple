@@ -339,7 +339,7 @@ struct IntegrationNegativeTests {
         model.resume(at: timer.anchorAt.addingTimeInterval(5))
         model.clear()
 
-        #expect(model.selectedPhase == .focus)
+        #expect(model.selectedPhase == .longBreak)
         #expect(model.durationMinutes(for: .focus) == 90)
         #expect(model.canonicalTimer == timer)
         #expect(model.canonicalTimer?.plannedDurationMs == Int64(25 * 60_000))
@@ -363,7 +363,7 @@ struct IntegrationNegativeTests {
 
         model.selectedTaskID = review.id
 
-        #expect(model.selectedTaskID == build.id)
+        #expect(model.selectedTaskID == review.id)
         #expect(model.task(forTimerID: timer.id) == build)
     }
 
@@ -407,7 +407,7 @@ struct IntegrationNegativeTests {
         #expect(model.pendingDurationOperationCount == 1)
         #expect(model.durationMinutes(for: .focus) == 30)
         #expect(model.errorMessage?.contains("Sync paused") == true)
-        #expect(model.errorMessage?.contains("1 queued changes remain") == true)
+        #expect(model.errorMessage?.contains("1 queued change remains") == true)
         #expect(!model.isOffline)
     }
 
@@ -878,7 +878,7 @@ struct IntegrationNegativeTests {
         #expect(model.pendingChangeCount == 1)
         #expect(model.tasks == [task])
         #expect(model.history.isEmpty)
-        #expect(model.errorMessage?.contains("1 queued changes remain") == true)
+        #expect(model.errorMessage?.contains("1 queued change remains") == true)
         let data = try #require(defaults.data(forKey: "timer-state-v2"))
         let persisted = try JSONDecoder.api.decode(PersistedTimerState.self, from: data)
         #expect(persisted.pendingTaskOperations == [operation])

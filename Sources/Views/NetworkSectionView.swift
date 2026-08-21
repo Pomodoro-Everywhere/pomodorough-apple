@@ -34,6 +34,20 @@ struct NetworkSectionView: View {
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Network replication")
+        .confirmationDialog(
+            "Leave this Iroh room?",
+            isPresented: Binding(
+                get: { model.isIrohRoomLeaveConfirmationPresented },
+                set: { if !$0 { model.cancelIrohRoomLeave() } }
+            )
+        ) {
+            Button("Leave room", role: .destructive) {
+                Task { await model.confirmIrohRoomLeave() }
+            }
+            Button("Cancel", role: .cancel) { model.cancelIrohRoomLeave() }
+        } message: {
+            Text("Leaving restores the workspace you used before joining. The room's retained operation log stays saved on this device so you can return later.")
+        }
     }
 
     private var header: some View {
@@ -197,9 +211,10 @@ struct NetworkSectionView: View {
                         .buttonStyle(.bordered)
                     if model.replicationMode == .iroh {
                         Button("Leave room", role: .destructive) {
-                            Task { await model.leaveIrohRoom() }
+                            model.requestIrohRoomLeave()
                         }
                         .buttonStyle(.bordered)
+                        .disabled(model.isLeavingIrohRoom)
                     }
                 }
             }

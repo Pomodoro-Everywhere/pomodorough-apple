@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HistoryRow: View {
     let item: HistoryItem
+    let taskContext: String
 
     var body: some View {
         HStack(spacing: 14) {
@@ -13,6 +14,9 @@ struct HistoryRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.phase.title).font(.headline)
+                Text(taskContext)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 HStack {
                     Text(item.status.capitalized)
                     if let date = item.date { Text(date, format: .dateTime.month(.abbreviated).day().hour().minute()) }
@@ -28,7 +32,7 @@ struct HistoryRow: View {
                 .background(PomodoroughTheme.platform, in: .rect(cornerRadius: 7))
         }
         .accessibilityRepresentation {
-            Text("\(item.phase.title), \(item.status), \(item.minutes) minutes")
+            Text("\(item.phase.title), \(taskContext), \(item.status), \(item.minutes) minutes")
                 .accessibilityValue(
                     item.date?.formatted(date: .abbreviated, time: .shortened) ?? "Time not recorded"
                 )
@@ -38,7 +42,7 @@ struct HistoryRow: View {
 
 #if DEBUG
 #Preview {
-    HistoryRow(item: PreviewFixtures.history[0])
+    HistoryRow(item: PreviewFixtures.history[0], taskContext: "Preview task")
         .padding()
 }
 #endif

@@ -237,6 +237,6 @@ struct KeychainError: LocalizedError, Equatable {
     let message: String
 
     var errorDescription: String? {
-        return "Keychain \(operation) failed (OSStatus \(status)): \(message)"
+        return String(localized: "Keychain \(operation) failed (OSStatus \(status)): \(message)")
     }
 }

@@ -28,7 +28,7 @@ enum TimerAlarmError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .authorizationDenied:
-            "Allow notifications or alarms in Settings to receive timer alerts when Pomodorough is not open."
+            String(localized: "Allow notifications or alarms in Settings to receive timer alerts when Pomodorough is not open.")
         }
     }
 }
@@ -97,7 +97,7 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
 #if os(iOS) || os(macOS)
         let content = UNMutableNotificationContent()
         content.title = TimerAlarmScheduler.title(for: phase)
-        content.body = "Your next Pomodorough interval is ready."
+        content.body = String(localized: "Your next Pomodorough interval is ready.")
         content.sound = .default
 #if os(macOS)
         content.categoryIdentifier = MacTimerNotificationCoordinator.categoryIdentifier
@@ -449,13 +449,13 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
 
     nonisolated static func title(for phase: TimerPhase) -> String {
         switch phase {
-        case .focus: "Focus complete"
-        case .shortBreak: "Short break complete"
-        case .longBreak: "Long break complete"
+        case .focus: String(localized: "Focus complete")
+        case .shortBreak: String(localized: "Short break complete")
+        case .longBreak: String(localized: "Long break complete")
         }
     }
 
-    nonisolated static var stopSoundTitle: String { "Stop sound" }
+    nonisolated static var stopSoundTitle: String { String(localized: "Stop sound") }
 }
 
 #if os(iOS)

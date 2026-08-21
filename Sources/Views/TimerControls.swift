@@ -57,9 +57,9 @@ struct TimerControls: View {
     }
 
     private var primaryAccessibilityTitle: String {
-        if model.canonicalTimer?.status == .running { return "Pause" }
-        if model.canonicalTimer?.status == .paused { return "Resume" }
-        return "Start \(model.selectedPhase.title.lowercased())"
+        if model.canonicalTimer?.status == .running { return String(localized: "Pause") }
+        if model.canonicalTimer?.status == .paused { return String(localized: "Resume") }
+        return String(localized: "Start \(model.selectedPhase.title.lowercased())")
     }
 
     private var primaryAccessibilityAction: () -> Void {
@@ -70,7 +70,7 @@ struct TimerControls: View {
 
     private var activeTaskAccessibilityValue: String {
         guard let timer = model.canonicalTimer else { return "" }
-        return "Focus task: \(model.task(forTimerID: timer.id)?.title ?? "No task")"
+        return String(localized: "Focus task: \(model.task(forTimerID: timer.id)?.title ?? String(localized: "No task"))")
     }
 
     @ViewBuilder

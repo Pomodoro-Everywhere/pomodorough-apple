@@ -17,13 +17,13 @@ struct HistoryScreen: View {
                 }
             } else {
                 List(model.history) { item in
-                    HistoryRow(item: item)
+                    HistoryRow(item: item, taskContext: model.taskContext(for: item))
                 }
                 .listStyle(.plain)
                 .refreshable { await model.sync(force: true) }
             }
         }
-        .navigationTitle("Recent arrivals")
+        .navigationTitle("Arrivals")
         .toolbar {
             if !model.history.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
@@ -41,6 +41,7 @@ struct HistoryScreen: View {
                 }
             }
         }
+        .primaryRouteAccountToolbar(model: model)
     }
 }
 

@@ -32,10 +32,17 @@ struct MainContainer: View {
             }
                 .tabItem { Label("Arrivals", systemImage: "clock.arrow.circlepath") }
                 .tag(MainTab.history)
+            NavigationStack {
+                NetworkScreen(model: model)
+            }
+                .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
+                .tag(MainTab.network)
         }
         .animation(.default, value: selectedTab)
         .inspector(isPresented: $showsSettings) {
-            ServicePatternScreen(model: model)
+            NavigationStack {
+                ServicePatternScreen(model: model)
+            }
                 .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
         }
         .frame(minWidth: showsSettings ? 896 : 516)
@@ -44,6 +51,8 @@ struct MainContainer: View {
                 Button("Settings", systemImage: "slider.horizontal.3") {
                     toggleSettings()
                 }
+                .accessibilityValue("Pattern")
+                .help("Settings, Pattern")
                 AccountSyncToolbarButton(model: model, showsAccount: $showsAccount)
             }
         }
@@ -51,6 +60,22 @@ struct MainContainer: View {
 #endif
         }
         .disabled(model.isHistoryResolutionBlocking)
+        .confirmationDialog(
+            "Switch to \(model.pendingAccountSwitchUser?.email ?? "this account")?",
+            isPresented: Binding(
+                get: { model.pendingAccountSwitchUser != nil },
+                set: { _ in }
+            )
+        ) {
+            Button("Switch and remove local data", role: .destructive) {
+                Task { await model.confirmAccountSwitch() }
+            }
+            Button("Cancel account switch", role: .cancel) {
+                Task { await model.cancelAccountSwitch() }
+            }
+        } message: {
+            Text("Switching removes this device's previous timer, tasks, history, settings, and queued changes. Cancel keeps the previous workspace on this device and signs out of the new account.")
+        }
     }
 
 #if os(macOS)

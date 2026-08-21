@@ -25,8 +25,12 @@ struct TimerDial: View {
     }
 
     private static func timeText(_ duration: TimeInterval) -> String {
-        let seconds = max(0, Int(ceil(duration)))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+        let seconds = max(0, Int64(ceil(duration)))
+        return String.localizedStringWithFormat(
+            String(localized: "timer.time.minutes_seconds", defaultValue: "%1$02lld:%2$02lld"),
+            seconds / 60,
+            seconds % 60
+        )
     }
 }
 

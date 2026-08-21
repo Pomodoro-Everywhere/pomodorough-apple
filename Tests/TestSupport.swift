@@ -1306,6 +1306,12 @@ final class StubURLProtocol: URLProtocol {
         case ("apple-api-coverage-logout-server-failure", "/api/v1/auth/logout"):
             statusCode = 503
             body = Data(#"{"error":"Logout unavailable."}"#.utf8)
+        case ("apple-api-coverage-account-delete-success", "/api/v1/me"):
+            statusCode = 200
+            body = Self.meBody
+        case ("apple-api-coverage-account-delete-success", "/api/v1/account"):
+            statusCode = 204
+            body = Data()
         case ("apple-api-coverage-bootstrap-nonempty-timer-ack", "/api/v1/bootstrap"),
              ("apple-api-coverage-bootstrap-nonempty-task-ack", "/api/v1/bootstrap"),
              ("apple-api-coverage-bootstrap-nonempty-duration-ack", "/api/v1/bootstrap"),

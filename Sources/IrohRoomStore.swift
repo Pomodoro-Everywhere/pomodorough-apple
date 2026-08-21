@@ -661,6 +661,13 @@ final class IrohRoomStore: @unchecked Sendable {
                 payload: .autoStart(IrohAutoStartOperation($0))
             )
         }
+        records += stateToCapture.pendingSelectedTaskOperations.map {
+            IrohOperationRecord(
+                domain: .selectedTask,
+                deviceId: stateToCapture.deviceId,
+                payload: .selectedTask(IrohSelectedTaskOperation($0))
+            )
+        }
         let existingWorkspace = state.rooms[index]
         for record in records {
             guard let existing = existingWorkspace.records.first(where: {
@@ -848,6 +855,7 @@ enum IrohRoomProjection {
         var tasks = genesis.tasks
         var durations = genesis.durationsMs
         var autoStartBreaks = genesis.autoStartBreaks
+        var selectedTaskID = genesis.selectedTaskId
         var knownTasks = Dictionary(uniqueKeysWithValues: genesis.tasks.map { ($0.id, $0) })
         let genesisDeviceID = workspace.records.first {
             $0.record.domain == .genesis && $0.record.id == "genesis"
@@ -906,6 +914,8 @@ enum IrohRoomProjection {
                 durations = DurationReducer.applying([operation], to: durations)
             case .autoStart(let operation):
                 autoStartBreaks = operation.enabled
+            case .selectedTask(let operation):
+                selectedTaskID = operation.taskId
             }
         }
 
@@ -927,6 +937,7 @@ enum IrohRoomProjection {
         state.knownTasks = Array(knownTasks.values)
         state.settings.durationsMs = durations
         state.autoStartBreaks = autoStartBreaks
+        state.selectedTaskID = selectedTaskID.flatMap(UUID.init(uuidString:))
         state.pendingCommands = []
         state.localCommandDates = [:]
         state.pendingTaskOperations = []
@@ -934,9 +945,6 @@ enum IrohRoomProjection {
         state.pendingAutoStartOperations = []
         state.pendingSelectedTaskOperations = []
         state.provisionalBreaks = []
-        if let selected = state.selectedTaskID, !tasks.contains(where: { $0.id == selected }) {
-            state.selectedTaskID = nil
-        }
         let maximum = ([
             (genesis.hlcWallMs, genesis.hlcCounter),
             (state.hlcWallMs, state.hlcCounter),

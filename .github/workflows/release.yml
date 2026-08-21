@@ -16,6 +16,8 @@ env:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ inputs.tag || github.ref }}
@@ -36,6 +38,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Check documentation links
+        run: python3 scripts/check_docs.py
+
+      - name: Check interface and localization contract
+        run: |
+          python3 -m unittest discover -s scripts/tests -v
+          python3 scripts/check_interface_contract.py
+
+      - name: Check cross-client protocol fixture
+        run: python3 scripts/check_protocol_fixture.py
+
+      - name: Check workflow action pins
+        run: python3 scripts/check_workflow_pins.py
 
       - name: Verify manual release source
         if: github.event_name == 'workflow_dispatch'
@@ -264,6 +280,51 @@ jobs:
           cd "$RELEASE_DIR"
           shasum -a 256 ./*.ipa ./*.zip > SHA256SUMS.txt
 
+      - name: Clean-install and launch packaged iOS simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RELEASE_DIR/Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
+          extracted="$RUNNER_TEMP/ios-simulator-release-smoke"
+          rm -rf "$extracted"
+          mkdir -p "$extracted"
+          ditto -x -k "$archive" "$extracted"
+          app="$extracted/Pomodorough.app"
+          test -d "$app"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          device_id="$(xcrun simctl list devices available --json | python3 -c 'import json,sys; data=json.load(sys.stdin)["devices"]; print(next(device["udid"] for runtime in data.values() for device in runtime if device["name"] == "iPhone 17"))')"
+          xcrun simctl boot "$device_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$device_id" -b
+          xcrun simctl uninstall "$device_id" "$bundle_id" 2>/dev/null || true
+          xcrun simctl install "$device_id" "$app"
+          xcrun simctl launch "$device_id" "$bundle_id"
+          xcrun simctl terminate "$device_id" "$bundle_id"
+
+      - name: Export SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ env.RELEASE_DIR }}/pomodorough-apple.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Refresh checksums with SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_DIR"
+          shasum -a 256 ./*.ipa ./*.zip ./*.spdx.json > SHA256SUMS.txt
+
+      - name: Attest artifact provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            /tmp/PomodoroughRelease/*.ipa
+            /tmp/PomodoroughRelease/*.zip
+            /tmp/PomodoroughRelease/*.spdx.json
+            /tmp/PomodoroughRelease/SHA256SUMS.txt
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -275,21 +336,17 @@ jobs:
             "Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
             "Pomodorough-iOS-unsigned-${RELEASE_TAG}.ipa"
             "Pomodorough-macOS-unsigned-non-notarized-${RELEASE_TAG}.zip"
+            "pomodorough-apple.spdx.json"
           )
           expected_release_assets=("${expected_assets[@]}" "SHA256SUMS.txt")
 
           verify_release_assets() {
-            published_dir="$RUNNER_TEMP/published-release"
-            rm -rf "$published_dir"
-            mkdir -p "$published_dir"
+            published_dir="$(mktemp -d "$RUNNER_TEMP/published-release.XXXXXX")"
             gh release download "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --dir "$published_dir"
             printf '%s\n' "${expected_release_assets[@]}" | sort > "$RUNNER_TEMP/expected-assets.txt"
-            gh release view "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json assets \
-              --jq '.assets[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"
+            find "$published_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/actual-assets.txt"
             cmp "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
             (
               cd "$published_dir"
@@ -297,6 +354,10 @@ jobs:
               printf '%s\n' "${expected_assets[@]}" | sort > expected-manifest-assets.txt
               awk '{print $2}' SHA256SUMS.txt | sed -e 's|^\*||' -e 's|^\./||' | sort > actual-manifest-assets.txt
               cmp expected-manifest-assets.txt actual-manifest-assets.txt
+              for asset in "${expected_assets[@]}"; do
+                gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
+              done
+              gh attestation verify SHA256SUMS.txt --repo "$GITHUB_REPOSITORY"
             )
           }
 

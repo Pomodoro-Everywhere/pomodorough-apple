@@ -133,6 +133,12 @@ sign-in, pending operations synchronize immediately when possible and remain
 queued during network loss. SSE revision events prompt low-latency pulls for
 changes made by another client; HTTP synchronization remains authoritative.
 
+## Shared experience contract
+
+Navigation, timer-state language, account safety, completion guarantees,
+accessibility, and localization semantics are defined in the
+[cross-client experience contract](https://github.com/Pomodoro-Everywhere/pomodorough-server/blob/master/docs/client-experience-contract.md).
+
 ## Pomodorough projects
 
 - [Server (Web/PWA + sync)](https://github.com/Pomodoro-Everywhere/pomodorough-server)

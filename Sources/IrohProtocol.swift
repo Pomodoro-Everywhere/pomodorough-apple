@@ -12,9 +12,9 @@ enum ReplicationMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .offline: "On device"
-        case .iroh: "Iroh room"
-        case .centralized: "Pomodorough Cloud"
+        case .offline: String(localized: "On device")
+        case .iroh: String(localized: "Iroh room")
+        case .centralized: String(localized: "Pomodorough Cloud")
         }
     }
 }
@@ -30,13 +30,13 @@ enum IrohConnectionStatus: Equatable, Sendable {
 
     var label: String {
         switch self {
-        case .stopped: "Not connected"
-        case .starting: "Opening route"
-        case .listening: "Ready for peers"
-        case .syncing: "Exchanging changes"
-        case .waitingForPeers: "Waiting for peers"
-        case .conflict: "Repair required"
-        case .unavailable: "Unavailable"
+        case .stopped: String(localized: "Not connected")
+        case .starting: String(localized: "Opening route")
+        case .listening: String(localized: "Ready for peers")
+        case .syncing: String(localized: "Exchanging changes")
+        case .waitingForPeers: String(localized: "Waiting for peers")
+        case .conflict: String(localized: "Repair required")
+        case .unavailable: String(localized: "Unavailable")
         }
     }
 }
@@ -54,14 +54,14 @@ enum IrohProtocolError: Error, LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
-        case .invalidInvite(let reason): "Invalid room invite: \(reason)"
-        case .invalidFrame: "Peer sent a malformed synchronization frame."
-        case .authenticationFailed: "Room authentication failed."
-        case .wrongRoom: "Peer requested a different room."
-        case .invalidMessage(let reason): "Peer sent an invalid synchronization message: \(reason)"
-        case .immutableConflict: "Room contains two different operations with the same immutable ID."
-        case .limit(let reason): "Synchronization limit exceeded: \(reason)"
-        case .notFound: "Requested room operation was not found."
+        case .invalidInvite(let reason): String(localized: "Invalid room invite: \(reason)")
+        case .invalidFrame: String(localized: "Peer sent a malformed synchronization frame.")
+        case .authenticationFailed: String(localized: "Room authentication failed.")
+        case .wrongRoom: String(localized: "Peer requested a different room.")
+        case .invalidMessage(let reason): String(localized: "Peer sent an invalid synchronization message: \(reason)")
+        case .immutableConflict: String(localized: "Room contains two different operations with the same immutable ID.")
+        case .limit(let reason): String(localized: "Synchronization limit exceeded: \(reason)")
+        case .notFound: String(localized: "Requested room operation was not found.")
         case .unavailable(let reason): reason
         }
     }
@@ -512,6 +512,7 @@ enum IrohDomain: String, Codable, CaseIterable, Sendable {
     case task
     case duration
     case autoStart
+    case selectedTask
 }
 
 struct IrohGenesis: Codable, Equatable, Sendable {
@@ -520,6 +521,7 @@ struct IrohGenesis: Codable, Equatable, Sendable {
     let tasks: [FocusTask]
     let durationsMs: DurationValues
     let autoStartBreaks: Bool
+    let selectedTaskId: String?
     let hlcWallMs: Int64
     let hlcCounter: Int64
 
@@ -529,12 +531,13 @@ struct IrohGenesis: Codable, Equatable, Sendable {
             history: history,
             tasks: tasks,
             durations: durationsMs
-        ) && ((hlcWallMs == 0 && hlcCounter == 0)
+        ) && (selectedTaskId.map(IrohProtocolV1.isValidIdentifier) ?? true)
+            && ((hlcWallMs == 0 && hlcCounter == 0)
             || WireBounds.isValidClock(wallMs: hlcWallMs, counter: hlcCounter))
     }
 
     private enum CodingKeys: String, CodingKey {
-        case canonicalTimer, history, tasks, durationsMs, autoStartBreaks, hlcWallMs, hlcCounter
+        case canonicalTimer, history, tasks, durationsMs, autoStartBreaks, selectedTaskId, hlcWallMs, hlcCounter
     }
 
     init(
@@ -543,6 +546,7 @@ struct IrohGenesis: Codable, Equatable, Sendable {
         tasks: [FocusTask],
         durationsMs: DurationValues,
         autoStartBreaks: Bool,
+        selectedTaskId: String? = nil,
         hlcWallMs: Int64,
         hlcCounter: Int64
     ) {
@@ -551,6 +555,7 @@ struct IrohGenesis: Codable, Equatable, Sendable {
         self.tasks = tasks
         self.durationsMs = durationsMs
         self.autoStartBreaks = autoStartBreaks
+        self.selectedTaskId = selectedTaskId
         self.hlcWallMs = hlcWallMs
         self.hlcCounter = hlcCounter
     }
@@ -568,6 +573,7 @@ struct IrohGenesis: Codable, Equatable, Sendable {
         tasks = try values.decode([FocusTask].self, forKey: .tasks)
         durationsMs = try values.decode(DurationValues.self, forKey: .durationsMs)
         autoStartBreaks = try values.decode(Bool.self, forKey: .autoStartBreaks)
+        selectedTaskId = try values.decodeIfPresent(String.self, forKey: .selectedTaskId)
         hlcWallMs = try values.decode(Int64.self, forKey: .hlcWallMs)
         hlcCounter = try values.decode(Int64.self, forKey: .hlcCounter)
     }
@@ -583,6 +589,11 @@ struct IrohGenesis: Codable, Equatable, Sendable {
         try values.encode(tasks, forKey: .tasks)
         try values.encode(durationsMs, forKey: .durationsMs)
         try values.encode(autoStartBreaks, forKey: .autoStartBreaks)
+        if let selectedTaskId {
+            try values.encode(selectedTaskId, forKey: .selectedTaskId)
+        } else {
+            try values.encodeNil(forKey: .selectedTaskId)
+        }
         try values.encode(hlcWallMs, forKey: .hlcWallMs)
         try values.encode(hlcCounter, forKey: .hlcCounter)
     }
@@ -642,6 +653,7 @@ enum IrohOperationPayload: Equatable, Sendable {
     case task(TaskOperation)
     case duration(DurationOperation)
     case autoStart(IrohAutoStartOperation)
+    case selectedTask(IrohSelectedTaskOperation)
 }
 
 struct IrohAutoStartOperation: Codable, Equatable, Sendable {
@@ -676,6 +688,69 @@ struct IrohAutoStartOperation: Codable, Equatable, Sendable {
     }
 }
 
+struct IrohSelectedTaskOperation: Codable, Equatable, Sendable {
+    let id: String
+    let taskId: String?
+    let occurredAt: Date
+    let hlcWallMs: Int64
+    let hlcCounter: Int64
+
+    init(id: String, taskId: String?, occurredAt: Date, hlcWallMs: Int64, hlcCounter: Int64) {
+        self.id = id
+        self.taskId = taskId
+        self.occurredAt = occurredAt
+        self.hlcWallMs = hlcWallMs
+        self.hlcCounter = hlcCounter
+    }
+
+    init(_ operation: SelectedTaskOperation) {
+        id = operation.id.uuidString.lowercased()
+        taskId = operation.taskId
+        occurredAt = operation.occurredAt
+        hlcWallMs = operation.hlcWallMs
+        hlcCounter = operation.hlcCounter
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, taskId, occurredAt, hlcWallMs, hlcCounter
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard values.contains(.taskId) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.taskId,
+                .init(codingPath: values.codingPath, debugDescription: "Selected task requires taskId.")
+            )
+        }
+        id = try values.decode(String.self, forKey: .id)
+        taskId = try values.decodeIfPresent(String.self, forKey: .taskId)
+        occurredAt = try values.decode(Date.self, forKey: .occurredAt)
+        hlcWallMs = try values.decode(Int64.self, forKey: .hlcWallMs)
+        hlcCounter = try values.decode(Int64.self, forKey: .hlcCounter)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        if let taskId {
+            try values.encode(taskId, forKey: .taskId)
+        } else {
+            try values.encodeNil(forKey: .taskId)
+        }
+        try values.encode(occurredAt, forKey: .occurredAt)
+        try values.encode(hlcWallMs, forKey: .hlcWallMs)
+        try values.encode(hlcCounter, forKey: .hlcCounter)
+    }
+
+    var isValid: Bool {
+        IrohProtocolV1.isValidIdentifier(id)
+            && (taskId.map(IrohProtocolV1.isValidIdentifier) ?? true)
+            && WireBounds.isValidClock(wallMs: hlcWallMs, counter: hlcCounter)
+            && WireBounds.isWithinClockSkew(wallMs: hlcWallMs, occurredAt: occurredAt)
+    }
+}
+
 struct IrohOperationRecord: Codable, Equatable, Sendable {
     let domain: IrohDomain
     let deviceId: String
@@ -689,6 +764,7 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
         case .task(let value): value.id
         case .duration(let value): value.id
         case .autoStart(let value): value.id
+        case .selectedTask(let value): value.id
         }
     }
 
@@ -699,6 +775,7 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
         case .task(let value): (value.hlcWallMs, value.hlcCounter)
         case .duration(let value): (value.hlcWallMs, value.hlcCounter)
         case .autoStart(let value): (value.hlcWallMs, value.hlcCounter)
+        case .selectedTask(let value): (value.hlcWallMs, value.hlcCounter)
         }
     }
 
@@ -724,6 +801,8 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
         case (.duration, .duration(let value)):
             return value.isValid && IrohProtocolV1.isValidIdentifier(value.id)
         case (.autoStart, .autoStart(let value)):
+            return value.isValid
+        case (.selectedTask, .selectedTask(let value)):
             return value.isValid
         default:
             return false
@@ -789,6 +868,8 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
             payload = .duration(try values.decode(DurationOperation.self, forKey: .operation))
         case .autoStart:
             payload = .autoStart(try values.decode(IrohAutoStartOperation.self, forKey: .operation))
+        case .selectedTask:
+            payload = .selectedTask(try values.decode(IrohSelectedTaskOperation.self, forKey: .operation))
         }
     }
 
@@ -802,6 +883,7 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
         case .task(let value): try values.encode(value, forKey: .operation)
         case .duration(let value): try values.encode(value, forKey: .operation)
         case .autoStart(let value): try values.encode(value, forKey: .operation)
+        case .selectedTask(let value): try values.encode(value, forKey: .operation)
         }
     }
 
@@ -1194,10 +1276,15 @@ enum IrohMessageCodec {
             try exactKeys(operation, required: [
                 "canonicalTimer", "history", "tasks", "durationsMs", "autoStartBreaks",
                 "hlcWallMs", "hlcCounter",
-            ])
+            ], optional: ["selectedTaskId"])
             try validateCanonicalTimer(operation["canonicalTimer"])
             try validateHistory(operation["history"])
             try validateTasks(operation["tasks"])
+            guard operation["selectedTaskId"] == nil
+                    || operation["selectedTaskId"] is NSNull
+                    || (operation["selectedTaskId"] as? String).map(IrohProtocolV1.isValidIdentifier) == true else {
+                throw IrohProtocolError.invalidMessage("genesis selected task ID is invalid")
+            }
             guard let durations = operation["durationsMs"] as? [String: Any] else {
                 throw IrohProtocolError.invalidMessage("genesis durations are invalid")
             }
@@ -1229,6 +1316,15 @@ enum IrohMessageCodec {
                 "id", "enabled", "occurredAt", "hlcWallMs", "hlcCounter",
             ])
             try validateRawClock(operation, allowsEpochSentinel: true)
+        case .selectedTask:
+            try exactKeys(operation, required: [
+                "id", "taskId", "occurredAt", "hlcWallMs", "hlcCounter",
+            ])
+            guard operation["taskId"] is NSNull
+                    || (operation["taskId"] as? String).map(IrohProtocolV1.isValidIdentifier) == true else {
+                throw IrohProtocolError.invalidMessage("selected task ID is invalid")
+            }
+            try validateRawClock(operation, allowsEpochSentinel: false)
         }
     }
 

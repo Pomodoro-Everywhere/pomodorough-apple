@@ -155,6 +155,16 @@ actor APIClient {
         try clearTokens()
     }
 
+    func deleteAccount(confirmation: String) async throws {
+        _ = try await perform(
+            "/api/v1/account",
+            method: "DELETE",
+            body: DeleteAccountRequest(confirmation: confirmation),
+            authenticated: true
+        )
+        try? clearTokens()
+    }
+
     func clearTokens() throws {
         tokenGeneration += 1
         refreshTask?.cancel()
@@ -405,6 +415,10 @@ private struct SelectedTaskAPIRequest: Encodable {
         try values.encode(hlcWallMs, forKey: .hlcWallMs)
         try values.encode(hlcCounter, forKey: .hlcCounter)
     }
+}
+
+private struct DeleteAccountRequest: Encodable {
+    let confirmation: String
 }
 
 struct TimedHTTPResponse<Value: Sendable>: Sendable {
