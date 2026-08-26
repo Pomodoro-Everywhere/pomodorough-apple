@@ -28,8 +28,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      CORE_COMMIT: "49efee8c5ac390d5dd7bd5c1a3537fb889fa6f10"
-      CORE_SHA256: "50519a0c12b0e38d3281d2205f5597f03bb5e8cdd7e9e57f86bb4458fd0dad64"
+      CORE_COMMIT: "8dc24486b38d87eb2c717e80b4315b31dd6a671d"
+      CORE_SHA256: "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"
+      CORE_RELEASE: "v0.1.5"
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughReleaseDerivedData
       IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
@@ -49,31 +50,34 @@ jobs:
           path: .build/pomodorough-core
           persist-credentials: false
 
-      - name: Rebuild and verify pinned shared core
+      - name: Download and verify canonical shared core
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
           test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
           test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
-          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
-          (
-            cd .build/pomodorough-core
-            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
-              --release \
-              --target wasm32-unknown-unknown \
-              --locked
-          )
-          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
-          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          git -C .build/pomodorough-core fetch --depth=1 origin \
+            "refs/tags/$CORE_RELEASE:refs/tags/$CORE_RELEASE"
+          test "$(git -C .build/pomodorough-core rev-list -n 1 "$CORE_RELEASE")" = "$CORE_COMMIT"
+          published_dir="$RUNNER_TEMP/published-shared-core"
+          mkdir -p "$published_dir"
+          gh release download "$CORE_RELEASE" \
+            --repo Pomodoro-Everywhere/pomodorough-core \
+            --pattern pomodorough_core.wasm \
+            --dir "$published_dir"
+          published="$published_dir/pomodorough_core.wasm"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$published" \
+            --sha256 "$CORE_SHA256"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
             Resources/SharedCore/pomodorough_core.wasm \
             --sha256 "$CORE_SHA256"
           python3 scripts/verify_shared_core_provenance.py \
             --sha256 "$CORE_SHA256" \
-            "$rebuilt" \
+            "$published" \
             Resources/SharedCore/pomodorough_core.wasm
 
       - name: Check documentation links
