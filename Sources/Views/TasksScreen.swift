@@ -4,8 +4,14 @@ struct TasksScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: AppModel
-    @State private var newTaskTitle = ""
+    @State private var localNewTaskTitle = ""
     @FocusState private var taskFieldFocused: Bool
+    private let suppliedNewTaskTitle: Binding<String>?
+
+    init(model: AppModel, newTaskTitle: Binding<String>? = nil) {
+        self.model = model
+        suppliedNewTaskTitle = newTaskTitle
+    }
 
     var body: some View {
         ScrollView {
@@ -15,7 +21,7 @@ struct TasksScreen: View {
                     timeSpentMs: summaries.reduce(0) { $0 + $1.timeSpentMs }
                 )
                 TaskComposer(
-                    title: $newTaskTitle,
+                    title: taskTitle,
                     focused: $taskFieldFocused,
                     canAdd: canAddTask,
                     add: addTask
@@ -61,14 +67,20 @@ struct TasksScreen: View {
         model.taskSummaries()
     }
 
+    private var taskTitle: Binding<String> {
+        suppliedNewTaskTitle ?? $localNewTaskTitle
+    }
+
     private var canAddTask: Bool {
-        FocusTask(title: newTaskTitle) != nil
+        FocusTask(title: taskTitle.wrappedValue) != nil
     }
 
     private func addTask() {
-        if model.addTask(newTaskTitle) {
-            newTaskTitle = ""
-            taskFieldFocused = false
+        Task {
+            if await model.addTask(taskTitle.wrappedValue) {
+                taskTitle.wrappedValue = ""
+                taskFieldFocused = false
+            }
         }
     }
 }

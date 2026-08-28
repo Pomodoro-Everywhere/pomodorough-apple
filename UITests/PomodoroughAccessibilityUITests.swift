@@ -83,7 +83,9 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             app.buttons["Account"].tap()
             XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["Network"].exists)
-            XCTAssertTrue(app.staticTexts["Timer alert limits"].exists)
+            let timerAlertLimits = app.descendants(matching: .any)["account.timer-alert-limits"]
+            scrollIntoHierarchy(timerAlertLimits, in: app)
+            XCTAssertTrue(timerAlertLimits.exists, "Missing timer alert limits on \(route)")
             app.buttons["Done"].tap()
             XCTAssertFalse(app.navigationBars["Account"].waitForExistence(timeout: 1))
         }
@@ -124,6 +126,12 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
 
     private func elements(labelled label: String, in app: XCUIApplication) -> XCUIElementQuery {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label))
+    }
+
+    private func scrollIntoHierarchy(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<4 where !element.exists {
+            app.swipeUp()
+        }
     }
 
     private func assertOneElementPerTab(in app: XCUIApplication) {

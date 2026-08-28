@@ -3,11 +3,25 @@ import SwiftUI
 struct NetworkSectionView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var roomName = ""
-    @State private var isCreating = false
+    @State private var localRoomName = ""
+    @State private var localIsCreating = false
 
     let model: AppModel
     let join: () -> Void
+    private let suppliedRoomName: Binding<String>?
+    private let suppliedIsCreating: Binding<Bool>?
+
+    init(
+        model: AppModel,
+        roomName: Binding<String>? = nil,
+        isCreating: Binding<Bool>? = nil,
+        join: @escaping () -> Void
+    ) {
+        self.model = model
+        self.join = join
+        suppliedRoomName = roomName
+        suppliedIsCreating = isCreating
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -154,6 +168,14 @@ struct NetworkSectionView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: selected)
     }
 
+    private var roomName: Binding<String> {
+        suppliedRoomName ?? $localRoomName
+    }
+
+    private var isCreating: Binding<Bool> {
+        suppliedIsCreating ?? $localIsCreating
+    }
+
     @ViewBuilder
     private var roomControls: some View {
         if let room = model.preferredRoom {
@@ -181,20 +203,20 @@ struct NetworkSectionView: View {
                     Label("Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair.", systemImage: "exclamationmark.octagon.fill")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(PomodoroughTheme.signal)
-                    TextField("Replacement room name (optional)", text: $roomName)
+                    TextField("Replacement room name (optional)", text: roomName)
                         .textFieldStyle(.roundedBorder)
                         .foregroundStyle(PomodoroughTheme.track)
                     Button {
-                        isCreating = true
+                        isCreating.wrappedValue = true
                         Task {
-                            _ = await model.createIrohRoom(name: roomName)
-                            isCreating = false
+                            _ = await model.createIrohRoom(name: roomName.wrappedValue)
+                            isCreating.wrappedValue = false
                         }
                     } label: {
-                        Label(isCreating ? "Rotating room" : "Create replacement room", systemImage: "arrow.triangle.2.circlepath")
+                        Label(isCreating.wrappedValue ? "Rotating room" : "Create replacement room", systemImage: "arrow.triangle.2.circlepath")
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isCreating || roomName.unicodeScalars.count > 64)
+                    .disabled(isCreating.wrappedValue || roomName.wrappedValue.unicodeScalars.count > 64)
                 } else if model.replicationMode == .iroh {
                     Button("Create invite", systemImage: "ticket") {
                         Task { await model.refreshIrohInvite() }
@@ -223,24 +245,24 @@ struct NetworkSectionView: View {
                 Text("OPEN A PEER ROUTE")
                     .font(.caption.monospaced().bold())
                     .foregroundStyle(PomodoroughTheme.ticket)
-                TextField("Room name (optional)", text: $roomName)
+                TextField("Room name (optional)", text: roomName)
                     .textFieldStyle(.roundedBorder)
                     .foregroundStyle(PomodoroughTheme.track)
                     .accessibilityHint("One through 64 characters. Room name is display-only.")
                 Button {
-                    isCreating = true
+                    isCreating.wrappedValue = true
                     Task {
-                        _ = await model.createIrohRoom(name: roomName)
-                        isCreating = false
+                        _ = await model.createIrohRoom(name: roomName.wrappedValue)
+                        isCreating.wrappedValue = false
                     }
                 } label: {
-                    Label(isCreating ? "Creating room" : "Create Iroh room", systemImage: "plus.circle.fill")
+                    Label(isCreating.wrappedValue ? "Creating room" : "Create Iroh room", systemImage: "plus.circle.fill")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(PomodoroughTheme.ticket)
                 .foregroundStyle(PomodoroughTheme.platformDeep)
-                .disabled(isCreating || roomName.unicodeScalars.count > 64)
+                .disabled(isCreating.wrappedValue || roomName.wrappedValue.unicodeScalars.count > 64)
                 Button("Join with invite", systemImage: "rectangle.and.text.magnifyingglass") { join() }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)

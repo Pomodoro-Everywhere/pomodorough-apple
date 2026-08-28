@@ -40,6 +40,11 @@ FUNC_STRING_DECLARATION_RE = re.compile(
 )
 
 
+def has_tagged_primary_destination(source: str, title: str, tab: str) -> bool:
+    pattern = rf'Text\("{re.escape(title)}"\)\s*\.tag\(MainTab\.{re.escape(tab)}\)'
+    return re.search(pattern, source) is not None
+
+
 def require(condition: bool, message: str, failures: list[str]) -> None:
     if not condition:
         failures.append(message)
@@ -420,7 +425,11 @@ def main() -> int:
         require('"Network"' not in tabs, f"{name} must not add Network as a fifth mobile tab", failures)
 
     main_container = read("Sources/Views/MainContainer.swift")
-    require('Label("Network"' in main_container, "macOS Network primary destination missing", failures)
+    require(
+        has_tagged_primary_destination(main_container, "Network", "network"),
+        "macOS Network primary destination missing",
+        failures,
+    )
     require('Button("Settings"' in main_container, "macOS Settings action missing", failures)
     require('.accessibilityValue("Pattern")' in main_container, "macOS Settings must name Pattern", failures)
 
@@ -434,8 +443,8 @@ def main() -> int:
     guarantee = "subject to the operating system's delivery policy"
     require(guarantee in permission, "pre-permission completion guarantee disclosure missing", failures)
     require(guarantee in account, "persistent completion guarantee disclosure missing", failures)
-    require("https://pomodoro-everywhere.github.io/pomodorough-server/privacy/" in account,
-            "public privacy policy link missing", failures)
+    require("https://pomodorough.egigoka.me/privacy" in account,
+            "contractual privacy policy link missing", failures)
 
     pbx = read("Pomodorough.xcodeproj/project.pbxproj")
     require("Localizable.xcstrings" in pbx, "localization catalog is not in the generated project", failures)

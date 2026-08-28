@@ -6,6 +6,18 @@ import Testing
 
 @Suite("Iroh Replication")
 struct IrohReplicationTests {
+    private struct CoreTimerInput: Encodable, Sendable {
+        let canonicalTimer: CanonicalTimer?
+        let history: [HistoryItem]
+        let commands: [TimerCommand]
+        let now: Date
+    }
+
+    private struct CoreTimerProjection: Decodable, Sendable {
+        let canonicalTimer: CanonicalTimer?
+        let history: [HistoryItem]
+    }
+
     @Test @MainActor
     func cancellingRequestedRoomLeavePreservesActiveRoomWorkspace() throws {
         let suiteName = "PomodoroughTests.IrohLeaveCancel.\(UUID().uuidString)"
@@ -279,6 +291,235 @@ struct IrohReplicationTests {
         #expect(TestFixtures.recordedRequests(for: scenario).contains { $0.path == "/api/v1/bootstrap" })
     }
 
+    @Test func roomProjectionReplaysClearThenPauseAsOneTimerBatchAndSurvivesRestart() async throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: emptyGenesis()
+        )
+        func command(
+            _ type: CommandType,
+            id: String,
+            wallMs: Int64
+        ) -> TimerCommand {
+            TimerCommand(
+                id: id,
+                deviceSequence: 1,
+                timerId: "timer-clear-pause",
+                taskId: nil,
+                type: type,
+                phase: .focus,
+                plannedDurationMs: 60_000,
+                occurredAt: Date(timeIntervalSince1970: TimeInterval(wallMs) / 1_000),
+                hlcWallMs: wallMs,
+                hlcCounter: 0,
+                observedElapsedMs: type == .pause ? 10_000 : 0
+            )
+        }
+        let records = [
+            IrohOperationRecord(
+                domain: .timer,
+                deviceId: "device-c-pause",
+                payload: .timer(command(.pause, id: "command-c-pause", wallMs: 1_002_000))
+            ),
+            IrohOperationRecord(
+                domain: .timer,
+                deviceId: "device-b-clear",
+                payload: .timer(command(.clear, id: "command-b-clear", wallMs: 1_001_000))
+            ),
+            IrohOperationRecord(
+                domain: .timer,
+                deviceId: "device-a-start",
+                payload: .timer(command(.start, id: "command-a-start", wallMs: 1_000_000))
+            ),
+        ]
+
+        let projected = try store.insertRemoteRecords(records, roomID: roomID)
+
+        #expect(projected.canonicalTimer?.id == "timer-clear-pause")
+        #expect(projected.canonicalTimer?.status == .paused)
+        #expect(projected.canonicalTimer?.startedByDeviceId == "device-a-start")
+        let projectedLastIntentDeviceID = projected.canonicalTimer?.lastIntent?.deviceId
+        #expect(projectedLastIntentDeviceID == "device-c-pause")
+
+        let orderedRecords = records.sorted {
+            guard case .timer(let left) = $0.payload,
+                  case .timer(let right) = $1.payload else { return false }
+            if left.hlcWallMs != right.hlcWallMs { return left.hlcWallMs < right.hlcWallMs }
+            if left.hlcCounter != right.hlcCounter { return left.hlcCounter < right.hlcCounter }
+            if $0.deviceId != $1.deviceId { return $0.deviceId < $1.deviceId }
+            return left.id < right.id
+        }
+        let wireCommands = try orderedRecords.map { record -> [String: Any] in
+            guard case .timer(let timerCommand) = record.payload,
+                  var object = try JSONSerialization.jsonObject(
+                    with: JSONEncoder.api.encode(timerCommand)
+                  ) as? [String: Any] else {
+                throw IrohProtocolError.invalidMessage("timer fixture encoding failed")
+            }
+            object["deviceId"] = record.deviceId
+            return object
+        }
+        let input = try JSONSerialization.data(withJSONObject: [
+            "canonicalTimer": NSNull(),
+            "history": [],
+            "commands": wireCommands,
+            "now": "1970-01-01T00:16:43Z",
+        ])
+        let core = try SharedCore.bundled()
+        let coreProjection = try await core.dispatch(
+            "timer.reduce.v1",
+            inputJSON: input,
+            as: CoreTimerProjection.self
+        )
+        let projectedForCore = projected.canonicalTimer.map { timer in
+            CanonicalTimer(
+                id: timer.id,
+                taskId: timer.taskId,
+                phase: timer.phase,
+                status: timer.status,
+                plannedDurationMs: timer.plannedDurationMs,
+                elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
+                anchorAt: timer.anchorAt,
+                startedByDeviceId: timer.startedByDeviceId,
+                lastIntent: timer.lastIntent.map {
+                    TimerIntent(
+                        type: $0.type,
+                        commandId: $0.commandId,
+                        occurredAt: $0.occurredAt,
+                        deviceId: nil
+                    )
+                }
+            )
+        }
+        #expect(coreProjection.canonicalTimer == projectedForCore)
+        #expect(coreProjection.history == projected.history)
+
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == projected.canonicalTimer)
+        #expect(restarted.activeRoomState?.history == projected.history)
+
+        for first in records.indices {
+            for second in records.indices where second != first {
+                let third = records.indices.first { $0 != first && $0 != second }!
+                let permutationURL = temporaryURL()
+                let permutationSecrets = MemoryIrohRoomSecretStore()
+                let permutationStore = IrohRoomStore(
+                    fileURL: permutationURL,
+                    secretStore: permutationSecrets
+                )
+                _ = try permutationStore.createRoom(
+                    roomID: roomID,
+                    roomSecret: secret,
+                    name: nil,
+                    returnState: .fresh(),
+                    genesis: emptyGenesis()
+                )
+                let permutationProjection = try permutationStore.insertRemoteRecords(
+                    [records[first], records[second], records[third]],
+                    roomID: roomID
+                )
+                #expect(permutationProjection.canonicalTimer == projected.canonicalTimer)
+                #expect(permutationProjection.history == projected.history)
+                let permutationRestart = IrohRoomStore(
+                    fileURL: permutationURL,
+                    secretStore: permutationSecrets
+                )
+                #expect(permutationRestart.activeRoomState?.canonicalTimer == projected.canonicalTimer)
+                #expect(permutationRestart.activeRoomState?.history == projected.history)
+            }
+        }
+    }
+
+    @Test func roomProjectionPreservesHistoricalIdentityAcrossReactivationAndSwitch() throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let historical = HistoryItem(
+            id: "history-custom",
+            timerId: "timer-a0001",
+            commandId: "finish-a",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: Date(timeIntervalSince1970: 900),
+            endedAt: Date(timeIntervalSince1970: 900)
+        )
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [historical],
+                tasks: [],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 900_000,
+                hlcCounter: 0
+            )
+        )
+        func command(
+            _ type: CommandType,
+            id: String,
+            timerID: String,
+            wallMs: Int64
+        ) -> TimerCommand {
+            TimerCommand(
+                id: id,
+                deviceSequence: 1,
+                timerId: timerID,
+                taskId: nil,
+                type: type,
+                phase: .focus,
+                plannedDurationMs: 60_000,
+                occurredAt: Date(timeIntervalSince1970: TimeInterval(wallMs) / 1_000),
+                hlcWallMs: wallMs,
+                hlcCounter: 0,
+                observedElapsedMs: 10_000
+            )
+        }
+        let projected = try store.insertRemoteRecords([
+            IrohOperationRecord(
+                domain: .timer,
+                deviceId: "device-b-switch",
+                payload: .timer(command(
+                    .start,
+                    id: "command-b-switch",
+                    timerID: "timer-b0001",
+                    wallMs: 1_001_000
+                ))
+            ),
+            IrohOperationRecord(
+                domain: .timer,
+                deviceId: "device-a-reactivate",
+                payload: .timer(command(
+                    .pause,
+                    id: "command-a-reactivate",
+                    timerID: "timer-a0001",
+                    wallMs: 1_000_000
+                ))
+            ),
+        ], roomID: roomID)
+
+        #expect(projected.canonicalTimer?.id == "timer-b0001")
+        #expect(projected.history.first(where: { $0.timerId == "timer-a0001" })?.id == "history-custom")
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == projected.canonicalTimer)
+        #expect(restarted.activeRoomState?.history == projected.history)
+    }
+
     @Test func canonicalProtocolFixtureDecodesIrohSelectedTaskRecords() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -437,12 +678,12 @@ struct IrohReplicationTests {
             IrohOperationRecord(domain: .task, deviceId: "device-a0001", payload: .task(deletion)),
         ], roomID: roomID)
 
-        #expect(projected.selectedTaskID == second.id)
+        #expect(projected.selectedTaskID == nil)
         #expect(!projected.tasks.contains(second))
         #expect(projected.knownTasks.contains(second))
         #expect(projected.hlcWallMs == 1_002_000)
         let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
-        #expect(restarted.activeRoomState?.selectedTaskID == second.id)
+        #expect(restarted.activeRoomState?.selectedTaskID == nil)
         #expect(restarted.activeRoomState?.knownTasks.contains(second) == true)
     }
 
@@ -1258,7 +1499,8 @@ struct IrohReplicationTests {
         ], roomID: roomID)
 
         #expect(projected.canonicalTimer?.id == earlierSequenceLaterClock.timerId)
-        #expect(projected.canonicalTimer?.lastIntent?.deviceId == "device-a0001")
+        let projectedLastIntentDeviceID = projected.canonicalTimer?.lastIntent?.deviceId
+        #expect(projectedLastIntentDeviceID == "device-a0001")
     }
 
     @Test func roomProjectionPersistsStartAndFinish() throws {
@@ -1295,6 +1537,327 @@ struct IrohReplicationTests {
         #expect(projected.canonicalTimer?.status == .completed)
         #expect(projected.history.first?.completedAt == finish.occurredAt)
         #expect(projected.history.first?.endedAt == finish.occurredAt)
+    }
+
+    @Test(arguments: [CommandType.cancel, .finish])
+    func roomCreationDoesNotRestoreClearedTerminalHistoryAfterRestart(
+        _ terminalType: CommandType
+    ) throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let endedAt = Date(timeIntervalSince1970: 1_001)
+        let timerID = "timer-genesis-cleared-\(terminalType.rawValue)"
+        let terminalCommandID = "command-genesis-terminal-\(terminalType.rawValue)"
+        let history = HistoryItem(
+            id: "history-genesis-cleared-\(terminalType.rawValue)",
+            timerId: timerID,
+            commandId: terminalCommandID,
+            taskId: nil,
+            phase: .focus,
+            status: terminalType == .finish ? "completed" : "cancelled",
+            plannedDurationMs: 60_000,
+            completedAt: terminalType == .finish ? endedAt : nil,
+            endedAt: endedAt
+        )
+        let genesis = IrohGenesis(
+            canonicalTimer: nil,
+            history: [history],
+            tasks: [],
+            durationsMs: .defaults,
+            autoStartBreaks: false,
+            hlcWallMs: 0,
+            hlcCounter: 0
+        )
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+
+        let projected = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: genesis
+        )
+
+        #expect(projected.canonicalTimer == nil)
+        #expect(projected.history == [history])
+
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == nil)
+        #expect(restarted.activeRoomState?.history == [history])
+    }
+
+    @Test(arguments: [CommandType.cancel, .finish])
+    func roomCreationRetainsExplicitTerminalGenesisAfterRestart(
+        _ terminalType: CommandType
+    ) throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let endedAt = Date(timeIntervalSince1970: 1_001)
+        let timerID = "timer-genesis-terminal-\(terminalType.rawValue)"
+        let terminalCommandID = "command-genesis-terminal-\(terminalType.rawValue)"
+        let status: CanonicalTimer.Status = terminalType == .finish ? .completed : .cancelled
+        let terminal = CanonicalTimer(
+            id: timerID,
+            taskId: nil,
+            phase: .focus,
+            status: status,
+            plannedDurationMs: 60_000,
+            elapsedAtAnchorMs: terminalType == .finish ? 60_000 : 10_000,
+            anchorAt: endedAt,
+            startedByDeviceId: "device-test0001",
+            lastIntent: TimerIntent(
+                type: terminalType,
+                commandId: terminalCommandID,
+                occurredAt: endedAt,
+                deviceId: nil
+            )
+        )
+        let history = HistoryItem(
+            id: "history-genesis-terminal-\(terminalType.rawValue)",
+            timerId: timerID,
+            commandId: terminalCommandID,
+            taskId: nil,
+            phase: .focus,
+            status: status.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: terminalType == .finish ? endedAt : nil,
+            endedAt: endedAt
+        )
+        let genesis = IrohGenesis(
+            canonicalTimer: terminal,
+            history: [history],
+            tasks: [],
+            durationsMs: .defaults,
+            autoStartBreaks: false,
+            hlcWallMs: 0,
+            hlcCounter: 0
+        )
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+
+        let projected = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: genesis
+        )
+
+        #expect(projected.canonicalTimer == terminal)
+        #expect(projected.history == [history])
+
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == terminal)
+        #expect(restarted.activeRoomState?.history == [history])
+    }
+
+    @Test(arguments: [CommandType.cancel, .finish])
+    func roomProjectionDoesNotRestoreFinalClearedTerminalTimerAfterRestart(
+        _ terminalType: CommandType
+    ) throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: emptyGenesis()
+        )
+        let timerID = "timer-cleared-\(terminalType.rawValue)"
+        let start = validStartCommand(
+            id: "command-start-\(terminalType.rawValue)",
+            sequence: 1,
+            timerID: timerID
+        )
+        let terminalElapsedMs: Int64 = terminalType == .finish ? 60_000 : 10_000
+        let terminal = TimerCommand(
+            id: "command-terminal-\(terminalType.rawValue)",
+            deviceSequence: 2,
+            timerId: timerID,
+            taskId: nil,
+            type: terminalType,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: Date(timeIntervalSince1970: 1_001),
+            hlcWallMs: 1_001_000,
+            hlcCounter: 0,
+            observedElapsedMs: terminalElapsedMs
+        )
+        let clear = TimerCommand(
+            id: "command-clear-\(terminalType.rawValue)",
+            deviceSequence: 3,
+            timerId: timerID,
+            taskId: nil,
+            type: .clear,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: Date(timeIntervalSince1970: 1_002),
+            hlcWallMs: 1_002_000,
+            hlcCounter: 0,
+            observedElapsedMs: terminalElapsedMs
+        )
+
+        let projected = try store.insertRemoteRecords([
+            IrohOperationRecord(domain: .timer, deviceId: "device-test0001", payload: .timer(start)),
+            IrohOperationRecord(domain: .timer, deviceId: "device-test0001", payload: .timer(terminal)),
+            IrohOperationRecord(domain: .timer, deviceId: "device-test0001", payload: .timer(clear)),
+        ], roomID: roomID)
+
+        #expect(projected.canonicalTimer == nil)
+        #expect(projected.history.count == 1)
+        #expect(projected.history.first?.commandId == terminal.id)
+        #expect(projected.history.first?.status == (terminalType == .finish ? "completed" : "cancelled"))
+
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == nil)
+        #expect(restarted.activeRoomState?.history == projected.history)
+    }
+
+    @Test(arguments: [false, true])
+    func roomProjectionUsesLastAppliedTimerCommandUnderClockSkew(
+        _ clearsNewestTimer: Bool
+    ) throws {
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = temporaryStore(now: { Date(timeIntervalSince1970: 1_300) })
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: emptyGenesis()
+        )
+        let olderStart = validStartCommand(
+            id: "command-skew-start-older",
+            sequence: 1,
+            timerID: "timer-skew-older",
+            wallMs: 1_000_000
+        )
+        let olderFinish = TimerCommand(
+            id: "command-skew-finish-older",
+            deviceSequence: 2,
+            timerId: olderStart.timerId,
+            taskId: nil,
+            type: .finish,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: Date(timeIntervalSince1970: 1_250),
+            hlcWallMs: 1_001_000,
+            hlcCounter: 0,
+            observedElapsedMs: 60_000
+        )
+        let newestStart = validStartCommand(
+            id: "command-skew-start-newest",
+            sequence: 3,
+            timerID: "timer-skew-newest",
+            wallMs: 1_002_000
+        )
+        let newestFinish = TimerCommand(
+            id: "command-skew-finish-newest",
+            deviceSequence: 4,
+            timerId: newestStart.timerId,
+            taskId: nil,
+            type: .finish,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: Date(timeIntervalSince1970: 1_003),
+            hlcWallMs: 1_003_000,
+            hlcCounter: 0,
+            observedElapsedMs: 60_000
+        )
+        let clear = TimerCommand(
+            id: "command-skew-clear-newest",
+            deviceSequence: 5,
+            timerId: newestStart.timerId,
+            taskId: nil,
+            type: .clear,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: Date(timeIntervalSince1970: 1_004),
+            hlcWallMs: 1_004_000,
+            hlcCounter: 0,
+            observedElapsedMs: 60_000
+        )
+        var records = [olderStart, olderFinish, newestStart, newestFinish].map {
+            IrohOperationRecord(domain: .timer, deviceId: "device-test0001", payload: .timer($0))
+        }
+        if clearsNewestTimer {
+            records.append(
+                IrohOperationRecord(
+                    domain: .timer,
+                    deviceId: "device-test0001",
+                    payload: .timer(clear)
+                )
+            )
+        }
+
+        let projected = try store.insertRemoteRecords(records, roomID: roomID)
+
+        if clearsNewestTimer {
+            #expect(projected.canonicalTimer == nil)
+        } else {
+            #expect(projected.canonicalTimer?.id == newestStart.timerId)
+            #expect(projected.canonicalTimer?.lastIntent?.commandId == newestFinish.id)
+        }
+    }
+
+    @Test(arguments: [CommandType.cancel, .finish])
+    func roomProjectionRetainsNonClearedTerminalTimerAfterRestart(
+        _ terminalType: CommandType
+    ) throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: emptyGenesis()
+        )
+        let timerID = "timer-terminal-\(terminalType.rawValue)"
+        let start = validStartCommand(
+            id: "command-start-only-\(terminalType.rawValue)",
+            sequence: 1,
+            timerID: timerID
+        )
+        let terminal = TimerCommand(
+            id: "command-terminal-only-\(terminalType.rawValue)",
+            deviceSequence: 2,
+            timerId: timerID,
+            taskId: nil,
+            type: terminalType,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: Date(timeIntervalSince1970: 1_001),
+            hlcWallMs: 1_001_000,
+            hlcCounter: 0,
+            observedElapsedMs: terminalType == .finish ? 60_000 : 10_000
+        )
+
+        let projected = try store.insertRemoteRecords([
+            IrohOperationRecord(domain: .timer, deviceId: "device-test0001", payload: .timer(start)),
+            IrohOperationRecord(domain: .timer, deviceId: "device-test0001", payload: .timer(terminal)),
+        ], roomID: roomID)
+        let expectedStatus: CanonicalTimer.Status = terminalType == .finish ? .completed : .cancelled
+
+        #expect(projected.canonicalTimer?.id == timerID)
+        #expect(projected.canonicalTimer?.status == expectedStatus)
+        #expect(projected.canonicalTimer?.lastIntent?.commandId == terminal.id)
+        #expect(projected.history.first?.commandId == terminal.id)
+
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == projected.canonicalTimer)
+        #expect(restarted.activeRoomState?.history == projected.history)
     }
 
     @Test @MainActor
@@ -1381,7 +1944,7 @@ struct IrohReplicationTests {
         )
         let secret = Data(0...31)
         let roomID = try IrohProtocolV1.roomID(for: secret)
-        let store = temporaryStore()
+        let store = temporaryStore(now: { currentDate })
         _ = try store.createRoom(
             roomID: roomID,
             roomSecret: secret,
@@ -1770,13 +2333,20 @@ struct IrohReplicationTests {
     }
 
     private func temporaryURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("PomodoroughIrohTests-\(UUID().uuidString)", isDirectory: true)
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base
+            .appendingPathComponent("PomodoroughTests", isDirectory: true)
+            .appendingPathComponent("Iroh-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("rooms.json")
     }
 
-    private func temporaryStore() -> IrohRoomStore {
-        IrohRoomStore(fileURL: temporaryURL(), secretStore: MemoryIrohRoomSecretStore())
+    private func temporaryStore(now: @escaping () -> Date = { .now }) -> IrohRoomStore {
+        IrohRoomStore(
+            fileURL: temporaryURL(),
+            secretStore: MemoryIrohRoomSecretStore(),
+            now: now
+        )
     }
 
     private func emptyGenesis() -> IrohGenesis {

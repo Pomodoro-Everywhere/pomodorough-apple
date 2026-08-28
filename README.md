@@ -50,7 +50,7 @@ The project uses Swift 6 with complete strict-concurrency checking.
 | `Sources/APIClient.swift` | JSON API, token refresh, and revision stream transport |
 | `Sources/Models.swift` | Wire contracts, local models, and deterministic reducers |
 | `Sources/SharedCore.swift` | Serialized WasmKit host for the pinned shared-core WebAssembly module |
-| `Sources/Views.swift` | Adaptive timer, pattern, task, history, and account interfaces |
+| [`Sources/Views/`](Sources/Views/) | Adaptive timer, pattern, task, history, and account interfaces |
 | `Tests/` | Reducer, persistence, API-contract, migration, and integration coverage |
 
 Every local action is persisted before it appears in the interface. The app

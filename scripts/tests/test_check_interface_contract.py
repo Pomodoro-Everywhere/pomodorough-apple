@@ -31,6 +31,17 @@ class LocalizationContractTests(unittest.TestCase):
             {"Hello", "%arg tasks", "Computed status"},
         )
 
+    def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
+        source = '''
+        Picker("Section", selection: $selectedTab) {
+            Text("Network")
+                .tag(MainTab.network)
+            Text("Network status")
+        }
+        '''
+        self.assertTrue(checker.has_tagged_primary_destination(source, "Network", "network"))
+        self.assertFalse(checker.has_tagged_primary_destination(source, "Network", "history"))
+
     def test_shipping_catalog_rejects_non_english_locales(self) -> None:
         catalog = {
             "sourceLanguage": "en",

@@ -277,6 +277,52 @@ struct UnitPositiveTests {
         }
     }
 
+    @Test func trustedTimeRecoversAcrossSystemRebootUsingPersistedOffset() throws {
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        let localTime = serverTime.addingTimeInterval(3_600)
+        var state = PersistedTimerState.fresh()
+        try state.mergeClock(
+            serverWallMs: 2_000_000,
+            serverCounter: 0,
+            serverTime: serverTime,
+            requestWall: localTime,
+            requestUptime: 100,
+            responseUptime: 100
+        )
+        state.lastTrustedTimeMs = 2_000_000
+
+        let recovered = try state.trustedOccurrenceDate(
+            for: localTime.addingTimeInterval(10),
+            uptime: 10
+        )
+
+        #expect(recovered == serverTime.addingTimeInterval(10))
+    }
+
+    @Test func rebootRecoveryRejectsAOneDayForwardWallJumpUntilResampled() throws {
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        let localTime = serverTime.addingTimeInterval(3_600)
+        var state = PersistedTimerState.fresh()
+        try state.mergeClock(
+            serverWallMs: 2_000_000,
+            serverCounter: 0,
+            serverTime: serverTime,
+            requestWall: localTime,
+            requestUptime: 100,
+            responseUptime: 100
+        )
+        state.lastTrustedTimeMs = 2_000_000
+        let before = try JSONEncoder.api.encode(state)
+
+        #expect(throws: AppError.self) {
+            try state.trustedOccurrenceDate(
+                for: localTime.addingTimeInterval(86_400),
+                uptime: 10
+            )
+        }
+        #expect(try JSONEncoder.api.encode(state) == before)
+    }
+
     @Test func serverClockSampleUsesRequestMidpointAndPersistsUncertainty() throws {
         let serverTime = Date(timeIntervalSince1970: 2_000)
         let requestWall = serverTime.addingTimeInterval(3_595)
@@ -465,7 +511,7 @@ struct UnitPositiveTests {
             .appendingPathComponent("Fixtures/convergence-v1.json")
         let data = try Data(contentsOf: fixtureURL)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        #expect(digest == "a293a679179f7f441a89b04f0260ee77fc0d810abc61e99501f9260a6ea9012e")
+        #expect(digest == "51c357d8fd63e7200c1316ef36fc45821bea9ac2fbe11f255832fa21110ea104")
 
         let fixture = try JSONDecoder().decode(ConvergenceFixture.self, from: data)
         #expect(fixture.version == 2)
@@ -1571,7 +1617,7 @@ struct UnitPositiveTests {
         #expect(HistoryAnalytics.taskContext(for: unassigned) { _ in nil } == "Unassigned")
     }
 
-    @Test func reducerAppliesCommandsInDeviceSequenceOrder() {
+    @Test func reducerAppliesCommandsInHybridClockOrder() {
         let start = TestFixtures.command(.start, sequence: 1, elapsed: 0)
         let pause = TestFixtures.command(.pause, sequence: 2, elapsed: 12_000)
         let finish = TestFixtures.command(.finish, sequence: 3, elapsed: 12_000)
@@ -1584,7 +1630,7 @@ struct UnitPositiveTests {
         #expect(result.history.first?.status == "completed")
     }
 
-    @Test func localTimerReducerIsPermutationInvariantAndIdempotentByDeviceSequence() {
+    @Test func localTimerReducerIsPermutationInvariantAndIdempotentByHybridClock() {
         let commands = [
             TestFixtures.command(.start, sequence: 1, elapsed: 0),
             TestFixtures.command(.pause, sequence: 2, elapsed: 12_000),
@@ -1603,6 +1649,274 @@ struct UnitPositiveTests {
         #expect(duplicated.history == expected.history)
     }
 
+    @Test func localTimerReducerUsesHybridClockBeforeDeviceSequence() {
+        let wall = Int64(TestFixtures.anchor.timeIntervalSince1970 * 1_000)
+        let start = TimerCommand(
+            id: "command-start",
+            deviceSequence: 2,
+            timerId: "timer-clock",
+            taskId: nil,
+            type: .start,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: TestFixtures.anchor.addingTimeInterval(1),
+            hlcWallMs: wall + 1,
+            hlcCounter: 0,
+            observedElapsedMs: 0
+        )
+        let pause = TimerCommand(
+            id: "command-pause",
+            deviceSequence: 1,
+            timerId: "timer-clock",
+            taskId: nil,
+            type: .pause,
+            phase: .focus,
+            plannedDurationMs: 60_000,
+            occurredAt: TestFixtures.anchor.addingTimeInterval(2),
+            hlcWallMs: wall + 2,
+            hlcCounter: 0,
+            observedElapsedMs: 12_000
+        )
+
+        let result = TimerReducer.applying([pause, start], to: nil, history: [])
+
+        #expect(result.timer?.status == .paused)
+        #expect(result.timer?.lastIntent?.commandId == pause.id)
+    }
+
+    @Test func localTimerReducerPreservesHistoricalRecordIdentity() {
+        let historical = HistoryItem(
+            id: "history-custom",
+            timerId: "timer-history",
+            commandId: "old-finish",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: TestFixtures.anchor,
+            endedAt: TestFixtures.anchor
+        )
+        let finish = TestFixtures.command(
+            .finish,
+            sequence: 2,
+            elapsed: 60_000,
+            timerID: historical.timerId
+        )
+
+        let result = TimerReducer.apply(finish, to: nil, history: [historical])
+
+        #expect(result.1.count == 1)
+        #expect(result.1.first?.id == historical.id)
+        #expect(result.1.first?.commandId == finish.id)
+    }
+
+    @Test func localTimerReducerPreservesHistoricalRecordIdentityAfterReactivationAndSwitch() {
+        let historical = HistoryItem(
+            id: "history-custom",
+            timerId: "timer-history",
+            commandId: "old-finish",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: TestFixtures.anchor,
+            endedAt: TestFixtures.anchor
+        )
+        let pause = TestFixtures.command(
+            .pause,
+            sequence: 2,
+            elapsed: 12_000,
+            timerID: historical.timerId
+        )
+        let start = TestFixtures.command(
+            .start,
+            sequence: 3,
+            elapsed: 0,
+            timerID: "timer-b"
+        )
+
+        let result = TimerReducer.applying([start, pause], to: nil, history: [historical])
+
+        #expect(result.timer?.id == "timer-b")
+        #expect(result.history.count == 1)
+        #expect(result.history.first?.id == historical.id)
+        #expect(result.history.first?.timerId == historical.timerId)
+        #expect(result.history.first?.status == CanonicalTimer.Status.superseded.rawValue)
+    }
+
+    @Test func localTimerReducerHistoryMatchesCoreOrderAcrossTransitionsAndReplayModes() {
+        let current = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            timerID: "timer-current"
+        )
+        let tiedA = HistoryItem(
+            id: "history-a",
+            timerId: "timer-a",
+            commandId: "cancel-a",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.cancelled.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: nil,
+            endedAt: TestFixtures.anchor.addingTimeInterval(10)
+        )
+        let tiedZ = HistoryItem(
+            id: "history-z",
+            timerId: "timer-z",
+            commandId: "finish-z",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: TestFixtures.anchor.addingTimeInterval(10),
+            endedAt: TestFixtures.anchor.addingTimeInterval(10)
+        )
+        let target = HistoryItem(
+            id: "history-reactivated",
+            timerId: "timer-reactivated",
+            commandId: "cancel-reactivated",
+            taskId: nil,
+            phase: .shortBreak,
+            status: CanonicalTimer.Status.cancelled.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: nil,
+            endedAt: TestFixtures.anchor.addingTimeInterval(9)
+        )
+        let old = HistoryItem(
+            id: "history-old",
+            timerId: "timer-old",
+            commandId: "supersede-old",
+            taskId: nil,
+            phase: .longBreak,
+            status: CanonicalTimer.Status.superseded.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: nil,
+            endedAt: TestFixtures.anchor.addingTimeInterval(1)
+        )
+        let canonicalHistory = [old, tiedZ, target, tiedA]
+        let terminalCases: [(CommandType, CanonicalTimer.Status)] = [
+            (.finish, .completed),
+            (.cancel, .cancelled)
+        ]
+
+        for (terminalType, terminalStatus) in terminalCases {
+            for reactivationType in [CommandType.pause, .resume] {
+                let terminal = TestFixtures.command(
+                    terminalType,
+                    sequence: 11,
+                    elapsed: 12_000,
+                    timerID: current.id
+                )
+                let reactivation = TestFixtures.command(
+                    reactivationType,
+                    sequence: 12,
+                    elapsed: 12_000,
+                    timerID: target.timerId
+                )
+                let replacement = TestFixtures.command(
+                    .start,
+                    sequence: 13,
+                    elapsed: 0,
+                    timerID: "timer-new"
+                )
+                let expected = [
+                    HistoryItem(
+                        id: target.id,
+                        timerId: target.timerId,
+                        commandId: replacement.id,
+                        taskId: nil,
+                        phase: target.phase,
+                        status: CanonicalTimer.Status.superseded.rawValue,
+                        plannedDurationMs: target.plannedDurationMs,
+                        completedAt: nil,
+                        endedAt: replacement.occurredAt
+                    ),
+                    HistoryItem(
+                        id: current.id,
+                        timerId: current.id,
+                        commandId: terminal.id,
+                        taskId: nil,
+                        phase: current.phase,
+                        status: terminalStatus.rawValue,
+                        plannedDurationMs: current.plannedDurationMs,
+                        completedAt: terminalStatus == .completed ? terminal.occurredAt : nil,
+                        endedAt: terminal.occurredAt
+                    ),
+                    tiedA,
+                    tiedZ,
+                    old
+                ]
+                let batch = TimerReducer.applying(
+                    [replacement, reactivation, terminal],
+                    to: current,
+                    history: canonicalHistory
+                )
+                let arrivalOrder = [terminal, reactivation, replacement]
+                var incrementalHistory = canonicalHistory
+                for lastIndex in arrivalOrder.indices {
+                    incrementalHistory = TimerReducer.applying(
+                        Array(arrivalOrder.prefix(lastIndex + 1)),
+                        to: current,
+                        history: canonicalHistory
+                    ).history
+                }
+
+                #expect(batch.history == expected)
+                #expect(incrementalHistory == expected)
+            }
+        }
+    }
+
+    @Test func canonicalSyncKeepsOptimisticArrivalOrder() {
+        let current = TestFixtures.timer(
+            status: .running,
+            elapsed: 0,
+            timerID: "timer-local"
+        )
+        let tiedZ = HistoryItem(
+            id: "history-z",
+            timerId: "timer-z",
+            commandId: "finish-z",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: TestFixtures.anchor.addingTimeInterval(10),
+            endedAt: TestFixtures.anchor.addingTimeInterval(10)
+        )
+        let tiedA = HistoryItem(
+            id: "history-a",
+            timerId: "timer-a",
+            commandId: "finish-a",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 60_000,
+            completedAt: TestFixtures.anchor.addingTimeInterval(10),
+            endedAt: TestFixtures.anchor.addingTimeInterval(10)
+        )
+        let cancel = TestFixtures.command(
+            .cancel,
+            sequence: 11,
+            elapsed: 12_000,
+            timerID: current.id
+        )
+        let optimistic = TimerReducer.applying(
+            [cancel],
+            to: current,
+            history: [tiedZ, tiedA]
+        )
+
+        let synced = TimerReducer.applying(
+            [],
+            to: optimistic.timer,
+            history: Array(optimistic.history.reversed())
+        )
+
+        #expect(synced.history == optimistic.history)
+    }
+
     @Test func localTimerReducerResumesSupersededTimerAndSupersedesReplacement() {
         let commands = [
             TestFixtures.command(.start, sequence: 1, elapsed: 0, timerID: "timer-a"),
@@ -1619,7 +1933,7 @@ struct UnitPositiveTests {
         #expect(result.history.map(\.status) == [CanonicalTimer.Status.superseded.rawValue])
     }
 
-    @Test func localTimerReducerNeverRestartsTimerAlreadyInHistory() {
+    @Test func localTimerReducerRestartsTimerWhenStartIsLatest() {
         let completed = TestFixtures.history(
             id: "timer-existing",
             durationMs: 60_000,
@@ -1629,100 +1943,60 @@ struct UnitPositiveTests {
 
         let result = TimerReducer.apply(start, to: nil, history: [completed])
 
-        #expect(result.0 == nil)
-        #expect(result.1 == [completed])
+        #expect(result.0?.id == completed.timerId)
+        #expect(result.0?.status == .running)
+        #expect(result.1.isEmpty)
     }
 
-    @Test func localTimerReducerCoversEveryStateCommandAndTargetMatrix() {
-        let statuses: [CanonicalTimer.Status?] = [
-            nil, .running, .paused, .completed, .cancelled, .superseded
+    @Test func localTimerReducerRestoresTimerClearedEarlierInReplay() {
+        let commands = [
+            TestFixtures.command(.start, sequence: 1, elapsed: 0),
+            TestFixtures.command(.clear, sequence: 2, elapsed: 0),
+            TestFixtures.command(.pause, sequence: 3, elapsed: 12_000)
         ]
-        let commandTypes: [CommandType] = [.start, .pause, .resume, .finish, .cancel, .clear]
 
-        for status in statuses {
-            for commandType in commandTypes {
-                for usesSameID in [true, false] {
-                    let elapsed: Int64 = status == .completed ? 60_000 : 10_000
-                    let base = status.map {
-                        TestFixtures.timer(
-                            status: $0 == .superseded ? .running : $0,
-                            elapsed: elapsed,
-                            timerID: $0 == .superseded ? "timer-current" : "timer-test0001"
-                        )
-                    }
-                    let baseHistory = status == .superseded
-                        ? [TestFixtures.history(
-                            id: "timer-test0001",
-                            status: CanonicalTimer.Status.superseded.rawValue,
-                            durationMs: 60_000,
-                            date: TestFixtures.anchor
-                        )]
-                        : []
-                    let timerID = usesSameID ? "timer-test0001" : "timer-foreign"
-                    let command = TestFixtures.command(
-                        commandType,
-                        sequence: 2,
-                        elapsed: 10_000,
-                        timerID: timerID
-                    )
-                    let result = TimerReducer.apply(command, to: base, history: baseHistory)
-                    let isActive = status == .running || status == .paused
+        let result = TimerReducer.applying(commands, to: nil, history: [])
 
-                    if status == .superseded {
-                        switch commandType {
-                        case .start where !usesSameID:
-                            #expect(result.0?.id == timerID)
-                            #expect(result.0?.status == .running)
-                            #expect(result.1.map(\.timerId) == ["timer-current", "timer-test0001"])
-                        case .resume where usesSameID:
-                            #expect(result.0?.id == "timer-test0001")
-                            #expect(result.0?.status == .running)
-                            #expect(result.1.map(\.timerId) == ["timer-current"])
-                        default:
-                            #expect(result.0 == base)
-                            #expect(result.1 == baseHistory)
-                        }
-                        continue
-                    }
+        #expect(result.timer?.status == .paused)
+        #expect(result.timer?.elapsedAtAnchorMs == 12_000)
+        #expect(result.timer?.lastIntent?.commandId == commands.last?.id)
+        #expect(result.history.isEmpty)
+    }
 
-                    switch commandType {
-                    case .start where base == nil || !usesSameID:
-                        #expect(result.0?.id == timerID)
-                        #expect(result.0?.status == .running)
-                        #expect(result.1.count == (isActive ? 1 : 0))
-                        if isActive {
-                            #expect(result.1.first?.status == CanonicalTimer.Status.superseded.rawValue)
-                            #expect(result.1.first?.timerId == base?.id)
-                        }
-                    case .pause where usesSameID && status == .running:
-                        #expect(result.0?.status == .paused)
-                        #expect(result.0?.elapsedAtAnchorMs == 10_000)
-                        #expect(result.1.isEmpty)
-                    case .resume where usesSameID && status == .paused:
-                        #expect(result.0?.status == .running)
-                        #expect(result.0?.elapsedAtAnchorMs == 10_000)
-                        #expect(result.1.isEmpty)
-                    case .finish where usesSameID && isActive:
-                        #expect(result.0?.status == .completed)
-                        #expect(result.0?.elapsedAtAnchorMs == 60_000)
-                        #expect(result.1.map(\.status) == [CanonicalTimer.Status.completed.rawValue])
-                    case .cancel where usesSameID && isActive:
-                        #expect(result.0?.status == .cancelled)
-                        #expect(result.0?.elapsedAtAnchorMs == 10_000)
-                        #expect(result.1.map(\.status) == [CanonicalTimer.Status.cancelled.rawValue])
-                    case .clear where usesSameID && (status == .completed || status == .cancelled):
-                        #expect(result.0 == nil)
-                        #expect(result.1.isEmpty)
-                    default:
-                        #expect(result.0 == base)
-                        #expect(result.1.isEmpty)
-                    }
-                }
+    @Test func localTimerReducerAppliesLatestActionAcrossEveryExistingState() {
+        let completed = TestFixtures.timer(status: .completed, elapsed: 60_000)
+        let expectations: [(CommandType, CanonicalTimer.Status?)] = [
+            (.start, .running),
+            (.pause, .paused),
+            (.resume, .running),
+            (.finish, .completed),
+            (.cancel, .cancelled),
+            (.clear, nil)
+        ]
+
+        for (type, expectedStatus) in expectations {
+            let command = TestFixtures.command(type, sequence: 2, elapsed: 10_000)
+            let result = TimerReducer.apply(command, to: completed, history: [])
+            #expect(result.0?.status == expectedStatus)
+            if type != .clear {
+                #expect(result.0?.lastIntent?.commandId == command.id)
             }
         }
+
+        let historical = TestFixtures.history(
+            id: completed.id,
+            status: CanonicalTimer.Status.completed.rawValue,
+            durationMs: completed.plannedDurationMs,
+            date: completed.anchorAt
+        )
+        let resume = TestFixtures.command(.resume, sequence: 3, elapsed: 10_000, timerID: completed.id)
+        let resumed = TimerReducer.apply(resume, to: nil, history: [historical])
+        #expect(resumed.0?.id == completed.id)
+        #expect(resumed.0?.status == .running)
+        #expect(resumed.1.isEmpty)
     }
 
-    @Test func localTimerReducerAutoCompletesAtDeadlineBeforeLaterCommands() throws {
+    @Test func localTimerReducerLatestPauseOverridesDeadlineCompletion() throws {
         let running = TestFixtures.timer(
             status: .running,
             elapsed: 30_000,
@@ -1731,20 +2005,13 @@ struct UnitPositiveTests {
         )
         let latePause = TestFixtures.command(.pause, sequence: 31, elapsed: 40_000)
         let result = TimerReducer.apply(latePause, to: running, history: [])
-        let completed = try #require(result.0)
-        let completion = try #require(result.1.first)
+        let paused = try #require(result.0)
 
-        #expect(completed.status == .completed)
-        #expect(completed.elapsedAtAnchorMs == 60_000)
-        #expect(completed.anchorAt == TestFixtures.anchor.addingTimeInterval(30))
-        #expect(completed.lastIntent == nil)
-        #expect(completion.id == running.id)
-        #expect(completion.commandId == nil)
-        #expect(completion.phase == running.phase)
-        #expect(completion.plannedDurationMs == running.plannedDurationMs)
-        #expect(completion.taskId == running.taskId)
-        #expect(completion.completedAt == completed.anchorAt)
-        #expect(completion.endedAt == completed.anchorAt)
+        #expect(paused.status == .paused)
+        #expect(paused.elapsedAtAnchorMs == 40_000)
+        #expect(paused.anchorAt == latePause.occurredAt)
+        #expect(paused.lastIntent?.commandId == latePause.id)
+        #expect(result.1.isEmpty)
     }
 
     @Test func localTimerReducerLateFinishClaimsDeadlineCompletion() throws {
@@ -1755,7 +2022,7 @@ struct UnitPositiveTests {
         let completion = try #require(result.1.first)
 
         #expect(completed.status == .completed)
-        #expect(completed.anchorAt == TestFixtures.anchor.addingTimeInterval(30))
+        #expect(completed.anchorAt == finish.occurredAt)
         #expect(completed.lastIntent?.commandId == finish.id)
         #expect(completion.commandId == finish.id)
         #expect(completion.phase == running.phase)
@@ -1928,6 +2195,27 @@ struct UnitPositiveTests {
         #expect(TimerReducer.breakPhase(afterCompletedFocusCount: 8) == .longBreak)
     }
 
+    @Test @MainActor
+    func syncedRemoteFocusCompletionRecomputesNextBreakFromTodaysCount() {
+        let calendar = Calendar(identifier: .gregorian)
+        let reference = Date(timeIntervalSince1970: 2_000_000_000)
+        let history = (1...6).map { index in
+            HistoryItem(
+                id: "history-\(index)",
+                timerId: "timer-\(index)",
+                commandId: "finish-\(index)",
+                taskId: nil,
+                phase: .focus,
+                status: CanonicalTimer.Status.completed.rawValue,
+                plannedDurationMs: 1_500_000,
+                completedAt: calendar.date(byAdding: .minute, value: -index, to: reference),
+                endedAt: calendar.date(byAdding: .minute, value: -index, to: reference)
+            )
+        }
+
+        #expect(AppModel.derivedNextPhase(from: history, on: reference) == .shortBreak)
+    }
+
     @Test func parserEmitsNamedJSONAndPlainRevisionEvents() {
         var parser = SSERevisionParser()
 
@@ -2013,6 +2301,35 @@ struct UnitPositiveTests {
     @Test func foregroundPollingIsFasterForActiveTimers() {
         #expect(RemotePolling.interval(isTimerActive: true) == 2)
         #expect(RemotePolling.interval(isTimerActive: false) == 5)
+    }
+
+    @Test func base64URLRoundTripPreservesBinaryCanonicalForm() throws {
+        let value = Data([0, 255, 128, 127, 255])
+
+        let encoded = Base64URL.encode(value)
+
+        #expect(encoded == "AP-Af_8")
+        #expect(!encoded.contains("="))
+        #expect(try Base64URL.decode(encoded) == value)
+    }
+
+    @Test func persistedLoaderFallsBackToLegacyKeyWhenCurrentKeyIsAbsent() throws {
+        let suiteName = "UnitPositiveTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var legacy = PersistedTimerState.fresh()
+        legacy.deviceId = "device-from-legacy-key"
+        legacy.revision = 41
+        defaults.set(
+            try JSONEncoder.api.encode(legacy),
+            forKey: PersistedStateLoader.legacyStorageKey
+        )
+
+        let loaded = PersistedStateLoader(defaults: defaults).load()
+
+        #expect(loaded.storedData != nil)
+        #expect(loaded.decodedState == legacy)
+        #expect(loaded.localState == legacy)
     }
 }
 

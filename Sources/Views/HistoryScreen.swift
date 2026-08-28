@@ -2,6 +2,15 @@ import SwiftUI
 
 struct HistoryScreen: View {
     let model: AppModel
+    private let showCompletedFocusBreakdown: (() -> Void)?
+
+    init(
+        model: AppModel,
+        showCompletedFocusBreakdown: (() -> Void)? = nil
+    ) {
+        self.model = model
+        self.showCompletedFocusBreakdown = showCompletedFocusBreakdown
+    }
 
     var body: some View {
         Group {
@@ -27,21 +36,37 @@ struct HistoryScreen: View {
         .toolbar {
             if !model.history.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        CompletedFocusBreakdownScreen(model: model)
-                    } label: {
-                        Text("\(model.history.count) total")
-                            .font(.caption.weight(.medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .contentTransition(.numericText())
-                    }
-                    .accessibilityLabel("\(model.history.count) history entries")
-                    .accessibilityHint("Shows completed focus time by task")
+                    completedFocusBreakdownControl
                 }
             }
         }
         .primaryRouteAccountToolbar(model: model)
+    }
+
+    private var completedFocusBreakdownControl: some View {
+        Group {
+            if let showCompletedFocusBreakdown {
+                Button(action: showCompletedFocusBreakdown) {
+                    completedFocusBreakdownLabel
+                }
+            } else {
+                NavigationLink {
+                    CompletedFocusBreakdownScreen(model: model)
+                } label: {
+                    completedFocusBreakdownLabel
+                }
+            }
+        }
+        .accessibilityLabel("\(model.history.count) history entries")
+        .accessibilityHint("Shows completed focus time by task")
+    }
+
+    private var completedFocusBreakdownLabel: some View {
+        Text("\(model.history.count) total")
+            .font(.caption.weight(.medium).monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .contentTransition(.numericText())
     }
 }
 

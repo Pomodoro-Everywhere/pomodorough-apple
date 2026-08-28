@@ -7,6 +7,24 @@ import Testing
 @Suite("macOS")
 @MainActor
 struct MacOSTests {
+    @Test func destinationStateSurvivesSectionRoundTrips() {
+        let state = MacOSDestinationState()
+        state.taskDraft = "Preserve this task"
+        state.networkRoomName = "Design room"
+        state.isCreatingRoom = true
+        state.showsCompletedFocusBreakdown = true
+
+        state.selectedTab = .tasks
+        state.selectedTab = .timer
+        state.selectedTab = .network
+        state.selectedTab = .history
+
+        #expect(state.taskDraft == "Preserve this task")
+        #expect(state.networkRoomName == "Design room")
+        #expect(state.isCreatingRoom)
+        #expect(state.showsCompletedFocusBreakdown)
+    }
+
     @Test func googleOAuthAuthorizationURLUsesPKCEStateNonceAndExactRedirect() throws {
         let verifier = "known-verifier"
         let url = try MacGoogleOAuthContract.authorizationURL(
@@ -149,6 +167,38 @@ struct MacOSTests {
         }
     }
 
+    @Test func googleOAuthCallbackKeepsFirstDuplicateSecurityParameter() throws {
+        let callback = try #require(URL(string:
+            "com.example:/oauth2callback?state=expected&state=wrong&code=first&code=second"
+        ))
+
+        #expect(try MacGoogleOAuthContract.authorizationCode(
+            from: callback,
+            expectedState: "expected"
+        ) == "first")
+    }
+
+    @Test func googleOAuthExchangePropagatesTransportCancellation() async {
+        await #expect(throws: CancellationError.self) {
+            try await MacGoogleOAuthContract.exchangeCode(
+                "code",
+                clientID: "client",
+                redirectURI: "com.example:/oauth2callback",
+                verifier: "verifier",
+                transport: CancellingGoogleOAuthTransport()
+            )
+        }
+    }
+
+    @Test func macOSIdentityAdapterRejectsAppCallbackAndSignOutIsIdempotent() throws {
+        let callback = try #require(URL(string: "com.example:/oauth2callback?code=unused"))
+        let provider = SystemGoogleIdentityProvider()
+
+        #expect(!provider.handle(callback))
+        provider.signOut()
+        provider.signOut()
+    }
+
     @Test @MainActor
     func alarmSchedulerUsesNotificationsWithoutAlarmKit() async throws {
         let notifications = RecordingNotificationBackend()
@@ -176,6 +226,12 @@ struct MacOSTests {
             .schedule(identifier: "pomodorough.\(timerID)", phase: .focus, duration: 30),
             .remove(identifier: "pomodorough.\(timerID)"),
         ])
+    }
+}
+
+private struct CancellingGoogleOAuthTransport: GoogleOAuthTokenExchangeTransport {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        throw CancellationError()
     }
 }
 #endif

@@ -9,9 +9,8 @@ import unittest
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-CORE_COMMIT = "8dc24486b38d87eb2c717e80b4315b31dd6a671d"
-CORE_SHA256 = "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"
-CORE_RELEASE = "v0.1.5"
+CORE_COMMIT = "71c85020eab69a803ab0d3046aa7abef890c4780"
+CORE_SHA256 = "69ecfeb3bf292866dca2c9dba936120cb6839a761111ce19087e30cbff1428a4"
 PROVENANCE_SCRIPT = ROOT / "scripts" / "verify_shared_core_provenance.py"
 VALID_WASM = b"\0asm\x01\0\0\0"
 DIFFERENT_VALID_WASM = VALID_WASM + b"\0\x01\0"
@@ -22,19 +21,17 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(f'CORE_COMMIT: "{CORE_COMMIT}"', workflow)
         self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
-        self.assertIn("git -C .build/pomodorough-core rev-parse HEAD", workflow)
-        self.assertIn("git -C .build/pomodorough-core rev-list -n 1", workflow)
+        self.assertIn("cd .build/pomodorough-core", workflow)
         self.assertNotIn("ref: 05bb0cf7e73c99d1ef6c0acbd41a9798614a4359", workflow)
 
-    def test_release_downloads_canonical_core_and_checks_packaged_apps(self) -> None:
+    def test_release_rebuilds_core_and_checks_packaged_apps(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(f'CORE_COMMIT: "{CORE_COMMIT}"', workflow)
         self.assertIn(f'CORE_SHA256: "{CORE_SHA256}"', workflow)
-        self.assertIn(f'CORE_RELEASE: "{CORE_RELEASE}"', workflow)
         self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
-        self.assertIn("Download and verify canonical shared core", workflow)
-        self.assertIn("gh release download", workflow)
-        self.assertIn('"$published"', workflow)
+        self.assertIn("cd .build/pomodorough-core", workflow)
+        self.assertIn("Rebuild and verify pinned shared core", workflow)
+        self.assertIn("verify_wasm_artifact.py", workflow)
         self.assertIn("scripts/verify_shared_core_provenance.py", workflow)
         self.assertIn("SWIFT_SUPPRESS_WARNINGS=NO", workflow)
         self.assertIn("Verify shared core in staged release applications", workflow)
@@ -48,14 +45,10 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn('test "$actual_sha" = "$CORE_SHA256"', workflow)
         self.assertIn("test \"$verified_apps\" -eq 2", workflow)
 
-    def test_ci_binds_published_artifact_to_embedded_core(self) -> None:
+    def test_ci_binds_rebuild_to_embedded_core(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(f'CORE_RELEASE: "{CORE_RELEASE}"', workflow)
-        self.assertIn("Download and verify canonical shared core", workflow)
-        self.assertIn("gh release download", workflow)
         self.assertIn("scripts/verify_shared_core_provenance.py", workflow)
-        self.assertIn('"$published"', workflow)
-        self.assertNotIn("cargo build", workflow)
+        self.assertIn('"$rebuilt"', workflow)
 
     def test_provenance_rejects_different_valid_wasm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -145,9 +145,12 @@ struct AccountView: View {
     }
 
     private var completionGuaranteeSection: some View {
-        Section("Timer alert limits") {
+        Section {
             Text("Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.")
                 .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            Text("Timer alert limits")
+                .accessibilityIdentifier("account.timer-alert-limits")
         }
     }
 
@@ -170,7 +173,7 @@ struct AccountView: View {
 
     private var accountManagementSection: some View {
         Section {
-            Link("Privacy policy", destination: URL(string: "https://pomodoro-everywhere.github.io/pomodorough-server/privacy/")!)
+            Link("Privacy policy", destination: URL(string: "https://pomodorough.egigoka.me/privacy")!)
             Button("Delete account", role: .destructive) {
                 accountDeletionConfirmation = ""
                 confirmsAccountDeletion = true

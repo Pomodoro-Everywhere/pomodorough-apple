@@ -16,12 +16,14 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      CORE_COMMIT: "8dc24486b38d87eb2c717e80b4315b31dd6a671d"
-      CORE_SHA256: "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"
-      CORE_RELEASE: "v0.1.5"
+      CORE_COMMIT: "71c85020eab69a803ab0d3046aa7abef890c4780"
+      CORE_SHA256: "69ecfeb3bf292866dca2c9dba936120cb6839a761111ce19087e30cbff1428a4"
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughDerivedData
       IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
+      IOS_RESULT_BUNDLE: /tmp/PomodoroughTestResults/Pomodorough-iOS.xcresult
+      IOS_TEST_DIAGNOSTICS: /tmp/PomodoroughTestResults/diagnostics
+      IOS_TEST_LOG: /tmp/PomodoroughTestResults/xcodebuild.log
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -36,33 +38,29 @@ jobs:
           path: .build/pomodorough-core
           persist-credentials: false
 
-      - name: Download and verify canonical shared core
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Rebuild and verify pinned shared core
         run: |
-          set -euo pipefail
           test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
           test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
           test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
-          git -C .build/pomodorough-core fetch --depth=1 origin \
-            "refs/tags/$CORE_RELEASE:refs/tags/$CORE_RELEASE"
-          test "$(git -C .build/pomodorough-core rev-list -n 1 "$CORE_RELEASE")" = "$CORE_COMMIT"
-          published_dir="$RUNNER_TEMP/published-shared-core"
-          mkdir -p "$published_dir"
-          gh release download "$CORE_RELEASE" \
-            --repo Pomodoro-Everywhere/pomodorough-core \
-            --pattern pomodorough_core.wasm \
-            --dir "$published_dir"
-          published="$published_dir/pomodorough_core.wasm"
-          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
-            "$published" \
-            --sha256 "$CORE_SHA256"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
             Resources/SharedCore/pomodorough_core.wasm \
             --sha256 "$CORE_SHA256"
           python3 scripts/verify_shared_core_provenance.py \
             --sha256 "$CORE_SHA256" \
-            "$published" \
+            "$rebuilt" \
             Resources/SharedCore/pomodorough_core.wasm
 
       - name: Check documentation links
@@ -90,7 +88,7 @@ jobs:
           -derivedDataPath "$DERIVED_DATA_PATH"
           -resolvePackageDependencies
 
-      - name: Test iOS
+      - name: Build iOS for testing
         run: >-
           xcodebuild
           -project Pomodorough.xcodeproj
@@ -99,7 +97,42 @@ jobs:
           -derivedDataPath "$DERIVED_DATA_PATH"
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
-          test
+          build-for-testing
+
+      - name: Test iOS with bounded finalization
+        run: >-
+          python3 scripts/run_xcode_tests.py
+          --idle-timeout 300
+          --wall-timeout 1800
+          --log-path "$IOS_TEST_LOG"
+          --diagnostics-dir "$IOS_TEST_DIAGNOSTICS"
+          --completion-marker "Test Suite 'PomodoroughUITests.xctest' passed"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -destination "$IOS_DESTINATION"
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resultBundlePath "$IOS_RESULT_BUNDLE"
+          CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
+          test-without-building
+
+      - name: Verify iOS result bundle presence
+        if: ${{ always() }}
+        run: test -d "$IOS_RESULT_BUNDLE"
+
+      - name: Retain iOS test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-test-evidence
+          path: |
+            ${{ env.IOS_RESULT_BUNDLE }}
+            ${{ env.IOS_TEST_LOG }}
+            ${{ env.IOS_TEST_DIAGNOSTICS }}
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build iOS
         run: >-

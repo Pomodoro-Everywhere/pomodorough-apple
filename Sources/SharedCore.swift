@@ -2,53 +2,9 @@ import CryptoKit
 import Foundation
 import WasmKit
 
-enum SharedCoreError: Error, Equatable, LocalizedError, Sendable {
-    case resourceMissing
-    case runtimeInitializationFailed(String)
-    case checksumMismatch(expected: String, actual: String)
-    case missingExport(String)
-    case invalidExportSignature(String)
-    case inputTooLarge(Int)
-    case allocationFailed(length: Int)
-    case memoryOutOfBounds(pointer: UInt32, length: UInt32, byteCount: Int)
-    case invalidABIResult(String)
-    case invalidInput(String)
-    case core(String)
-    case invalidResponse(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .resourceMissing:
-            String(localized: "Bundled pomodorough_core.wasm resource is missing.")
-        case .runtimeInitializationFailed(let message):
-            String(localized: "Shared core WebAssembly initialization failed: \(message)")
-        case .checksumMismatch(let expected, let actual):
-            String(localized: "Shared core SHA-256 mismatch: expected \(expected), got \(actual).")
-        case .missingExport(let name):
-            String(localized: "Shared core WebAssembly export is missing: \(name).")
-        case .invalidExportSignature(let name):
-            String(localized: "Shared core WebAssembly export has an invalid signature: \(name).")
-        case .inputTooLarge(let length):
-            String(localized: "Shared core input exceeds the 32-bit ABI length: \(length) bytes.")
-        case .allocationFailed(let length):
-            String(localized: "Shared core failed to allocate \(length) bytes.")
-        case .memoryOutOfBounds(let pointer, let length, let byteCount):
-            String(localized: "Shared core memory range \(pointer)..<\(UInt64(pointer) + UInt64(length)) exceeds \(byteCount) bytes.")
-        case .invalidABIResult(let message):
-            String(localized: "Shared core returned an invalid ABI result: \(message)")
-        case .invalidInput(let message):
-            String(localized: "Shared core input is invalid: \(message)")
-        case .core(let message):
-            String(localized: "Shared core rejected the operation: \(message)")
-        case .invalidResponse(let message):
-            String(localized: "Shared core returned an invalid response: \(message)")
-        }
-    }
-}
-
-actor SharedCore {
-    static let coreCommit = "8dc24486b38d87eb2c717e80b4315b31dd6a671d"
-    static let coreSHA256 = "1e67043a8a652c5f9c6d36b28fe280b4bb5677e0c0279faaccdceb407181face"
+final class SharedCore: @unchecked Sendable {
+    static let coreCommit = "71c85020eab69a803ab0d3046aa7abef890c4780"
+    static let coreSHA256 = "69ecfeb3bf292866dca2c9dba936120cb6839a761111ce19087e30cbff1428a4"
     private static let maxTransferBytes = 16 * 1024 * 1024
 
     private struct Runtime {
@@ -64,11 +20,26 @@ actor SharedCore {
         let error: String?
     }
 
+    private struct InvocationBuffers {
+        var operationPointer: UInt32 = 0
+        var inputPointer: UInt32 = 0
+        var resultPointer: UInt32 = 0
+        let operationLength: UInt32
+        let inputLength: UInt32
+        var resultLength: UInt32 = 0
+    }
+
     private let moduleURL: URL
+    private let freeResultValidator: @Sendable ([Value]) throws -> Void
+    private let lock = NSRecursiveLock()
     private var runtime: Runtime?
 
-    init(moduleURL: URL) {
+    init(
+        moduleURL: URL,
+        freeResultValidator: @escaping @Sendable ([Value]) throws -> Void = SharedCore.validateFreeResult
+    ) {
         self.moduleURL = moduleURL
+        self.freeResultValidator = freeResultValidator
     }
 
     static func bundled(in bundle: Bundle = .main) throws -> SharedCore {
@@ -92,8 +63,10 @@ actor SharedCore {
         inputJSON: Data,
         as outputType: Output.Type
     ) throws -> Output {
+        lock.lock()
+        defer { lock.unlock() }
         let response = try invoke(operation: operation, inputJSON: inputJSON)
-        let decoder = JSONDecoder()
+        let decoder = JSONDecoder.api
 
         let header: EnvelopeHeader
         do {
@@ -129,11 +102,65 @@ actor SharedCore {
     ) throws -> Output {
         let inputJSON: Data
         do {
-            inputJSON = try JSONEncoder().encode(input)
+            inputJSON = try JSONEncoder.sharedCore.encode(input)
         } catch {
             throw SharedCoreError.invalidInput("encoding failed: \(error)")
         }
         return try dispatch(operation, inputJSON: inputJSON, as: outputType)
+    }
+
+    func applyProjection(_ input: CoreProjectionInput) throws -> CoreProjectionOutput {
+        let output: CoreProjectionOutput = try dispatch(
+            "projection.apply.v2",
+            input: input,
+            as: CoreProjectionOutput.self
+        )
+        return try output.validated(for: input)
+    }
+
+    func completionPlan(_ input: CoreCompletionPlanInput) throws -> CoreCompletionPlanOutput {
+        let output: CoreCompletionPlanOutput = try dispatch(
+            "timer.completionPlan.v1",
+            input: input,
+            as: CoreCompletionPlanOutput.self
+        )
+        return try output.validated(for: input)
+    }
+
+    func tickHLC(_ input: CoreHLCTickInput) throws -> CoreHLCTickOutput {
+        let output: CoreHLCTickOutput = try dispatch(
+            "hlc.tick.v1",
+            input: input,
+            as: CoreHLCTickOutput.self
+        )
+        return try output.validated(for: input)
+    }
+
+    func headHLC(_ input: CoreHLCHeadInput) throws -> CoreHLC {
+        let output: CoreHLC = try dispatch(
+            "hlc.head.v1",
+            input: input,
+            as: CoreHLC.self
+        )
+        return try output.validatedHead(for: input)
+    }
+
+    func planBootstrap(_ input: CoreBootstrapPlanInput) throws -> CoreBootstrapPlanOutput {
+        let output: CoreBootstrapPlanOutput = try dispatch(
+            "bootstrap.plan.v1",
+            input: input,
+            as: CoreBootstrapPlanOutput.self
+        )
+        return try output.validated()
+    }
+
+    func reconcileRebase(_ input: CoreReconcileInput) throws -> CoreReconcileOutput {
+        let output: CoreReconcileOutput = try dispatch(
+            "reconcile.rebase.v1",
+            input: input,
+            as: CoreReconcileOutput.self
+        )
+        return try output.validated(for: input)
     }
 
     private func invoke(operation: String, inputJSON: Data) throws -> Data {
@@ -145,66 +172,94 @@ actor SharedCore {
         guard !inputJSON.isEmpty else {
             throw SharedCoreError.invalidInput("input JSON must not be empty")
         }
-        let operationLength = try abiLength(operationBytes.count)
-        let inputLength = try abiLength(inputJSON.count)
-        var operationPointer: UInt32 = 0
-        var inputPointer: UInt32 = 0
-        var resultPointer: UInt32 = 0
-        var resultLength: UInt32 = 0
-
+        var buffers = InvocationBuffers(
+            operationLength: try abiLength(operationBytes.count),
+            inputLength: try abiLength(inputJSON.count)
+        )
         do {
-            operationPointer = try write(operationBytes, using: runtime)
-            inputPointer = try write(inputJSON, using: runtime)
-            let results: [Value]
-            do {
-                results = try runtime.dispatch([
-                    .i32(operationPointer),
-                    .i32(operationLength),
-                    .i32(inputPointer),
-                    .i32(inputLength),
-                ])
-            } catch {
-                throw SharedCoreError.invalidABIResult(String(describing: error))
-            }
-            guard results.count == 1, case .i64(let packed) = results[0] else {
-                throw SharedCoreError.invalidABIResult("pomodorough_dispatch must return one i64")
-            }
-
-            resultPointer = UInt32(truncatingIfNeeded: packed)
-            resultLength = UInt32(truncatingIfNeeded: packed >> 32)
-            guard resultPointer != 0, resultLength != 0 else {
-                throw SharedCoreError.invalidABIResult("dispatch returned an empty result buffer")
-            }
-            guard resultLength <= UInt32(Self.maxTransferBytes) else {
-                throw SharedCoreError.invalidABIResult("dispatch result exceeds the transfer limit")
-            }
-            try validate(pointer: resultPointer, length: resultLength, in: runtime.memory)
-            let response = try read(pointer: resultPointer, length: resultLength, from: runtime.memory)
-            try cleanup(pointer: &resultPointer, length: resultLength, using: runtime)
-            try cleanup(pointer: &inputPointer, length: inputLength, using: runtime)
-            try cleanup(pointer: &operationPointer, length: operationLength, using: runtime)
+            buffers.operationPointer = try write(operationBytes, using: runtime)
+            buffers.inputPointer = try write(inputJSON, using: runtime)
+            let response = try dispatchAndRead(using: runtime, buffers: &buffers)
+            try cleanupBuffers(&buffers, using: runtime)
             return response
         } catch {
-            let primary = error
-            var cleanupFailures: [String] = []
-            for cleanup in [
-                { try self.cleanup(pointer: &resultPointer, length: resultLength, using: runtime) },
-                { try self.cleanup(pointer: &inputPointer, length: inputLength, using: runtime) },
-                { try self.cleanup(pointer: &operationPointer, length: operationLength, using: runtime) },
-            ] {
-                do {
-                    try cleanup()
-                } catch {
-                    cleanupFailures.append(String(describing: error))
-                }
-            }
-            guard cleanupFailures.isEmpty else {
-                self.runtime = nil
-                throw SharedCoreError.invalidABIResult(
-                    "operation failed: \(primary); cleanup failed: \(cleanupFailures.joined(separator: "; "))"
-                )
-            }
-            throw primary
+            try recoverFromInvocationFailure(error, buffers: &buffers, runtime: runtime)
+        }
+    }
+
+    private func dispatchAndRead(
+        using runtime: Runtime,
+        buffers: inout InvocationBuffers
+    ) throws -> Data {
+        let results: [Value]
+        do {
+            results = try runtime.dispatch([
+                .i32(buffers.operationPointer),
+                .i32(buffers.operationLength),
+                .i32(buffers.inputPointer),
+                .i32(buffers.inputLength),
+            ])
+        } catch {
+            throw SharedCoreError.invalidABIResult(String(describing: error))
+        }
+        guard results.count == 1, case .i64(let packed) = results[0] else {
+            throw SharedCoreError.invalidABIResult("pomodorough_dispatch must return one i64")
+        }
+        buffers.resultPointer = UInt32(truncatingIfNeeded: packed)
+        buffers.resultLength = UInt32(truncatingIfNeeded: packed >> 32)
+        guard buffers.resultPointer != 0, buffers.resultLength != 0 else {
+            throw SharedCoreError.invalidABIResult("dispatch returned an empty result buffer")
+        }
+        guard buffers.resultLength <= UInt32(Self.maxTransferBytes) else {
+            throw SharedCoreError.invalidABIResult("dispatch result exceeds the transfer limit")
+        }
+        try validate(
+            pointer: buffers.resultPointer,
+            length: buffers.resultLength,
+            in: runtime.memory
+        )
+        return try read(
+            pointer: buffers.resultPointer,
+            length: buffers.resultLength,
+            from: runtime.memory
+        )
+    }
+
+    private func cleanupBuffers(_ buffers: inout InvocationBuffers, using runtime: Runtime) throws {
+        try cleanup(pointer: &buffers.resultPointer, length: buffers.resultLength, using: runtime)
+        try cleanup(pointer: &buffers.inputPointer, length: buffers.inputLength, using: runtime)
+        try cleanup(pointer: &buffers.operationPointer, length: buffers.operationLength, using: runtime)
+    }
+
+    private func recoverFromInvocationFailure(
+        _ primary: Error,
+        buffers: inout InvocationBuffers,
+        runtime: Runtime
+    ) throws -> Never {
+        let failures = [
+            cleanupFailure(pointer: &buffers.resultPointer, length: buffers.resultLength, runtime: runtime),
+            cleanupFailure(pointer: &buffers.inputPointer, length: buffers.inputLength, runtime: runtime),
+            cleanupFailure(pointer: &buffers.operationPointer, length: buffers.operationLength, runtime: runtime),
+        ].compactMap { $0 }
+        guard failures.isEmpty else {
+            self.runtime = nil
+            throw SharedCoreError.invalidABIResult(
+                "operation failed: \(primary); cleanup failed: \(failures.joined(separator: "; "))"
+            )
+        }
+        throw primary
+    }
+
+    private func cleanupFailure(
+        pointer: inout UInt32,
+        length: UInt32,
+        runtime: Runtime
+    ) -> String? {
+        do {
+            try cleanup(pointer: &pointer, length: length, using: runtime)
+            return nil
+        } catch {
+            return String(describing: error)
         }
     }
 
@@ -231,13 +286,13 @@ actor SharedCore {
                 throw SharedCoreError.missingExport("memory")
             }
             let allocate = try function(named: "pomodorough_alloc", in: instance)
-            let free = try function(named: "pomodorough_free", in: instance)
+            let free = try function(named: "pomodorough_free_v2", in: instance)
             let dispatch = try function(named: "pomodorough_dispatch", in: instance)
             guard allocate.type.parameters == [.i32], allocate.type.results == [.i32] else {
                 throw SharedCoreError.invalidExportSignature("pomodorough_alloc")
             }
-            guard free.type.parameters == [.i32, .i32], free.type.results.isEmpty else {
-                throw SharedCoreError.invalidExportSignature("pomodorough_free")
+            guard free.type.parameters == [.i32, .i32], free.type.results == [.i32] else {
+                throw SharedCoreError.invalidExportSignature("pomodorough_free_v2")
             }
             guard dispatch.type.parameters == [.i32, .i32, .i32, .i32], dispatch.type.results == [.i64] else {
                 throw SharedCoreError.invalidExportSignature("pomodorough_dispatch")
@@ -340,13 +395,19 @@ actor SharedCore {
         }
         do {
             let results = try runtime.free([.i32(pointer), .i32(length)])
-            guard results.isEmpty else {
-                throw SharedCoreError.invalidABIResult("pomodorough_free must not return a value")
-            }
+            try freeResultValidator(results)
         } catch let error as SharedCoreError {
             throw error
         } catch {
             throw SharedCoreError.invalidABIResult(String(describing: error))
+        }
+    }
+
+    private static func validateFreeResult(_ results: [Value]) throws {
+        guard results.count == 1, case .i32(let status) = results[0], status == 1 else {
+            throw SharedCoreError.invalidABIResult(
+                "pomodorough_free_v2 rejected buffer with result \(results)"
+            )
         }
     }
 
@@ -361,5 +422,44 @@ actor SharedCore {
                 byteCount: memory.byteCount
             )
         }
+    }
+}
+
+private extension JSONEncoder {
+    static var sharedCore: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(try sharedCoreTimestamp(for: date))
+        }
+        return encoder
+    }
+}
+
+private func sharedCoreTimestamp(for date: Date) throws -> String {
+    let seconds = date.timeIntervalSince1970
+    let unroundedMilliseconds = seconds * 1_000
+    guard seconds.isFinite,
+          abs(unroundedMilliseconds) <= Double(WireBounds.maxSafeInteger) else {
+        throw EncodingError.invalidValue(
+            date,
+            .init(codingPath: [], debugDescription: "Shared Core date is out of range")
+        )
+    }
+    let milliseconds = Int64(unroundedMilliseconds.rounded())
+    let wholeSeconds = milliseconds >= 0
+        ? milliseconds / 1_000
+        : (milliseconds - 999) / 1_000
+    let fraction = milliseconds - wholeSeconds * 1_000
+    let paddedFraction = String(fraction).leftPadded(to: 3, with: "0")
+    let wholeDate = Date(timeIntervalSince1970: TimeInterval(wholeSeconds))
+    let prefix = wholeDate.formatted(Date.ISO8601FormatStyle()).dropLast()
+    return "\(prefix).\(paddedFraction)Z"
+}
+
+private extension String {
+    func leftPadded(to length: Int, with character: Character) -> String {
+        String(repeating: character, count: max(0, length - count)) + self
     }
 }

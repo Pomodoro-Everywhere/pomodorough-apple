@@ -36,6 +36,7 @@ struct PomodoroughApp: App {
         }
 #if os(macOS)
         .defaultSize(width: 920, height: 760)
+        .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
 #endif
     }

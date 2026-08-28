@@ -1295,6 +1295,16 @@
         }
       }
     },
+    "Navigate between Timer, Tasks, Arrivals, and Network": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Navigate between Timer, Tasks, Arrivals, and Network"
+          }
+        }
+      }
+    },
     "Network": {
       "localizations": {
         "en": {
@@ -1975,6 +1985,16 @@
         }
       }
     },
+    "Section": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Section"
+          }
+        }
+      }
+    },
     "Selected": {
       "localizations": {
         "en": {
@@ -2385,6 +2405,26 @@
         }
       }
     },
+    "Sync needs attention": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync needs attention"
+          }
+        }
+      }
+    },
+    "Sync needs attention. %@. Dismiss": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync needs attention. %@. Dismiss"
+          }
+        }
+      }
+    },
     "Sync now": {
       "localizations": {
         "en": {
@@ -2595,26 +2635,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Timer alert limits"
-          }
-        }
-      }
-    },
-    "Timer continued elsewhere": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer continued elsewhere"
-          }
-        }
-      }
-    },
-    "Timer continued elsewhere. %@. Dismiss": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer continued elsewhere. %@. Dismiss"
           }
         }
       }

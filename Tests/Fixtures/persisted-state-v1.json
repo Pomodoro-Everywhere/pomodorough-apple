@@ -1,0 +1,128 @@
+{
+  "formatVersion": 1,
+  "canonicalSHA256": "cb38034034f591c7b3fe075416034651fa673e037c29099fc87ac19609353b52",
+  "canonicalState": {
+    "autoStartBreaks": false,
+    "deviceId": "device-compatibility",
+    "hasCorruptPendingOperations": false,
+    "hasExplicitPhaseSelection": false,
+    "history": [],
+    "hlcCounter": 0,
+    "hlcWallMs": 0,
+    "knownTasks": [],
+    "lastTrustedTimeMs": 2000000,
+    "legacyTaskAssignments": {},
+    "localCommandDates": {},
+    "localTimerOwners": {},
+    "nextSequence": 1,
+    "pendingAutoStartOperations": [],
+    "pendingCommands": [],
+    "pendingDurationOperations": [],
+    "pendingSelectedTaskOperations": [],
+    "pendingTaskOperations": [],
+    "provisionalBreaks": [],
+    "provisionalPhaseAdvances": [],
+    "revision": 0,
+    "selectedPhaseGeneration": 0,
+    "sequenceExhausted": false,
+    "serverTimeAnchorMs": 2000000,
+    "serverTimeAnchorUptime": 100,
+    "serverTimeOffsetMs": 125,
+    "serverTimeUncertaintyMs": 25,
+    "settings": {
+      "autoStartBreaks": false,
+      "focusDurationMs": 1500000,
+      "longBreakDurationMs": 900000,
+      "selectedPhase": "focus",
+      "shortBreakDurationMs": 300000
+    },
+    "tasks": []
+  },
+  "missingDefaultsState": {
+    "deviceId": "device-compatibility",
+    "history": [],
+    "nextSequence": 1,
+    "pendingCommands": [],
+    "revision": 0
+  },
+  "explicitNullDefaultsState": {
+    "autoStartBreaks": null,
+    "canonicalTimer": null,
+    "deviceId": "device-compatibility",
+    "hasCorruptPendingOperations": null,
+    "hasExplicitPhaseSelection": null,
+    "history": [],
+    "hlcCounter": null,
+    "hlcWallMs": null,
+    "knownTasks": null,
+    "lastTrustedTimeMs": null,
+    "lastUuidV7": null,
+    "legacyTaskAssignments": null,
+    "localCommandDates": null,
+    "localTimerOwners": null,
+    "nextSequence": 1,
+    "pendingAutoStartOperations": null,
+    "pendingCommands": [],
+    "pendingDurationOperations": null,
+    "pendingSelectedTaskOperations": null,
+    "pendingTaskOperations": null,
+    "provisionalBreaks": null,
+    "provisionalPhaseAdvances": null,
+    "revision": 0,
+    "selectedPhaseGeneration": null,
+    "selectedTaskID": null,
+    "sequenceExhausted": null,
+    "serverTimeAnchorMs": null,
+    "serverTimeAnchorUptime": null,
+    "serverTimeOffsetMs": null,
+    "serverTimeUncertaintyMs": null,
+    "settings": null,
+    "tasks": null
+  },
+  "requiredNullState": {
+    "deviceId": "device-compatibility",
+    "history": [],
+    "nextSequence": 1,
+    "pendingCommands": null,
+    "revision": 0
+  },
+  "lossyLegacySentinelState": {
+    "deviceId": "device-compatibility",
+    "history": [],
+    "nextSequence": 1,
+    "pendingAutoStartOperations": [
+      {
+        "deviceId": "device-compatibility",
+        "enabled": true,
+        "hlcCounter": 0,
+        "hlcWallMs": 0,
+        "id": "11111111-1111-1111-1111-111111111111",
+        "occurredAt": "2026-08-25T00:00:00.000Z"
+      },
+      { "malformed": true }
+    ],
+    "pendingCommands": [],
+    "pendingDurationOperations": [
+      {
+        "durationMs": 600000,
+        "hlcCounter": 0,
+        "hlcWallMs": 0,
+        "id": "duration-legacy",
+        "occurredAt": "2026-08-25T00:00:00.000Z",
+        "phase": "short_break"
+      }
+    ],
+    "pendingSelectedTaskOperations": [
+      {
+        "deviceId": "device-compatibility",
+        "hlcCounter": 0,
+        "hlcWallMs": 0,
+        "id": "22222222-2222-2222-2222-222222222222",
+        "occurredAt": "2026-08-25T00:00:00.000Z",
+        "taskId": null
+      },
+      "malformed"
+    ],
+    "revision": 0
+  }
+}
