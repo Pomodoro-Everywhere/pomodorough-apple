@@ -195,7 +195,7 @@ extension CoreCompletionPlanOutput {
         case .expiry: valid = validExpiry
         case .commandRequest: valid = validCommandRequest
         case .finishApplied: valid = validFinishApplied
-        case .generatedBreak: valid = validGeneratedBreak
+        case .generatedBreak(let generated): valid = validGeneratedBreak(for: generated)
         }
         guard valid else {
             throw SharedCoreError.invalidResponse(
@@ -223,12 +223,31 @@ extension CoreCompletionPlanOutput {
             && generatedBreakPhase == nil && !sourceAlreadyAccepted
     }
 
-    private var validGeneratedBreak: Bool {
-        !expired && !commandEligible && !reserveGeneratedBreak
+    private func validGeneratedBreak(for input: CoreCompletionGeneratedBreakInput) -> Bool {
+        let canonicalHasSource = input.canonical.hasExactSource(input.source)
+        let sourceAccepted = !input.sourceFinishPending && canonicalHasSource
+        let selected = input.requireCanonical || sourceAccepted
+            ? input.canonical
+            : input.optimistic
+        return !expired && !commandEligible && !reserveGeneratedBreak
             && selectedPhase == nil && !queueAutoBreak
-            && (generatedBreakPhase == nil || generatedBreakEligible)
-            && (!sourceAlreadyAccepted
-                || (generatedBreakEligible && generatedBreakPhase != nil))
+            && generatedBreakEligible == (generatedBreakPhase != nil)
+            && generatedBreakEligible == selected.hasExactSource(input.source)
+            && sourceAlreadyAccepted == sourceAccepted
+    }
+}
+
+private extension CoreCompletionProjection {
+    func hasExactSource(_ source: CoreCompletionIdentity) -> Bool {
+        canonicalTimer?.id == source.timerId
+            && canonicalTimer?.phase == .focus
+            && canonicalTimer?.status == .completed
+            && history.contains {
+                $0.timerId == source.timerId
+                    && $0.commandId == source.commandId
+                    && $0.phase == .focus
+                    && $0.status == "completed"
+            }
     }
 }
 

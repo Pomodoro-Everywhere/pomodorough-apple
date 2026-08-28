@@ -37,7 +37,7 @@ struct SharedCoreWASMTests {
             as: CoreVersion.self
         )
 
-        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.1.6"))
+        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.1.7"))
     }
 
     @Test func hlcHeadDispatchesThroughBundledWebAssembly() async throws {
@@ -235,6 +235,107 @@ struct SharedCoreWASMTests {
         #expect(throws: SharedCoreError.self) {
             try contradictory.validated(for: input)
         }
+    }
+
+    @Test func completionValidationRejectsEligibleGeneratedBreakWithoutPhase() throws {
+        let date = Date(timeIntervalSince1970: 1_000)
+        let input = CoreCompletionPlanInput.generatedBreak(.init(
+            source: .init(commandId: "finish-invalid", timerId: "timer-invalid"),
+            canonical: .init(canonicalTimer: nil, history: []),
+            optimistic: .init(canonicalTimer: nil, history: []),
+            sourceFinishPending: true,
+            requireCanonical: false,
+            dayStart: date,
+            dayEnd: date.addingTimeInterval(86_400)
+        ))
+        let contradictory = CoreCompletionPlanOutput(
+            expired: false,
+            commandEligible: false,
+            reserveGeneratedBreak: false,
+            selectedPhase: nil,
+            queueAutoBreak: false,
+            generatedBreakEligible: true,
+            generatedBreakPhase: nil,
+            sourceAlreadyAccepted: false
+        )
+
+        #expect(throws: SharedCoreError.self) {
+            try contradictory.validated(for: input)
+        }
+    }
+
+    @Test func completionValidationRejectsEligibleGeneratedBreakWithoutExactSourceEvidence() throws {
+        let date = Date(timeIntervalSince1970: 1_000)
+        let input = CoreCompletionPlanInput.generatedBreak(.init(
+            source: .init(commandId: "finish-invalid", timerId: "timer-invalid"),
+            canonical: .init(canonicalTimer: nil, history: []),
+            optimistic: .init(canonicalTimer: nil, history: []),
+            sourceFinishPending: true,
+            requireCanonical: false,
+            dayStart: date,
+            dayEnd: date.addingTimeInterval(86_400)
+        ))
+        let contradictory = CoreCompletionPlanOutput(
+            expired: false,
+            commandEligible: false,
+            reserveGeneratedBreak: false,
+            selectedPhase: nil,
+            queueAutoBreak: false,
+            generatedBreakEligible: true,
+            generatedBreakPhase: .shortBreak,
+            sourceAlreadyAccepted: false
+        )
+
+        #expect(throws: SharedCoreError.self) {
+            try contradictory.validated(for: input)
+        }
+    }
+
+    @Test func completionValidationAcceptsExactGeneratedBreakEvidence() throws {
+        let date = Date(timeIntervalSince1970: 1_000)
+        let timer = CanonicalTimer(
+            id: "timer-valid",
+            taskId: nil,
+            phase: .focus,
+            status: .completed,
+            plannedDurationMs: 1_500_000,
+            elapsedAtAnchorMs: 1_500_000,
+            anchorAt: date,
+            lastIntent: nil
+        )
+        let history = HistoryItem(
+            id: "history-valid",
+            timerId: timer.id,
+            commandId: "finish-valid",
+            taskId: nil,
+            phase: .focus,
+            status: "completed",
+            plannedDurationMs: 1_500_000,
+            completedAt: date,
+            endedAt: date
+        )
+        let projection = CoreCompletionProjection(canonicalTimer: timer, history: [history])
+        let input = CoreCompletionPlanInput.generatedBreak(.init(
+            source: .init(commandId: "finish-valid", timerId: timer.id),
+            canonical: projection,
+            optimistic: projection,
+            sourceFinishPending: false,
+            requireCanonical: true,
+            dayStart: date,
+            dayEnd: date.addingTimeInterval(86_400)
+        ))
+        let output = CoreCompletionPlanOutput(
+            expired: false,
+            commandEligible: false,
+            reserveGeneratedBreak: false,
+            selectedPhase: nil,
+            queueAutoBreak: false,
+            generatedBreakEligible: true,
+            generatedBreakPhase: .shortBreak,
+            sourceAlreadyAccepted: true
+        )
+
+        #expect(try output.validated(for: input) == output)
     }
 
     @Test func hlcTickAcceptsFutureCounterAndRejectsRollbackBeforeMutation() throws {
