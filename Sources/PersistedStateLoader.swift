@@ -40,8 +40,9 @@ struct PersistedStateLoader {
 
     let defaults: UserDefaults
 
-    func load() -> PersistedStateLoad {
-        let storedData = defaults.data(forKey: Self.storageKey)
+    func load(preferredStoredData: Data? = nil) -> PersistedStateLoad {
+        let storedData = preferredStoredData
+            ?? defaults.data(forKey: Self.storageKey)
             ?? defaults.data(forKey: Self.legacyStorageKey)
         let decodedState = storedData.flatMap {
             try? JSONDecoder.api.decode(PersistedTimerState.self, from: $0)

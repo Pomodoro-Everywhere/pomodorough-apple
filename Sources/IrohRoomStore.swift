@@ -1,5 +1,10 @@
 import Foundation
 
+struct AccountDeletionRoomTopology: Equatable, Sendable {
+    let roomIDs: [String]
+    let roomSecretAccounts: [String]
+}
+
 final class IrohRoomStore: @unchecked Sendable {
     private let lock = NSLock()
     private let fileURL: URL
@@ -82,6 +87,69 @@ final class IrohRoomStore: @unchecked Sendable {
         lock.withLock {
             state.activeRoomID ?? state.rooms.max(by: { $0.createdAt < $1.createdAt })?.roomID
         }
+    }
+
+    var roomIDs: [String] {
+        lock.withLock { state.rooms.map(\.roomID).sorted() }
+    }
+
+    func accountDeletionTopology() throws -> AccountDeletionRoomTopology {
+        let metadataRoomIDs = lock.withLock { state.rooms.map(\.roomID) }
+        let discoveredAccounts = try secretStore.accountDeletionAccounts()
+        let discoveredRoomIDs = discoveredAccounts.compactMap(Self.validRoomID(account:))
+        let roomIDs = Array(Set(metadataRoomIDs + discoveredRoomIDs)).sorted()
+        let canonicalAccounts = metadataRoomIDs.map { "room-secret-v1.\($0)" }
+        return AccountDeletionRoomTopology(
+            roomIDs: roomIDs,
+            roomSecretAccounts: Array(Set(discoveredAccounts + canonicalAccounts)).sorted()
+        )
+    }
+
+    func purgeAccountData(
+        retainedRoomIDs: [String],
+        roomSecretAccounts: [String]
+    ) throws {
+        try purgeRoomMetadata()
+        let discoveredAccounts = try secretStore.accountDeletionAccounts()
+        let canonicalAccounts = retainedRoomIDs.map { "room-secret-v1.\($0)" }
+        let obligations = Array(Set(
+            roomSecretAccounts + discoveredAccounts + canonicalAccounts
+        )).sorted()
+        var firstError: Error?
+        for account in obligations {
+            do {
+                try secretStore.deleteAccount(named: account)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+        let remainingAccounts = try secretStore.accountDeletionAccounts()
+        if let firstError { throw firstError }
+        guard remainingAccounts.isEmpty else {
+            throw IrohProtocolError.unavailable(
+                "Iroh room credential cleanup could not be proven complete."
+            )
+        }
+    }
+
+    private func purgeRoomMetadata() throws {
+        try lock.withLock {
+            let priorLoadError = loadError
+            loadError = nil
+            do {
+                try committingLocked { state = .empty }
+            } catch {
+                loadError = priorLoadError
+                throw error
+            }
+        }
+    }
+
+    private static func validRoomID(account: String) -> String? {
+        let prefix = "room-secret-v1."
+        guard account.hasPrefix(prefix) else { return nil }
+        let roomID = String(account.dropFirst(prefix.count))
+        return IrohProtocolV1.isValidRoomID(roomID) ? roomID : nil
     }
 
     func roomSnapshot(roomID: String) -> IrohRoomSnapshot? {

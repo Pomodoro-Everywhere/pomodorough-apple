@@ -1,5 +1,11 @@
 import Foundation
 
+enum AccountDeletionOutcome: Equatable, Sendable {
+    case committed
+    case rejected(String)
+    case unknown(String)
+}
+
 actor APIClient {
     private let baseURL: URL
     private let session: URLSession
@@ -155,14 +161,26 @@ actor APIClient {
         try clearTokens()
     }
 
-    func deleteAccount(confirmation: String) async throws {
-        _ = try await perform(
-            "/api/v1/account",
-            method: "DELETE",
-            body: DeleteAccountRequest(confirmation: confirmation),
-            authenticated: true
-        )
-        try? clearTokens()
+    func deleteAccount(confirmation: String) async -> AccountDeletionOutcome {
+        do {
+            var request = URLRequest(url: baseURL.appending(path: "/api/v1/account"))
+            request.httpMethod = "DELETE"
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONEncoder.api.encode(DeleteAccountRequest(confirmation: confirmation))
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .unknown(String(localized: "Account deletion returned an invalid response."))
+            }
+            if (200..<300).contains(http.statusCode) { return .committed }
+            let message = (try? JSONDecoder.api.decode(APIError.self, from: data).error)
+                ?? "Request failed (\(http.statusCode))."
+            if (400..<500).contains(http.statusCode) { return .rejected(message) }
+            return .unknown(message)
+        } catch {
+            return .unknown(error.localizedDescription)
+        }
     }
 
     func clearTokens() throws {

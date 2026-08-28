@@ -212,6 +212,10 @@ enum TestFixtures {
         StubRequestRecorder.shared.requests(for: scenario)
     }
 
+    static func lifecycleEvents(for scenario: String) -> [String] {
+        StubRequestRecorder.shared.lifecycleEvents(for: scenario)
+    }
+
     static func waitForRequest(
         in scenario: String,
         path: String,
@@ -312,7 +316,7 @@ enum RecordedTokenStoreOperation: Equatable, Sendable {
 
 final class RecordingTokenStore: TokenStoring, @unchecked Sendable {
     private let lock = NSLock()
-    private let failures: Set<RecordingTokenStoreFailure>
+    private var failures: Set<RecordingTokenStoreFailure>
     private var storedTokens: TokenPair?
     private var recordedOperations: [RecordedTokenStoreOperation] = []
 
@@ -330,6 +334,10 @@ final class RecordingTokenStore: TokenStoring, @unchecked Sendable {
 
     var operations: [RecordedTokenStoreOperation] {
         lock.withLock { recordedOperations }
+    }
+
+    func setFailures(_ failures: Set<RecordingTokenStoreFailure>) {
+        lock.withLock { self.failures = failures }
     }
 
     func replaceTokens(_ tokens: TokenPair?) {
@@ -395,7 +403,10 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
     private let copyData: Data?
     private let updateStatus: OSStatus
     private let addStatus: OSStatus
+    private var accountNames: [String]
     private let deleteStatus: OSStatus
+    private let deleteStatusesByAccount: [String: OSStatus]
+    private let removesDeletedAccounts: Bool
     private var storedCopyQueries: [KeychainQuerySnapshot] = []
     private var storedUpdates: [RecordedKeychainUpdate] = []
     private var storedAddQueries: [KeychainQuerySnapshot] = []
@@ -406,13 +417,19 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
         copyData: Data? = nil,
         updateStatus: OSStatus = errSecSuccess,
         addStatus: OSStatus = errSecSuccess,
-        deleteStatus: OSStatus = errSecSuccess
+        accountNames: [String] = [],
+        deleteStatus: OSStatus = errSecSuccess,
+        deleteStatusesByAccount: [String: OSStatus] = [:],
+        removesDeletedAccounts: Bool = true
     ) {
         self.copyStatus = copyStatus
         self.copyData = copyData
         self.updateStatus = updateStatus
         self.addStatus = addStatus
+        self.accountNames = accountNames
         self.deleteStatus = deleteStatus
+        self.deleteStatusesByAccount = deleteStatusesByAccount
+        self.removesDeletedAccounts = removesDeletedAccounts
     }
 
     var copyQueries: [KeychainQuerySnapshot] { lock.withLock { storedCopyQueries } }
@@ -423,6 +440,13 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
     func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?) {
         lock.withLock { storedCopyQueries.append(KeychainQuerySnapshot(query)) }
         return (copyStatus, copyData)
+    }
+
+    func copyAccounts(_ query: [String: Any]) -> (status: OSStatus, accounts: [String]) {
+        lock.withLock {
+            storedCopyQueries.append(KeychainQuerySnapshot(query))
+            return accountNames.isEmpty ? (errSecItemNotFound, []) : (errSecSuccess, accountNames)
+        }
     }
 
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus {
@@ -441,8 +465,17 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
     }
 
     func delete(_ query: [String: Any]) -> OSStatus {
-        lock.withLock { storedDeleteQueries.append(KeychainQuerySnapshot(query)) }
-        return deleteStatus
+        lock.withLock {
+            let snapshot = KeychainQuerySnapshot(query)
+            storedDeleteQueries.append(snapshot)
+            let status = snapshot.account.flatMap { deleteStatusesByAccount[$0] } ?? deleteStatus
+            if removesDeletedAccounts,
+               status == errSecSuccess || status == errSecItemNotFound,
+               let account = snapshot.account {
+                accountNames.removeAll { $0 == account }
+            }
+            return status
+        }
     }
 
     func errorMessage(for status: OSStatus) -> String? { "test status \(status)" }
@@ -451,6 +484,7 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
 final class MemoryIrohRoomSecretStore: IrohRoomSecretStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var secrets: [String: Data]
+    private var failedDeletes = Set<String>()
 
     init(secrets: [String: Data] = [:]) {
         self.secrets = secrets
@@ -465,7 +499,30 @@ final class MemoryIrohRoomSecretStore: IrohRoomSecretStoring, @unchecked Sendabl
     }
 
     func delete(roomID: String) throws {
-        lock.withLock { secrets[roomID] = nil }
+        try lock.withLock {
+            if failedDeletes.contains(roomID) { throw URLError(.cannotRemoveFile) }
+            secrets[roomID] = nil
+        }
+    }
+
+    func accountDeletionAccounts() throws -> [String] {
+        lock.withLock { secrets.keys.map { "room-secret-v1.\($0)" }.sorted() }
+    }
+
+    func deleteAccount(named account: String) throws {
+        let prefix = "room-secret-v1."
+        guard account.hasPrefix(prefix) else { throw URLError(.cannotRemoveFile) }
+        try delete(roomID: String(account.dropFirst(prefix.count)))
+    }
+
+    func contains(roomID: String) -> Bool {
+        lock.withLock { secrets[roomID] != nil }
+    }
+
+    func setDeleteFailure(_ fails: Bool, roomID: String) {
+        lock.withLock {
+            if fails { failedDeletes.insert(roomID) } else { failedDeletes.remove(roomID) }
+        }
     }
 }
 
@@ -492,8 +549,10 @@ final class RecordingGoogleOAuthTransport: GoogleOAuthTokenExchangeTransport, @u
 
 final class RecordingUserDefaults: UserDefaults {
     private(set) var timerStateWrites: [Data] = []
+    var ignoredSetKeys: Set<String> = []
 
     override func set(_ value: Any?, forKey defaultName: String) {
+        if ignoredSetKeys.contains(defaultName) { return }
         super.set(value, forKey: defaultName)
         if defaultName == "timer-state-v2", let data = value as? Data {
             timerStateWrites.append(data)
@@ -808,11 +867,13 @@ final class StubRequestRecorder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var storage: [String: [RecordedRequest]] = [:]
+    private var lifecycleStorage: [String: [String]] = [:]
     private var waiters: [String: [Waiter]] = [:]
 
     func reset(scenario: String) {
         let continuations = lock.withLock {
             storage[scenario] = []
+            lifecycleStorage[scenario] = []
             return waiters.removeValue(forKey: scenario)?.map(\.continuation) ?? []
         }
         continuations.forEach { $0.resume(returning: false) }
@@ -830,6 +891,9 @@ final class StubRequestRecorder: @unchecked Sendable {
                 authorization: request.value(forHTTPHeaderField: "Authorization")
             )
             storage[scenario, default: []].append(recorded)
+            if recorded.path == "/api/v1/sync" || recorded.path == "/api/v1/account" {
+                lifecycleStorage[scenario, default: []].append("\(recorded.method) \(recorded.path)")
+            }
             let pathCount = storage[scenario, default: []].count { $0.path == recorded.path }
             let ready = waiters[scenario, default: []].filter {
                 $0.path == recorded.path && pathCount >= $0.count
@@ -845,6 +909,14 @@ final class StubRequestRecorder: @unchecked Sendable {
 
     func requests(for scenario: String) -> [RecordedRequest] {
         lock.withLock { storage[scenario] ?? [] }
+    }
+
+    func recordLifecycle(_ event: String, scenario: String) {
+        lock.withLock { lifecycleStorage[scenario, default: []].append(event) }
+    }
+
+    func lifecycleEvents(for scenario: String) -> [String] {
+        lock.withLock { lifecycleStorage[scenario] ?? [] }
     }
 
     func waitForRequest(
@@ -916,7 +988,7 @@ final class StubScenarioGate: @unchecked Sendable {
     }
 }
 
-final class StubURLProtocol: URLProtocol {
+final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     private let loadingLock = NSRecursiveLock()
     private var loadingStopped = false
 
@@ -953,6 +1025,12 @@ final class StubURLProtocol: URLProtocol {
         let statusCode: Int
         let body: Data
         let path = request.url?.path
+
+        if scenario == "sync-account-deletion-stale",
+           request.httpMethod == "POST", path == "/api/v1/sync" {
+            DispatchQueue.global().async { self.loadGatedAccountDeletionSync() }
+            return
+        }
 
         if let scenario, scenario.hasPrefix("apple-api-coverage-") {
             loadAPICoverageResponse(
@@ -1130,6 +1208,24 @@ final class StubURLProtocol: URLProtocol {
                 scenario: scenario!,
                 request: Self.requestObject(requestBody)
             )
+        case "sync-account-deletion-stale" where path == "/api/v1/me":
+            statusCode = 200
+            body = Self.meBody
+        case "sync-account-deletion-stale"
+            where request.httpMethod == "POST" && path == "/api/v1/sync":
+            guard StubScenarioGate.shared.wait(
+                scenario: scenario!,
+                isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+            ) else { return }
+            statusCode = 200
+            body = Self.timerCycleResponse(
+                scenario: scenario!,
+                request: Self.requestObject(requestBody)
+            )
+        case "sync-account-deletion-stale"
+            where request.httpMethod == "DELETE" && path == "/api/v1/account":
+            statusCode = 204
+            body = Data()
         case "sync-account-switch-stale" where path == "/api/v1/me":
             statusCode = 200
             body = Self.meBody
@@ -1146,6 +1242,10 @@ final class StubURLProtocol: URLProtocol {
             )
         case "sync-account-switch-stale"
             where request.httpMethod == "POST" && path == "/api/v1/auth/logout":
+            statusCode = 204
+            body = Data()
+        case "sync-account-switch-stale"
+            where request.httpMethod == "DELETE" && path == "/api/v1/account":
             statusCode = 204
             body = Data()
         case _ where scenario?.hasPrefix("auto-start-matrix-") == true
@@ -1228,7 +1328,32 @@ final class StubURLProtocol: URLProtocol {
 
     override func stopLoading() {
         loadingLock.withLock { loadingStopped = true }
+        if request.url?.path == "/api/v1/sync",
+           let scenario = request.value(forHTTPHeaderField: "X-Pomodorough-Test-Scenario") {
+            StubRequestRecorder.shared.recordLifecycle("sync terminated", scenario: scenario)
+        }
         StubScenarioGate.shared.wakeWaiters()
+    }
+
+    private func loadGatedAccountDeletionSync() {
+        let scenario = "sync-account-deletion-stale"
+        guard StubScenarioGate.shared.wait(
+            scenario: scenario,
+            isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+        ) else { return }
+        let body = Self.timerCycleResponse(
+            scenario: scenario,
+            request: Self.requestObject(Self.bodyData(request))
+        )
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        guard deliverIfLoading({
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        }) else { return }
+        guard deliverIfLoading({ client?.urlProtocol(self, didLoad: body) }) else { return }
+        _ = deliverIfLoading({ client?.urlProtocolDidFinishLoading(self) })
     }
 
     private func loadAPICoverageResponse(
@@ -1237,6 +1362,16 @@ final class StubURLProtocol: URLProtocol {
         pathAttempt: Int,
         requestBody: Data?
     ) {
+        if scenario == "apple-api-coverage-account-delete-transport" {
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
+        }
+        if scenario == "apple-api-coverage-account-delete-cancelled" {
+            guard StubScenarioGate.shared.wait(
+                scenario: scenario,
+                isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+            ) else { return }
+        }
         let statusCode: Int
         let body: Data
         var contentType = "application/json"
@@ -1306,12 +1441,31 @@ final class StubURLProtocol: URLProtocol {
         case ("apple-api-coverage-logout-server-failure", "/api/v1/auth/logout"):
             statusCode = 503
             body = Data(#"{"error":"Logout unavailable."}"#.utf8)
-        case ("apple-api-coverage-account-delete-success", "/api/v1/me"):
+        case ("apple-api-coverage-account-delete-success", "/api/v1/me"),
+             ("apple-api-coverage-account-delete-rejected", "/api/v1/me"),
+             ("apple-api-coverage-account-delete-transient", "/api/v1/me"),
+             ("apple-api-coverage-account-delete-server-failure", "/api/v1/me"):
             statusCode = 200
             body = Self.meBody
         case ("apple-api-coverage-account-delete-success", "/api/v1/account"):
             statusCode = 204
             body = Data()
+        case ("apple-api-coverage-account-delete-rejected", "/api/v1/account"):
+            statusCode = 422
+            body = Data(#"{"error":"Deletion confirmation was rejected."}"#.utf8)
+        case ("apple-api-coverage-account-delete-rejected", "/api/v1/sync"):
+            statusCode = 200
+            body = Self.timerCycleResponse(
+                scenario: scenario,
+                request: Self.requestObject(requestBody)
+            )
+        case ("apple-api-coverage-account-delete-transient", "/api/v1/account"):
+            statusCode = pathAttempt == 1 ? 503 : 204
+            body = pathAttempt == 1
+                ? Data(#"{"error":"Deletion outcome unavailable."}"#.utf8) : Data()
+        case ("apple-api-coverage-account-delete-server-failure", "/api/v1/account"):
+            statusCode = 503
+            body = Data(#"{"error":"Deletion outcome unavailable."}"#.utf8)
         case ("apple-api-coverage-bootstrap-nonempty-timer-ack", "/api/v1/bootstrap"),
              ("apple-api-coverage-bootstrap-nonempty-task-ack", "/api/v1/bootstrap"),
              ("apple-api-coverage-bootstrap-nonempty-duration-ack", "/api/v1/bootstrap"),

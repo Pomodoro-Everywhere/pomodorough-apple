@@ -784,6 +784,533 @@ struct IntegrationNegativeTests {
         ])
     }
 
+    @Test @MainActor
+    func accountDeletionStopsBeforeRemoteRequestWhenPreparedMarkerWriteFails() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let task = try #require(FocusTask(title: "Still owned"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        await model.restore()
+        defaults.ignoredSetKeys = ["account-deletion-state-v1"]
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == nil)
+        #expect(model.isSignedIn)
+        #expect(model.tasks == [task])
+        #expect(tokenStore.tokens != nil)
+        #expect(!TestFixtures.recordedRequests(for: scenario).contains {
+            $0.path == "/api/v1/account"
+        })
+    }
+
+    @Test @MainActor
+    func definitiveAccountDeletionRejectionClearsObligationAndKeepsReachableAccountState() async throws {
+        let scenario = "apple-api-coverage-account-delete-rejected"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.DeleteRejected.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughDeleteRejected-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let task = try #require(FocusTask(title: "Still reachable"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        state.pendingTaskOperations = [TaskOperation(
+            id: "task-operation-delete-rejected",
+            taskId: task.id.uuidString.lowercased(),
+            type: .upsert,
+            title: task.title,
+            occurredAt: TestFixtures.anchor,
+            hlcWallMs: 1_000_001,
+            hlcCounter: 0
+        )]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+        model.setSceneActive(true)
+        defer { model.setSceneActive(false) }
+        let syncCountBeforeDeletion = TestFixtures.recordedRequests(for: scenario).count {
+            $0.path == "/api/v1/sync"
+        }
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(await TestFixtures.waitForRequest(
+            in: scenario,
+            path: "/api/v1/sync",
+            count: syncCountBeforeDeletion + 1
+        ))
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .absent)
+        #expect(model.sessionState == .signedIn(TestFixtures.user))
+        #expect(model.tasks == [task])
+        #expect(!model.isWorkspaceMutationBlocked)
+        #expect(tokenStore.tokens != nil)
+        #expect(model.errorMessage == "Deletion confirmation was rejected.")
+    }
+
+    @Test
+    func accountDeletionClassifiesServerTransportAndCancellationAsOutcomeUnknown() async throws {
+        for scenario in [
+            "apple-api-coverage-account-delete-server-failure",
+            "apple-api-coverage-account-delete-transport"
+        ] {
+            let session = TestFixtures.session(for: scenario)
+            defer { session.invalidateAndCancel() }
+            let client = APIClient(session: session, keychain: StaticTokenStore())
+            #expect(try await client.restoreTokens())
+            let outcome = await client.deleteAccount(confirmation: "DELETE")
+            guard case .unknown = outcome else {
+                Issue.record("Expected unknown deletion outcome for \(scenario)")
+                continue
+            }
+        }
+
+        let scenario = "apple-api-coverage-account-delete-cancelled"
+        let session = TestFixtures.session(for: scenario)
+        defer {
+            TestFixtures.releaseScenario(scenario)
+            session.invalidateAndCancel()
+        }
+        let client = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await client.restoreTokens())
+        let deletion = Task { await client.deleteAccount(confirmation: "DELETE") }
+        try #require(await TestFixtures.waitForRequest(in: scenario, path: "/api/v1/account"))
+        deletion.cancel()
+        guard case .unknown = await deletion.value else {
+            Issue.record("Expected cancellation to leave deletion outcome unknown")
+            return
+        }
+    }
+
+    @Test @MainActor
+    func corruptRoomMetadataRetainsDeletionMarkerWhileDiscoverableRoomSecretRemains() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.CorruptRoomDeletion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughCorruptRoomDeletion-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let roomURL = directory.appendingPathComponent("iroh-rooms.json")
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        try Data("corrupt-room-metadata".utf8).write(to: roomURL)
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let malformedPrefix = "unexpected-room-credential"
+        let invalidSuffix = "room-secret-v1.not-a-valid-room-id"
+        let roomSecurity = RecordingKeychainSecurity(
+            accountNames: ["room-secret-v1.\(roomID)", malformedPrefix, invalidSuffix],
+            deleteStatusesByAccount: [invalidSuffix: errSecInteractionNotAllowed]
+        )
+        let roomStore = IrohRoomStore(
+            fileURL: roomURL,
+            secretStore: IrohRoomSecretKeychainStore(security: roomSecurity)
+        )
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            roomStore: roomStore,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .record(
+            .init(
+                phase: .remoteCommitted,
+                roomIDs: [roomID],
+                roomSecretAccounts: [
+                    invalidSuffix,
+                    "room-secret-v1.\(roomID)",
+                    malformedPrefix,
+                ]
+            )
+        ))
+        #expect(model.isWorkspaceMutationBlocked)
+        #expect(roomSecurity.deleteQueries.contains { $0.account == invalidSuffix })
+        #expect(roomSecurity.deleteQueries.contains { $0.account == malformedPrefix })
+        #expect(roomSecurity.deleteQueries.contains { $0.account == "room-secret-v1.\(roomID)" })
+    }
+
+    @Test @MainActor
+    func remoteCommittedReplacementSyncFailureDoesNotResendDeleteOnWarmRetry() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.RemoteCommitFailure.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughRemoteCommitFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let didFailRemoteCommit = LockedTestValue(false)
+        let journal = AccountDeletionJournal(fileURL: journalURL, afterReplacement: {
+            guard !didFailRemoteCommit.value,
+                  case .record(let record) = try AccountDeletionJournal(fileURL: journalURL).load(),
+                  record.phase == .remoteCommitted else { return }
+            didFailRemoteCommit.value = true
+            throw CocoaError(.fileWriteUnknown)
+        })
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: journal,
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+
+        await model.deleteAccount(confirmation: "DELETE")
+        await model.retryAccountDeletionRecovery()
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .absent)
+        #expect(!model.hasPendingAccountDeletionRecovery)
+        #expect(TestFixtures.recordedRequests(for: scenario).filter {
+            $0.path == "/api/v1/account"
+        }.count == 1)
+    }
+
+    @Test @MainActor
+    func preparedWriteObservingRemoteCommittedAdoptsStrongerPhase() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.PreparedObservesCommit.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PreparedObservesCommit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        let injectedCommit = LockedTestValue(false)
+        let journal = AccountDeletionJournal(fileURL: journalURL, beforeSave: { record in
+            guard record.phase == .prepared, !injectedCommit.value else { return }
+            injectedCommit.value = true
+            try AccountDeletionJournal(fileURL: journalURL).save(.init(
+                phase: .remoteCommitted,
+                roomIDs: record.roomIDs,
+                roomSecretAccounts: record.roomSecretAccounts
+            ))
+            throw CocoaError(.fileWriteUnknown)
+        })
+        let model = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            accountDeletionJournal: journal,
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+
+        await model.deleteAccount(confirmation: "DELETE")
+        await model.retryAccountDeletionRecovery()
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .absent)
+        #expect(!model.hasPendingAccountDeletionRecovery)
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy {
+            $0.path != "/api/v1/account"
+        })
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func preparedJournalPostReplacementSyncFailureQuarantinesWarmProcess(
+        corruptsReadback: Bool
+    ) async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.PreparedSyncFailure.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughPreparedSyncFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let task = try #require(FocusTask(title: "Must quarantine"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        let journal = AccountDeletionJournal(
+            fileURL: journalURL,
+            afterReplacement: {
+                if corruptsReadback { try Data("corrupt".utf8).write(to: journalURL) }
+                throw CocoaError(.fileWriteUnknown)
+            }
+        )
+        let model = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            accountDeletionJournal: journal,
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        if corruptsReadback {
+            #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .corrupt)
+        } else {
+            #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .record(
+                .init(phase: .prepared, roomIDs: [])
+            ))
+        }
+        #expect(model.isWorkspaceMutationBlocked)
+        #expect(model.tasks.isEmpty)
+        #expect(await model.addTask("Blocked") == false)
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy {
+            $0.path != "/api/v1/account"
+        })
+    }
+
+    @Test @MainActor
+    func transientAmbiguousDeletionRetriesInSameProcess() async throws {
+        let scenario = "apple-api-coverage-account-delete-transient"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.DeleteSameProcessRetry.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughDeleteSameProcessRetry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+        await model.deleteAccount(confirmation: "DELETE")
+        #expect(model.hasPendingAccountDeletionRecovery)
+
+        await model.retryAccountDeletionRecovery()
+
+        #expect(!model.hasPendingAccountDeletionRecovery)
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .absent)
+        #expect(TestFixtures.recordedRequests(for: scenario).filter {
+            $0.path == "/api/v1/account"
+        }.count == 2)
+    }
+
+    @Test @MainActor
+    func corruptJournalRetryPromotesRecoveredRoomObligationInSameProcess() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.CorruptDeleteRetry.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughCorruptDeleteRetry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        try Data("corrupt".utf8).write(to: journalURL)
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let secretStore = MemoryIrohRoomSecretStore(secrets: [roomID: secret])
+        secretStore.setDeleteFailure(true, roomID: roomID)
+        let roomStore = IrohRoomStore(
+            fileURL: directory.appendingPathComponent("rooms.json"), secretStore: secretStore
+        )
+        let model = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(
+                fileURL: directory.appendingPathComponent("workspace.json")
+            ),
+            roomStore: roomStore,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        #expect(model.hasPendingAccountDeletionRecovery)
+
+        await model.retryAccountDeletionRecovery()
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .record(
+            .init(
+                phase: .remoteCommitted,
+                roomIDs: [roomID],
+                roomSecretAccounts: ["room-secret-v1.\(roomID)"]
+            )
+        ))
+        #expect(model.hasPendingAccountDeletionRecovery)
+        #expect(model.isWorkspaceMutationBlocked)
+    }
+
+    @Test @MainActor
+    func ambiguousAccountDeletionFailureStaysQuarantinedAndRetriesAfterRestart() async throws {
+        let scenario = "apple-api-coverage-account-delete-server-failure"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughAmbiguousDelete-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        let workspaceURL = directory.appendingPathComponent("workspace.json")
+        let task = try #require(FocusTask(title: "Quarantined account task"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let identity = RecordingGoogleIdentityProvider()
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(fileURL: workspaceURL),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: identity
+        )
+        await model.restore()
+        let syncCallsBeforeDeletion = TestFixtures.recordedRequests(for: scenario)
+            .filter { $0.path == "/api/v1/sync" }.count
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .record(
+            .init(phase: .prepared, roomIDs: [])
+        ))
+        #expect(model.sessionState == .localOnly)
+        #expect(model.tasks.isEmpty)
+        #expect(tokenStore.tokens != nil)
+        let quarantinedBytes = defaults.data(forKey: "timer-state-v2")
+        model.start()
+        #expect(await model.addTask("Blocked task") == false)
+        model.signIn()
+        await model.setReplicationMode(.offline)
+        #expect(await model.createIrohRoom(name: "Blocked room") == false)
+        #expect(await model.joinIrohRoom(inviteText: "blocked") == false)
+        await model.syncIrohNow()
+        await model.refreshAfterForeground()
+        model.setSceneActive(true)
+        #expect(identity.nonces.isEmpty)
+        #expect(defaults.data(forKey: "timer-state-v2") == quarantinedBytes)
+
+        let restarted = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(fileURL: workspaceURL),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        #expect(restarted.tasks.isEmpty)
+        await restarted.restore()
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .record(
+            .init(phase: .prepared, roomIDs: [])
+        ))
+        #expect(restarted.sessionState == .localOnly)
+        #expect(restarted.tasks.isEmpty)
+        #expect(tokenStore.tokens != nil)
+        let requests = TestFixtures.recordedRequests(for: scenario)
+        #expect(requests.filter { $0.path == "/api/v1/sync" }.count == syncCallsBeforeDeletion)
+        #expect(requests.filter { $0.path == "/api/v1/account" }.count == 2)
+    }
+
     @Test(
         arguments: [
             "apple-api-coverage-bootstrap-nonempty-timer-ack",

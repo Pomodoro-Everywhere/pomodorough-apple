@@ -18,6 +18,9 @@ struct AccountView: View {
 #endif
                 completionGuaranteeSection
                 identitySection
+                if model.hasPendingAccountDeletionRecovery {
+                    accountDeletionRecoverySection
+                }
                 lineStatusSection
                 if model.isSignedIn {
                     signOutSection
@@ -141,6 +144,19 @@ struct AccountView: View {
                 .disabled(model.isWorking)
         } footer: {
             Text("Pending changes are stored on this device until they can sync.")
+        }
+    }
+
+    private var accountDeletionRecoverySection: some View {
+        Section {
+            Button("Retry account deletion") {
+                Task { await model.retryAccountDeletionRecovery() }
+            }
+            .disabled(model.isWorking)
+        } header: {
+            Text("Account deletion recovery")
+        } footer: {
+            Text("Account data remains quarantined until deletion and local cleanup can be confirmed.")
         }
     }
 

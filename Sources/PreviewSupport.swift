@@ -16,6 +16,8 @@ struct PreviewRoomSecretStore: IrohRoomSecretStoring {
     func load(roomID: String) throws -> Data? { nil }
     func save(_ secret: Data, roomID: String) throws {}
     func delete(roomID: String) throws {}
+    func accountDeletionAccounts() throws -> [String] { [] }
+    func deleteAccount(named account: String) throws {}
 }
 
 @MainActor

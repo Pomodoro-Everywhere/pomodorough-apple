@@ -173,6 +173,10 @@ final class AccountLifecycleController {
         }
     }
 
+    func restoreAccountDeletionCredentials() async -> Bool {
+        (try? await api.restoreTokens()) == true
+    }
+
     func verifyRestoredSession(
         _ operation: Operation,
         isSignedIn: Bool,
@@ -298,17 +302,17 @@ final class AccountLifecycleController {
         }
     }
 
-    func clearTokens() async {
-        try? await api.clearTokens()
+    func clearTokens() async -> Bool {
+        do {
+            try await api.clearTokens()
+            return true
+        } catch {
+            return false
+        }
     }
 
-    func deleteAccount(confirmation: String) async -> String? {
-        do {
-            try await api.deleteAccount(confirmation: confirmation)
-            return nil
-        } catch {
-            return error.localizedDescription
-        }
+    func deleteAccount(confirmation: String) async -> AccountDeletionOutcome {
+        await api.deleteAccount(confirmation: confirmation)
     }
 
     func signOutIdentity() {

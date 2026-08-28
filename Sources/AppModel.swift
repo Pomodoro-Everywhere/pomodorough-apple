@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+private enum AccountDeletionPurgeState: String {
+    case prepared
+    case remoteCommitted = "remote_committed"
+}
+
 private struct InitialAppState {
     let transition: AppStatePersistenceCoordinator.LoadTransition
     let replicationMode: ReplicationMode
@@ -16,6 +21,7 @@ final class AppModel {
 
     private let api: APIClient
     private let defaults: UserDefaults
+    private let accountDeletionJournal: AccountDeletionJournal?
     private let roomStore: IrohRoomStore
     private let endpointKeyStore: any IrohEndpointKeyStoring
     private let alarmScheduler: any TimerAlarmScheduling
@@ -29,7 +35,11 @@ final class AppModel {
     private let alarmEffectCoordinator: AlarmEffectCoordinator
     private let taskIdentityCoreProvider: @MainActor () throws -> SharedCore
     private var timerState: PersistedTimerState
+    private var accountDeletionPurgeState: AccountDeletionPurgeState?
+    private var accountDeletionRecord: AccountDeletionJournal.Record?
     @ObservationIgnored private var alarmOperationTask: Task<Void, Never>?
+    @ObservationIgnored private var centralizedSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var centralizedSyncTaskID: UUID?
     @ObservationIgnored private var completionQueuedFor: String?
     @ObservationIgnored private var physicalAnchor: (wall: Date, uptime: TimeInterval)?
     @ObservationIgnored private var taskIdentityCore: SharedCore?
@@ -60,6 +70,8 @@ final class AppModel {
     init(
         api: APIClient = APIClient(),
         defaults: UserDefaults = .standard,
+        accountDeletionJournal: AccountDeletionJournal? = nil,
+        durableLocalStore: AtomicDurableFileStore? = nil,
         roomStore: IrohRoomStore = IrohRoomStore(),
         endpointKeyStore: any IrohEndpointKeyStoring = IrohEndpointKeychainStore(),
         alarmScheduler: (any TimerAlarmScheduling)? = nil,
@@ -71,14 +83,25 @@ final class AppModel {
             try SharedCore.bundled()
         }
     ) {
+        let usesProductionStorage = defaults === UserDefaults.standard
+        let resolvedJournal = accountDeletionJournal ?? (usesProductionStorage
+            ? AccountDeletionJournal(fileURL: Self.productionStorageURL("account-deletion-v1.json"))
+            : nil)
+        let resolvedLocalStore = durableLocalStore ?? (usesProductionStorage
+            ? AtomicDurableFileStore(fileURL: Self.productionStorageURL("timer-state-v2.json"))
+            : nil)
         let timerController = TimerSessionController(sharedCoreProvider: sharedCoreProvider)
-        let persistence = AppStatePersistenceCoordinator(defaults: defaults)
+        let persistence = AppStatePersistenceCoordinator(
+            defaults: defaults,
+            durableLocalStore: resolvedLocalStore
+        )
         let initial = Self.loadInitialState(
             defaults: defaults, roomStore: roomStore, persistence: persistence,
             now: now, uptime: uptime
         )
         self.api = api
         self.defaults = defaults
+        self.accountDeletionJournal = resolvedJournal
         self.roomStore = roomStore
         self.endpointKeyStore = endpointKeyStore
         self.alarmScheduler = alarmScheduler ?? TimerAlarmScheduler()
@@ -100,9 +123,50 @@ final class AppModel {
         taskIdentityCoreProvider = sharedCoreProvider
         replicationMode = initial.replicationMode
         timerState = initial.transition.state
+        let journalLoad: AccountDeletionJournal.LoadResult?
+        if let resolvedJournal {
+            journalLoad = (try? resolvedJournal.load()) ?? .corrupt
+        } else {
+            journalLoad = nil
+        }
+        switch journalLoad {
+        case .record(let record):
+            accountDeletionRecord = record
+            accountDeletionPurgeState = record.phase == .prepared ? .prepared : .remoteCommitted
+        case .corrupt:
+            let topology = try? roomStore.accountDeletionTopology()
+            accountDeletionRecord = AccountDeletionJournal.Record(
+                phase: .prepared,
+                roomIDs: topology?.roomIDs ?? [],
+                roomSecretAccounts: topology?.roomSecretAccounts ?? []
+            )
+            accountDeletionPurgeState = .prepared
+        default:
+            if defaults.object(forKey: Self.accountDeletionStateKey) == nil {
+                accountDeletionPurgeState = nil
+            } else {
+                accountDeletionPurgeState = defaults.string(forKey: Self.accountDeletionStateKey)
+                    .flatMap(AccountDeletionPurgeState.init(rawValue:)) ?? .prepared
+            }
+        }
         physicalAnchor = initial.physicalAnchor
         needsPermissionIntroduction = initial.needsPermissionIntroduction
         restoreInitialState(initial.transition)
+    }
+
+    private static func productionStorageURL(_ name: String) -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Pomodorough", isDirectory: true)
+            .appendingPathComponent(name)
+    }
+
+    static func resetDefaultDurableStorage() {
+        try? AtomicDurableFileStore(
+            fileURL: productionStorageURL("account-deletion-v1.json")
+        ).remove()
+        try? AtomicDurableFileStore(
+            fileURL: productionStorageURL("timer-state-v2.json")
+        ).remove()
     }
 
     private static func loadInitialState(
@@ -166,6 +230,10 @@ final class AppModel {
     private func restoreInitialState(
         _ transition: AppStatePersistenceCoordinator.LoadTransition
     ) {
+        guard accountDeletionPurgeState == nil else {
+            quarantineAccountDeletion()
+            return
+        }
         applyCoordinatorPublication(accountSessionCoordinator.publication)
         let projectionSucceeded = rebuildOptimisticState()
         applyCoordinatorEffects(accountSessionCoordinator.loadCompletionEffects(
@@ -266,6 +334,7 @@ final class AppModel {
     private var sessionGeneration: Int { accountSessionCoordinator.generation }
 
     private func applyRoomReplicationEvent(_ event: RoomReplicationEvent) {
+        guard accountDeletionPurgeState == nil else { return }
         switch event {
         case .centralizedQuiesced:
             applyCoordinatorPublication(accountSessionCoordinator.quiesce())
@@ -277,6 +346,7 @@ final class AppModel {
     }
 
     private func performRoomReplicationOperation(_ operation: RoomReplicationOperation) async {
+        guard accountDeletionPurgeState == nil else { return }
         switch operation {
         case .synchronize(let force, let showsActivity):
             await sync(force: force, showsActivity: showsActivity)
@@ -348,16 +418,23 @@ final class AppModel {
             + pendingAutoStartOperationCount
             + pendingSelectedTaskOperationCount
     }
-    var activeRoom: IrohRoomSnapshot? { roomStore.activeSnapshot }
+    var activeRoom: IrohRoomSnapshot? {
+        guard accountDeletionPurgeState == nil else { return nil }
+        return roomStore.activeSnapshot
+    }
     var preferredRoom: IrohRoomSnapshot? {
-        roomStore.preferredRoomID.flatMap(roomStore.roomSnapshot(roomID:))
+        guard accountDeletionPurgeState == nil else { return nil }
+        return roomStore.preferredRoomID.flatMap(roomStore.roomSnapshot(roomID:))
     }
     var hasIrohRoom: Bool { preferredRoom != nil }
     var irohStatusLabel: String { irohStatus.label }
     var pendingAccountSwitchUser: User? { timerState.pendingAccountSwitchUser }
     var isWorkspaceMutationBlocked: Bool {
-        isHistoryResolutionBlocking || pendingAccountSwitchUser != nil
+        accountDeletionPurgeState != nil
+            || isHistoryResolutionBlocking
+            || pendingAccountSwitchUser != nil
     }
+    var hasPendingAccountDeletionRecovery: Bool { accountDeletionPurgeState != nil }
     var isHistoryResolutionBlocking: Bool {
         replicationMode == .centralized && (historyResolutionState != .none
             || timerState.bootstrapUser != nil
@@ -467,6 +544,10 @@ final class AppModel {
     }
 
     func restore() async {
+        if accountDeletionPurgeState != nil {
+            await resumeAccountDeletion()
+            return
+        }
         guard sessionState == .restoring else { return }
         let transition = await accountSessionCoordinator.restore(
             cachedUser: timerState.cachedUser ?? timerState.bootstrapUser
@@ -491,6 +572,10 @@ final class AppModel {
     }
 
     func signIn() {
+        guard accountDeletionPurgeState == nil else {
+            errorMessage = String(localized: "Finish account deletion cleanup before signing in.")
+            return
+        }
         let transition = accountSessionCoordinator.beginSignIn(
             isWorking: isWorking
         )
@@ -602,20 +687,272 @@ final class AppModel {
         isWorking = true
         errorMessage = nil
         defer { isWorking = false }
-        if let message = await accountSessionCoordinator.deleteAccount(
-            confirmation: confirmation
-        ) {
-            errorMessage = message
+        guard let topology = try? roomStore.accountDeletionTopology(),
+              persistPreparedAccountDeletion(topology: topology) else {
+            errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
             return
         }
+        await roomReplicationController.quiesceForAccountDeletion()
+        await quiesceCentralizedSyncForAccountDeletion()
+        switch await accountSessionCoordinator.deleteAccount(confirmation: confirmation) {
+        case .rejected(let message):
+            guard clearAccountDeletionState() else {
+                quarantineAccountDeletion()
+                errorMessage = String(localized: "Account deletion was rejected, but its recovery state could not be cleared.")
+                return
+            }
+            let rollback = await roomReplicationController.rollbackAccountDeletion(
+                environment: roomReplicationEnvironment
+            )
+            if rollback == .synchronize { await sync(force: true) }
+            errorMessage = message
+            return
+        case .unknown:
+            quarantineAccountDeletion()
+            errorMessage = String(localized: "Account deletion is waiting to confirm the remote result.")
+            return
+        case .committed:
+            quarantineAccountDeletion()
+        }
+        guard persistAccountDeletionState(.remoteCommitted) else {
+            errorMessage = String(localized: "Account deletion was confirmed, but local cleanup is waiting for durable recovery state.")
+            return
+        }
+        await finishConfirmedAccountDeletion()
+    }
 
+    private func resumeAccountDeletion() async {
+        quarantineAccountDeletion()
+        await roomReplicationController.quiesceForAccountDeletion()
+        await quiesceCentralizedSyncForAccountDeletion()
+        if accountDeletionPurgeState == .prepared {
+            guard let discovered = try? roomStore.accountDeletionTopology() else {
+                errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
+                return
+            }
+            let retained = AccountDeletionRoomTopology(
+                roomIDs: (accountDeletionRecord?.roomIDs ?? []) + discovered.roomIDs,
+                roomSecretAccounts: (accountDeletionRecord?.roomSecretAccounts ?? [])
+                    + discovered.roomSecretAccounts
+            )
+            guard persistPreparedAccountDeletion(topology: retained) else {
+                errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
+                return
+            }
+            guard await accountSessionCoordinator.restoreAccountDeletionCredentials() else {
+                errorMessage = String(localized: "Account deletion is waiting for retained credentials.")
+                return
+            }
+            guard case .committed = await accountSessionCoordinator.deleteAccount(
+                confirmation: "DELETE"
+            ) else {
+                errorMessage = String(localized: "Account deletion is waiting to confirm the remote result.")
+                return
+            }
+            guard persistAccountDeletionState(.remoteCommitted) else { return }
+        }
+        await finishConfirmedAccountDeletion()
+    }
+
+    func retryAccountDeletionRecovery() async {
+        guard accountDeletionPurgeState != nil, !isWorking else { return }
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        await resumeAccountDeletion()
+    }
+
+    private func finishConfirmedAccountDeletion() async {
+        guard let retainedRoomIDs = accountDeletionRoomIDs(),
+              let retainedAccounts = accountDeletionRoomSecretAccounts() else {
+            quarantineAccountDeletion()
+            errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue room cleanup.")
+            return
+        }
+        let credentialsCleared = await accountSessionCoordinator.clearTokens()
+        timerState = .fresh()
+        rebuildOptimisticState()
+        guard persistLocalAccountPurge() else {
+            quarantineAccountDeletion()
+            errorMessage = String(localized: "Account deletion was confirmed; use Retry account deletion to continue local cleanup.")
+            return
+        }
+        do {
+            try roomStore.purgeAccountData(
+                retainedRoomIDs: retainedRoomIDs,
+                roomSecretAccounts: retainedAccounts
+            )
+        } catch {
+            quarantineAccountDeletion()
+            errorMessage = String(localized: "Account deletion was confirmed; use Retry account deletion to continue room cleanup.")
+            return
+        }
+        guard credentialsCleared else {
+            errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue credential cleanup.")
+            return
+        }
+        guard clearAccountDeletionRoomIDs() else {
+            errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue room cleanup.")
+            return
+        }
+        guard clearAccountDeletionState() else {
+            errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
+            return
+        }
+    }
+
+    private func quarantineAccountDeletion() {
         if let timer = canonicalTimer {
             cancelAlarm(timerID: timer.id, reportsError: false)
         }
         applyAccountReset(accountSessionCoordinator.completeDeletion())
         timerState = .fresh()
-        rebuildOptimisticState()
-        persist()
+        canonicalTimer = nil
+        history = []
+        tasks = []
+        completionAlertTimerID = nil
+    }
+
+    private func persistPreparedAccountDeletion(
+        topology: AccountDeletionRoomTopology
+    ) -> Bool {
+        if let accountDeletionJournal {
+            let record = AccountDeletionJournal.Record(
+                phase: .prepared,
+                roomIDs: topology.roomIDs,
+                roomSecretAccounts: topology.roomSecretAccounts
+            )
+            let result = reconcileJournalSave(record, journal: accountDeletionJournal)
+            switch result.outcome {
+            case .applied(let observed):
+                accountDeletionRecord = observed
+                accountDeletionPurgeState = observed.phase == .remoteCommitted
+                    ? .remoteCommitted : .prepared
+                if !result.completedWithoutError { quarantineAccountDeletion() }
+                return result.completedWithoutError && observed.phase == .prepared
+            case .unknown:
+                accountDeletionRecord = record
+                accountDeletionPurgeState = .prepared
+                quarantineAccountDeletion()
+                return false
+            case .notApplied:
+                return false
+            }
+        }
+        guard persistAccountDeletionRoomIDs(topology.roomIDs),
+              persistAccountDeletionState(.prepared) else {
+            _ = clearAccountDeletionRoomIDs()
+            return false
+        }
+        return true
+    }
+
+    private enum JournalSaveOutcome {
+        case applied(AccountDeletionJournal.Record)
+        case notApplied
+        case unknown
+    }
+
+    private func reconcileJournalSave(
+        _ record: AccountDeletionJournal.Record,
+        journal: AccountDeletionJournal
+    ) -> (outcome: JournalSaveOutcome, completedWithoutError: Bool) {
+        guard let prior = try? journal.load() else { return (.unknown, false) }
+        if case .record(let priorRecord) = prior,
+           priorRecord.phase == .remoteCommitted,
+           record.phase == .prepared {
+            return (.applied(priorRecord), true)
+        }
+        let completedWithoutError: Bool
+        do {
+            try journal.save(record)
+            completedWithoutError = true
+        } catch {
+            completedWithoutError = false
+        }
+        guard let current = try? journal.load() else {
+            return (.unknown, completedWithoutError)
+        }
+        if case .record(let observed) = current,
+           observed.phase == .remoteCommitted {
+            return (.applied(observed), completedWithoutError)
+        }
+        if current == .record(record) { return (.applied(record), completedWithoutError) }
+        if current == prior { return (.notApplied, completedWithoutError) }
+        return (.unknown, completedWithoutError)
+    }
+
+    private func persistAccountDeletionState(_ state: AccountDeletionPurgeState) -> Bool {
+        if let accountDeletionJournal {
+            guard let current = accountDeletionRecord else { return false }
+            let phase: AccountDeletionJournal.Phase = state == .prepared
+                ? .prepared : .remoteCommitted
+            let record = AccountDeletionJournal.Record(
+                phase: phase,
+                roomIDs: current.roomIDs,
+                roomSecretAccounts: current.roomSecretAccounts
+            )
+            let result = reconcileJournalSave(record, journal: accountDeletionJournal)
+            guard case .applied(let observed) = result.outcome,
+                  observed.phase == .remoteCommitted else { return false }
+            accountDeletionRecord = observed
+            accountDeletionPurgeState = .remoteCommitted
+            return true
+        }
+        defaults.set(state.rawValue, forKey: Self.accountDeletionStateKey)
+        guard defaults.string(forKey: Self.accountDeletionStateKey) == state.rawValue else {
+            return false
+        }
+        accountDeletionPurgeState = state
+        return true
+    }
+
+    private func clearAccountDeletionState() -> Bool {
+        if let accountDeletionJournal {
+            do {
+                try accountDeletionJournal.clear()
+                guard try accountDeletionJournal.load() == .absent else { return false }
+                accountDeletionRecord = nil
+                accountDeletionPurgeState = nil
+                return true
+            } catch {
+                return false
+            }
+        }
+        defaults.removeObject(forKey: Self.accountDeletionStateKey)
+        guard defaults.object(forKey: Self.accountDeletionStateKey) == nil else { return false }
+        accountDeletionPurgeState = nil
+        return true
+    }
+
+    private func persistAccountDeletionRoomIDs(_ roomIDs: [String]) -> Bool {
+        guard let data = try? JSONEncoder().encode(roomIDs.sorted()) else { return false }
+        defaults.set(data, forKey: Self.accountDeletionRoomIDsKey)
+        return defaults.data(forKey: Self.accountDeletionRoomIDsKey) == data
+    }
+
+    private func accountDeletionRoomIDs() -> [String]? {
+        if accountDeletionJournal != nil { return accountDeletionRecord?.roomIDs }
+        guard let data = defaults.data(forKey: Self.accountDeletionRoomIDsKey) else { return nil }
+        return try? JSONDecoder().decode([String].self, from: data)
+    }
+
+    private func accountDeletionRoomSecretAccounts() -> [String]? {
+        if accountDeletionJournal != nil { return accountDeletionRecord?.roomSecretAccounts }
+        return accountDeletionRoomIDs()?.map { "room-secret-v1.\($0)" }
+    }
+
+    private func clearAccountDeletionRoomIDs() -> Bool {
+        if accountDeletionJournal != nil { return true }
+        defaults.removeObject(forKey: Self.accountDeletionRoomIDsKey)
+        return defaults.object(forKey: Self.accountDeletionRoomIDsKey) == nil
+    }
+
+    private func persistLocalAccountPurge() -> Bool {
+        applyPersistenceTransition(accountSessionCoordinator.persist(
+            timerState,
+            to: .local
+        ))
     }
 
     @discardableResult
@@ -957,8 +1294,31 @@ final class AppModel {
         case .invalidPendingOperations:
             return
         case .started(let lease):
-            await runSync(lease)
+            let taskID = UUID()
+            let task = Task { [weak self] in
+                guard let self else { return }
+                await self.runSync(lease)
+            }
+            centralizedSyncTaskID = taskID
+            centralizedSyncTask = task
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            if centralizedSyncTaskID == taskID {
+                centralizedSyncTask = nil
+                centralizedSyncTaskID = nil
+            }
         }
+    }
+
+    private func quiesceCentralizedSyncForAccountDeletion() async {
+        roomReplicationController.cancelCentralizedStreams()
+        applyCoordinatorPublication(accountSessionCoordinator.quiesce())
+        let task = centralizedSyncTask
+        task?.cancel()
+        await task?.value
     }
 
     private func runSync(
@@ -1073,6 +1433,7 @@ final class AppModel {
     }
 
     func refreshAfterForeground() async {
+        guard accountDeletionPurgeState == nil else { return }
         completionQueuedFor = nil
         let action = await roomReplicationController.refreshAfterForeground(
             environment: roomReplicationEnvironment
@@ -1081,10 +1442,12 @@ final class AppModel {
     }
 
     func setSceneActive(_ active: Bool) {
+        guard accountDeletionPurgeState == nil else { return }
         roomReplicationController.setSceneActive(active, environment: roomReplicationEnvironment)
     }
 
     func setReplicationMode(_ mode: ReplicationMode) async {
+        guard accountDeletionPurgeState == nil else { return }
         guard mode != replicationMode else {
             if mode == .iroh {
                 roomReplicationController.scheduleIrohStartup(environment: roomReplicationEnvironment)
@@ -1117,6 +1480,7 @@ final class AppModel {
     }
 
     func createIrohRoom(name rawName: String) async -> Bool {
+        guard accountDeletionPurgeState == nil else { return false }
         let transition = await roomReplicationController.createRoom(
             name: rawName,
             environment: roomReplicationEnvironment
@@ -1162,6 +1526,7 @@ final class AppModel {
     }
 
     func refreshIrohInvite() async {
+        guard accountDeletionPurgeState == nil else { return }
         let transition = await roomReplicationController.refreshInvite(
             environment: roomReplicationEnvironment
         )
@@ -1170,6 +1535,7 @@ final class AppModel {
     }
 
     func joinIrohRoom(inviteText: String) async -> Bool {
+        guard accountDeletionPurgeState == nil else { return false }
         let transition = await roomReplicationController.joinRoom(
             inviteText: inviteText,
             environment: roomReplicationEnvironment
@@ -1188,6 +1554,7 @@ final class AppModel {
     }
 
     func requestIrohRoomLeave() {
+        guard accountDeletionPurgeState == nil else { return }
         guard replicationMode == .iroh, !isLeavingIrohRoom else { return }
         isIrohRoomLeaveConfirmationPresented = true
     }
@@ -1198,6 +1565,7 @@ final class AppModel {
     }
 
     func confirmIrohRoomLeave() async {
+        guard accountDeletionPurgeState == nil else { return }
         guard replicationMode == .iroh,
               isIrohRoomLeaveConfirmationPresented,
               !isLeavingIrohRoom else { return }
@@ -1220,6 +1588,7 @@ final class AppModel {
     }
 
     func syncIrohNow() async {
+        guard accountDeletionPurgeState == nil else { return }
         await roomReplicationController.syncIroh(environment: roomReplicationEnvironment)
     }
 
@@ -1847,7 +2216,7 @@ final class AppModel {
         ) else { return }
         applyAccountReset(transition)
         errorMessage = AppError.unauthorized.localizedDescription
-        await accountSessionCoordinator.clearTokens()
+        _ = await accountSessionCoordinator.clearTokens()
     }
 
     @discardableResult
@@ -1966,6 +2335,8 @@ final class AppModel {
         roomReplicationController.cancelCentralizedStreams()
     }
 
+    private static let accountDeletionStateKey = "account-deletion-state-v1"
+    private static let accountDeletionRoomIDsKey = "account-deletion-room-ids-v1"
     private static let permissionIntroductionKey = "permission-introduction-completed-v1"
     private static let replicationModeKey = "replication-mode-v1"
 
