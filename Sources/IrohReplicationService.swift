@@ -148,29 +148,12 @@ actor IrohReplicationService {
             throw IrohProtocolError.unavailable("Iroh endpoint is not ready for this room.")
         }
         let owner = generation
-        while syncOwner != nil {
-            try await Task.sleep(for: .milliseconds(25))
-            guard owns(owner, roomID: invite.roomID) else { throw CancellationError() }
-        }
-        let joinID = UUID()
-        syncOwner = joinID
+        let joinID = try await acquireSyncOwnership(roomID: invite.roomID, generation: owner)
         defer {
             if syncOwner == joinID { syncOwner = nil }
         }
-        let ticket = try EndpointTicket.fromString(str: invite.endpointTicket)
-        guard ticket.endpointAddr().id().description == invite.endpointID else {
-            throw IrohProtocolError.invalidInvite("endpoint ticket identity changed")
-        }
-        try store.upsertPeer(
-            IrohPeer(
-                endpointID: invite.endpointID,
-                endpointTicket: invite.endpointTicket,
-                deviceID: nil,
-                displayName: invite.roomName,
-                lastSeenAt: nil
-            ),
-            roomID: invite.roomID
-        )
+        let ticket = try validatedInviteTicket(invite)
+        try saveInvitedPeer(invite)
         let connection = try await connect(
             endpoint: endpoint,
             ticket: ticket,
@@ -182,6 +165,51 @@ actor IrohReplicationService {
             try? connection.close(errorCode: 1, reason: Data("ticket identity mismatch".utf8))
             throw IrohProtocolError.invalidInvite("connected endpoint does not match ticket")
         }
+        try await synchronizeJoinedConnection(
+            connection,
+            invite: invite,
+            context: context,
+            generation: owner
+        )
+    }
+
+    private func acquireSyncOwnership(roomID: String, generation owner: Int) async throws -> UUID {
+        while syncOwner != nil {
+            try await Task.sleep(for: .milliseconds(25))
+            guard owns(owner, roomID: roomID) else { throw CancellationError() }
+        }
+        let joinID = UUID()
+        syncOwner = joinID
+        return joinID
+    }
+
+    private func validatedInviteTicket(_ invite: IrohRoomInvite) throws -> EndpointTicket {
+        let ticket = try EndpointTicket.fromString(str: invite.endpointTicket)
+        guard ticket.endpointAddr().id().description == invite.endpointID else {
+            throw IrohProtocolError.invalidInvite("endpoint ticket identity changed")
+        }
+        return ticket
+    }
+
+    private func saveInvitedPeer(_ invite: IrohRoomInvite) throws {
+        try store.upsertPeer(
+            IrohPeer(
+                endpointID: invite.endpointID,
+                endpointTicket: invite.endpointTicket,
+                deviceID: nil,
+                displayName: invite.roomName,
+                lastSeenAt: nil
+            ),
+            roomID: invite.roomID
+        )
+    }
+
+    private func synchronizeJoinedConnection(
+        _ connection: Connection,
+        invite: IrohRoomInvite,
+        context: IrohServiceContext,
+        generation owner: Int
+    ) async throws {
         try await performHello(connection: connection, context: context, generation: owner)
         let serving = serveAuthenticatedDial(
             connection,
@@ -458,32 +486,12 @@ actor IrohReplicationService {
         var synchronized = false
         for peer in peers where !Task.isCancelled && owner == generation {
             do {
-                let ticket = try EndpointTicket.fromString(str: peer.endpointTicket)
-                guard ticket.endpointAddr().id().description == peer.endpointID else {
-                    throw IrohProtocolError.invalidMessage("saved peer ticket identity changed")
-                }
-                await statusHandler(.syncing(peerMark: ticket.endpointAddr().id().fmtShort()))
-                let connection = try await connect(
+                try await synchronize(
+                    peer: peer,
                     endpoint: endpoint,
-                    ticket: ticket,
-                    generation: owner,
-                    roomID: context.roomID
-                )
-                guard connection.remoteId().description == peer.endpointID else {
-                    throw IrohProtocolError.authenticationFailed
-                }
-                try await performHello(connection: connection, context: context, generation: owner)
-                let serving = serveAuthenticatedDial(
-                    connection,
                     context: context,
                     generation: owner
                 )
-                defer {
-                    serving.cancel()
-                    try? connection.close(errorCode: 0, reason: Data("sync complete".utf8))
-                }
-                try await pullUntilConverged(connection: connection, context: context, generation: owner)
-                guard owns(owner, roomID: context.roomID) else { return false }
                 synchronized = true
             } catch IrohProtocolError.immutableConflict {
                 await stopForConflict(generation: owner)
@@ -498,6 +506,36 @@ actor IrohReplicationService {
             await statusHandler(.waitingForPeers)
         }
         return synchronized
+    }
+
+    private func synchronize(
+        peer: IrohPeer,
+        endpoint: Endpoint,
+        context: IrohServiceContext,
+        generation owner: Int
+    ) async throws {
+        let ticket = try EndpointTicket.fromString(str: peer.endpointTicket)
+        guard ticket.endpointAddr().id().description == peer.endpointID else {
+            throw IrohProtocolError.invalidMessage("saved peer ticket identity changed")
+        }
+        await statusHandler(.syncing(peerMark: ticket.endpointAddr().id().fmtShort()))
+        let connection = try await connect(
+            endpoint: endpoint,
+            ticket: ticket,
+            generation: owner,
+            roomID: context.roomID
+        )
+        guard connection.remoteId().description == peer.endpointID else {
+            throw IrohProtocolError.authenticationFailed
+        }
+        try await performHello(connection: connection, context: context, generation: owner)
+        let serving = serveAuthenticatedDial(connection, context: context, generation: owner)
+        defer {
+            serving.cancel()
+            try? connection.close(errorCode: 0, reason: Data("sync complete".utf8))
+        }
+        try await pullUntilConverged(connection: connection, context: context, generation: owner)
+        guard owns(owner, roomID: context.roomID) else { throw CancellationError() }
     }
 
     private func performHello(
@@ -552,68 +590,122 @@ actor IrohReplicationService {
             foundChanges = false
             var cursor: String?
             repeat {
-                let requestID = try IrohProtocolV1.makeRequestID()
-                let response = try await request(
-                    .inventory(IrohInventoryRequest(
-                        protocolVersion: IrohProtocolV1.version,
-                        roomId: context.roomID,
-                        requestId: requestID,
-                        kind: "inventory",
-                        after: cursor,
-                        limit: IrohProtocolV1.maxInventoryEntries
-                    )),
-                    on: connection,
-                    secret: context.roomSecret
+                let inventory = try await requestInventoryPage(
+                    after: cursor,
+                    connection: connection,
+                    context: context,
+                    generation: owner
                 )
-                guard case .inventoryResult(let inventory) = response,
-                      inventory.requestId == requestID,
-                      inventory.roomId == context.roomID else {
-                    throw IrohProtocolError.invalidMessage("peer returned the wrong inventory result")
-                }
-                guard owns(owner, roomID: context.roomID),
-                      validInventoryPage(inventory, after: cursor) else {
-                    throw IrohProtocolError.invalidMessage("peer returned an invalid inventory cursor")
-                }
-                let missing = try store.missingReferences(roomID: context.roomID, remoteEntries: inventory.entries)
-                let advertisedDigests = Dictionary(uniqueKeysWithValues: inventory.entries.map {
-                    ($0.reference, $0.digest)
-                })
-                for start in stride(from: 0, to: missing.count, by: IrohProtocolV1.maxOperationReferences) {
-                    let references = Array(missing[start..<min(missing.count, start + IrohProtocolV1.maxOperationReferences)])
-                    let operationsID = try IrohProtocolV1.makeRequestID()
-                    let operationsResponse = try await request(
-                        .operations(IrohOperationsRequest(
-                            protocolVersion: IrohProtocolV1.version,
-                            roomId: context.roomID,
-                            requestId: operationsID,
-                            kind: "operations",
-                            refs: references
-                        )),
-                        on: connection,
-                        secret: context.roomSecret
-                    )
-                    guard case .operationsResult(let result) = operationsResponse,
-                          result.requestId == operationsID,
-                          result.roomId == context.roomID,
-                          result.records.count == references.count,
-                           Set(result.records.map {
-                               IrohInventoryReference(domain: $0.domain, id: $0.id)
-                           }) == Set(references),
-                           result.records.allSatisfy({ record in
-                               advertisedDigests[IrohInventoryReference(domain: record.domain, id: record.id)]
-                                   == (try? record.digest())
-                           }) else {
-                        throw IrohProtocolError.invalidMessage("peer returned a partial operation set")
-                    }
-                    guard owns(owner, roomID: context.roomID) else { throw CancellationError() }
-                    let projected = try store.insertRemoteRecords(result.records, roomID: context.roomID)
-                    guard owns(owner, roomID: context.roomID) else { throw CancellationError() }
-                    await projectionHandler(context.roomID, projected)
-                    foundChanges = true
-                }
+                foundChanges = try await pullMissingOperations(
+                    advertisedBy: inventory,
+                    connection: connection,
+                    context: context,
+                    generation: owner
+                ) || foundChanges
                 cursor = inventory.next
             } while cursor != nil
         } while foundChanges
+    }
+
+    private func requestInventoryPage(
+        after cursor: String?,
+        connection: Connection,
+        context: IrohServiceContext,
+        generation owner: Int
+    ) async throws -> IrohInventoryResult {
+        let requestID = try IrohProtocolV1.makeRequestID()
+        let response = try await request(
+            .inventory(IrohInventoryRequest(
+                protocolVersion: IrohProtocolV1.version,
+                roomId: context.roomID,
+                requestId: requestID,
+                kind: "inventory",
+                after: cursor,
+                limit: IrohProtocolV1.maxInventoryEntries
+            )),
+            on: connection,
+            secret: context.roomSecret
+        )
+        guard case .inventoryResult(let inventory) = response,
+              inventory.requestId == requestID,
+              inventory.roomId == context.roomID else {
+            throw IrohProtocolError.invalidMessage("peer returned the wrong inventory result")
+        }
+        guard owns(owner, roomID: context.roomID), validInventoryPage(inventory, after: cursor) else {
+            throw IrohProtocolError.invalidMessage("peer returned an invalid inventory cursor")
+        }
+        return inventory
+    }
+
+    private func pullMissingOperations(
+        advertisedBy inventory: IrohInventoryResult,
+        connection: Connection,
+        context: IrohServiceContext,
+        generation owner: Int
+    ) async throws -> Bool {
+        let missing = try store.missingReferences(
+            roomID: context.roomID,
+            remoteEntries: inventory.entries
+        )
+        let digests = Dictionary(uniqueKeysWithValues: inventory.entries.map {
+            ($0.reference, $0.digest)
+        })
+        for start in stride(from: 0, to: missing.count, by: IrohProtocolV1.maxOperationReferences) {
+            let end = min(missing.count, start + IrohProtocolV1.maxOperationReferences)
+            let references = Array(missing[start..<end])
+            let result = try await requestOperations(
+                references,
+                advertisedDigests: digests,
+                connection: connection,
+                context: context
+            )
+            try await applyRemoteRecords(result.records, context: context, generation: owner)
+        }
+        return !missing.isEmpty
+    }
+
+    private func requestOperations(
+        _ references: [IrohInventoryReference],
+        advertisedDigests: [IrohInventoryReference: String],
+        connection: Connection,
+        context: IrohServiceContext
+    ) async throws -> IrohOperationsResult {
+        let requestID = try IrohProtocolV1.makeRequestID()
+        let response = try await request(
+            .operations(IrohOperationsRequest(
+                protocolVersion: IrohProtocolV1.version,
+                roomId: context.roomID,
+                requestId: requestID,
+                kind: "operations",
+                refs: references
+            )),
+            on: connection,
+            secret: context.roomSecret
+        )
+        guard case .operationsResult(let result) = response,
+              result.requestId == requestID,
+              result.roomId == context.roomID,
+              result.records.count == references.count,
+              Set(result.records.map { IrohInventoryReference(domain: $0.domain, id: $0.id) })
+                == Set(references),
+              result.records.allSatisfy({ record in
+                  advertisedDigests[IrohInventoryReference(domain: record.domain, id: record.id)]
+                    == (try? record.digest())
+              }) else {
+            throw IrohProtocolError.invalidMessage("peer returned a partial operation set")
+        }
+        return result
+    }
+
+    private func applyRemoteRecords(
+        _ records: [IrohOperationRecord],
+        context: IrohServiceContext,
+        generation owner: Int
+    ) async throws {
+        guard owns(owner, roomID: context.roomID) else { throw CancellationError() }
+        let projected = try store.insertRemoteRecords(records, roomID: context.roomID)
+        guard owns(owner, roomID: context.roomID) else { throw CancellationError() }
+        await projectionHandler(context.roomID, projected)
     }
 
     private func request(

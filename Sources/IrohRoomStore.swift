@@ -1,155 +1,21 @@
 import Foundation
 
-struct IrohPeer: Codable, Equatable, Sendable {
-    let endpointID: String
-    var endpointTicket: String
-    var deviceID: String?
-    var displayName: String?
-    var lastSeenAt: Date?
-}
-
-struct IrohConflictEvidence: Codable, Equatable, Sendable {
-    let domain: IrohDomain
-    let id: String
-    let localDigest: String
-    let receivedDigest: String
-    let detectedAt: Date
-}
-
-struct IrohStoredRecord: Codable, Equatable, Sendable {
-    let record: IrohOperationRecord
-    let digest: String
-    let canonicalData: Data
-
-    init(record: IrohOperationRecord, digest: String, canonicalData: Data) throws {
-        self.record = try JSONDecoder.api.decode(IrohOperationRecord.self, from: canonicalData)
-            .preservingCanonicalBytes(canonicalData)
-        self.digest = digest
-        self.canonicalData = canonicalData
-    }
-
-    private enum CodingKeys: String, CodingKey { case record, digest, canonicalData }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        canonicalData = try values.decode(Data.self, forKey: .canonicalData)
-        record = try values.decode(IrohOperationRecord.self, forKey: .record)
-            .preservingCanonicalBytes(canonicalData)
-        digest = try values.decode(String.self, forKey: .digest)
-    }
-}
-
-struct IrohRoomWorkspace: Codable, Equatable, Sendable {
-    let roomID: String
-    var roomSecret: Data?
-    var roomName: String?
-    var returnState: PersistedTimerState
-    var roomState: PersistedTimerState
-    var peers: [IrohPeer]
-    var records: [IrohStoredRecord]
-    var conflict: IrohConflictEvidence?
-    let createdAt: Date
-
-    private enum CodingKeys: String, CodingKey {
-        case roomID, roomSecret, roomName, returnState, roomState, peers, records, conflict, createdAt
-    }
-
-    init(
-        roomID: String,
-        roomSecret: Data,
-        roomName: String?,
-        returnState: PersistedTimerState,
-        roomState: PersistedTimerState,
-        peers: [IrohPeer],
-        records: [IrohStoredRecord],
-        conflict: IrohConflictEvidence?,
-        createdAt: Date
-    ) {
-        self.roomID = roomID
-        self.roomSecret = roomSecret
-        self.roomName = roomName
-        self.returnState = returnState
-        self.roomState = roomState
-        self.peers = peers
-        self.records = records
-        self.conflict = conflict
-        self.createdAt = createdAt
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        roomID = try values.decode(String.self, forKey: .roomID)
-        roomSecret = try values.decodeIfPresent(Data.self, forKey: .roomSecret)
-        roomName = try values.decodeIfPresent(String.self, forKey: .roomName)
-        returnState = try values.decode(PersistedTimerState.self, forKey: .returnState)
-        roomState = try values.decode(PersistedTimerState.self, forKey: .roomState)
-        peers = try values.decode([IrohPeer].self, forKey: .peers)
-        records = try values.decode([IrohStoredRecord].self, forKey: .records)
-        conflict = try values.decodeIfPresent(IrohConflictEvidence.self, forKey: .conflict)
-        createdAt = try values.decode(Date.self, forKey: .createdAt)
-        if let roomSecret, try IrohProtocolV1.roomID(for: roomSecret) != roomID {
-            throw IrohProtocolError.invalidMessage("saved room secret does not match its room")
-        }
-        guard IrohProtocolV1.isValidRoomID(roomID),
-              IrohProtocolV1.isValidDisplayName(roomName),
-              peers.count <= IrohProtocolV1.maxPeers,
-              peers.allSatisfy({
-                  $0.endpointTicket.utf8.count <= IrohProtocolV1.maxEndpointTicketBytes
-                      && IrohProtocolV1.isValidDisplayName($0.displayName)
-              }) else {
-            throw IrohProtocolError.invalidMessage("saved room metadata is invalid")
-        }
-        try IrohRoomStore.validateRecordSet(records)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(roomID, forKey: .roomID)
-        try values.encodeIfPresent(roomName, forKey: .roomName)
-        try values.encode(returnState, forKey: .returnState)
-        try values.encode(roomState, forKey: .roomState)
-        try values.encode(peers, forKey: .peers)
-        try values.encode(records, forKey: .records)
-        try values.encodeIfPresent(conflict, forKey: .conflict)
-        try values.encode(createdAt, forKey: .createdAt)
-    }
-
-    var genesis: IrohGenesis? {
-        records.lazy.compactMap { stored in
-            guard case .genesis(let genesis) = stored.record.payload else { return nil }
-            return genesis
-        }.first
-    }
-}
-
-struct IrohReplicationState: Codable, Equatable, Sendable {
-    var activeRoomID: String?
-    var rooms: [IrohRoomWorkspace]
-
-    static let empty = Self(activeRoomID: nil, rooms: [])
-}
-
-struct IrohRoomSnapshot: Equatable, Sendable {
-    let roomID: String
-    let roomName: String?
-    let peerCount: Int
-    let operationCount: Int
-    let conflict: IrohConflictEvidence?
-}
-
 final class IrohRoomStore: @unchecked Sendable {
     private let lock = NSLock()
     private let fileURL: URL
     private let secretStore: any IrohRoomSecretStoring
+    private let now: () -> Date
     private var state: IrohReplicationState
     private var loadError: String?
 
     init(
         fileURL: URL = IrohRoomStore.defaultFileURL(),
-        secretStore: any IrohRoomSecretStoring = IrohRoomSecretKeychainStore()
+        secretStore: any IrohRoomSecretStoring = IrohRoomSecretKeychainStore(),
+        now: @escaping () -> Date = { .now }
     ) {
         self.fileURL = fileURL
         self.secretStore = secretStore
+        self.now = now
         state = .empty
         do {
             if FileManager.default.fileExists(atPath: fileURL.path) {
@@ -234,61 +100,86 @@ final class IrohRoomStore: @unchecked Sendable {
     ) throws -> PersistedTimerState {
         try lock.withLock {
             try ensureAvailableLocked()
-            guard IrohProtocolV1.isValidRoomID(roomID),
-                  try IrohProtocolV1.roomID(for: roomSecret) == roomID,
-                  IrohProtocolV1.isValidDisplayName(name),
+            guard try validRoomMetadata(roomID: roomID, secret: roomSecret, name: name),
                   genesis.isValid else {
                 throw IrohProtocolError.invalidMessage("room genesis is invalid")
             }
             guard state.rooms.first(where: { $0.roomID == roomID }) == nil else {
                 throw IrohProtocolError.immutableConflict
             }
-            var roomState = Self.makeRoomDeviceState(from: returnState)
-            let genesisRecord = IrohOperationRecord(
-                domain: .genesis,
-                deviceId: returnState.deviceId,
-                payload: .genesis(genesis)
-            )
-            guard genesisRecord.isValid,
-                  try genesisRecord.operationByteCount() <= IrohProtocolV1.maxOperationBytes else {
-                throw IrohProtocolError.invalidMessage("room genesis exceeds operation limits")
-            }
-            let canonicalData = try genesisRecord.canonicalBytes()
-            let stored = try IrohStoredRecord(
-                record: genesisRecord,
-                digest: try genesisRecord.digest(),
-                canonicalData: canonicalData
-            )
-            if let timer = genesis.canonicalTimer,
-               timer.status == .running || timer.status == .paused,
-               timer.startedByDeviceId == returnState.deviceId {
-                roomState.localTimerOwners[timer.id] = returnState.deviceId
-            }
-            var workspace = IrohRoomWorkspace(
+            let workspace = try makeNewWorkspace(
                 roomID: roomID,
                 roomSecret: roomSecret,
-                roomName: name,
+                name: name,
                 returnState: returnState,
-                roomState: roomState,
-                peers: [],
-                records: [stored],
-                conflict: nil,
-                createdAt: now
+                genesis: genesis,
+                now: now
             )
-            roomState = try IrohRoomProjection.project(workspace)
-            workspace.roomState = roomState
             let installedSecret = try installSecretLocked(roomID: roomID, secret: roomSecret)
             do {
                 return try committingLocked {
                     state.rooms.append(workspace)
                     state.activeRoomID = roomID
-                    return roomState
+                    return workspace.roomState
                 }
             } catch {
                 if installedSecret { try? secretStore.delete(roomID: roomID) }
                 throw error
             }
         }
+    }
+
+    private func validRoomMetadata(roomID: String, secret: Data, name: String?) throws -> Bool {
+        try IrohProtocolV1.isValidRoomID(roomID)
+            && IrohProtocolV1.roomID(for: secret) == roomID
+            && IrohProtocolV1.isValidDisplayName(name)
+    }
+
+    private func makeNewWorkspace(
+        roomID: String,
+        roomSecret: Data,
+        name: String?,
+        returnState: PersistedTimerState,
+        genesis: IrohGenesis,
+        now: Date
+    ) throws -> IrohRoomWorkspace {
+        let storedGenesis = try storedGenesis(genesis, deviceID: returnState.deviceId)
+        var roomState = Self.makeRoomDeviceState(from: returnState)
+        if let timer = genesis.canonicalTimer,
+           timer.status == .running || timer.status == .paused,
+           timer.startedByDeviceId == returnState.deviceId {
+            roomState.localTimerOwners[timer.id] = returnState.deviceId
+        }
+        var workspace = IrohRoomWorkspace(
+            roomID: roomID,
+            roomSecret: roomSecret,
+            roomName: name,
+            returnState: returnState,
+            roomState: roomState,
+            peers: [],
+            records: [storedGenesis],
+            conflict: nil,
+            createdAt: now
+        )
+        workspace.roomState = try IrohRoomProjection.project(workspace, at: self.now())
+        return workspace
+    }
+
+    private func storedGenesis(_ genesis: IrohGenesis, deviceID: String) throws -> IrohStoredRecord {
+        let record = IrohOperationRecord(
+            domain: .genesis,
+            deviceId: deviceID,
+            payload: .genesis(genesis)
+        )
+        guard record.isValid,
+              try record.operationByteCount() <= IrohProtocolV1.maxOperationBytes else {
+            throw IrohProtocolError.invalidMessage("room genesis exceeds operation limits")
+        }
+        return try IrohStoredRecord(
+            record: record,
+            digest: try record.digest(),
+            canonicalData: try record.canonicalBytes()
+        )
     }
 
     func prepareJoinedRoom(
@@ -348,7 +239,7 @@ final class IrohRoomStore: @unchecked Sendable {
                   state.rooms[index].conflict == nil else {
                 throw IrohProtocolError.invalidMessage("joined room has no valid genesis")
             }
-            let projected = try IrohRoomProjection.project(state.rooms[index])
+            let projected = try IrohRoomProjection.project(state.rooms[index], at: self.now())
             return try committingLocked {
                 state.rooms[index].returnState = returnState
                 state.rooms[index].roomState = projected
@@ -367,7 +258,7 @@ final class IrohRoomStore: @unchecked Sendable {
             return try committingLocked {
                 state.rooms[index].returnState = returnState
                 state.activeRoomID = roomID
-                let projected = try IrohRoomProjection.project(state.rooms[index])
+                let projected = try IrohRoomProjection.project(state.rooms[index], at: self.now())
                 state.rooms[index].roomState = projected
                 return projected
             }
@@ -432,42 +323,12 @@ final class IrohRoomStore: @unchecked Sendable {
             guard state.rooms[index].conflict == nil else { throw IrohProtocolError.immutableConflict }
 
             let original = state.rooms[index]
-            let incoming = try records.map { record -> IrohStoredRecord in
-                guard record.isValid,
-                      try record.operationByteCount() <= IrohProtocolV1.maxOperationBytes else {
-                    throw IrohProtocolError.invalidMessage("operation record failed validation")
-                }
-                return try IrohStoredRecord(
-                    record: record,
-                    digest: try record.digest(),
-                    canonicalData: try record.canonicalBytes()
-                )
-            }
-            guard Set(incoming.map { $0.record.domain.rawValue + "\0" + $0.record.id }).count == incoming.count else {
-                throw IrohProtocolError.invalidMessage("operation batch contains duplicate references")
-            }
-
-            for candidate in incoming {
-                guard let existing = original.records.first(where: {
-                    $0.record.domain == candidate.record.domain && $0.record.id == candidate.record.id
-                }) else { continue }
-                guard existing.digest == candidate.digest else {
-                    var conflicted = original
-                    conflicted.conflict = IrohConflictEvidence(
-                        domain: candidate.record.domain,
-                        id: candidate.record.id,
-                        localDigest: existing.digest,
-                        receivedDigest: candidate.digest,
-                        detectedAt: now
-                    )
-                    try committingLocked { state.rooms[index] = conflicted }
-                    throw IrohProtocolError.immutableConflict
-                }
-            }
-
+            let incoming = try storedRecords(from: records)
+            try validateUniqueReferences(incoming)
+            try detectImmutableConflict(incoming, original: original, index: index, at: now)
             var staged = try inserting(records, into: original)
             if staged.genesis != nil {
-                staged.roomState = try IrohRoomProjection.project(staged)
+                staged.roomState = try IrohRoomProjection.project(staged, at: self.now())
             }
             return try committingLocked {
                 state.rooms[index] = staged
@@ -639,46 +500,125 @@ final class IrohRoomStore: @unchecked Sendable {
         return workspace
     }
 
+    private func storedRecords(from records: [IrohOperationRecord]) throws -> [IrohStoredRecord] {
+        try records.map { record in
+            guard record.isValid,
+                  try record.operationByteCount() <= IrohProtocolV1.maxOperationBytes else {
+                throw IrohProtocolError.invalidMessage("operation record failed validation")
+            }
+            return try IrohStoredRecord(
+                record: record,
+                digest: try record.digest(),
+                canonicalData: try record.canonicalBytes()
+            )
+        }
+    }
+
+    private func validateUniqueReferences(_ records: [IrohStoredRecord]) throws {
+        let references = records.map { $0.record.domain.rawValue + "\0" + $0.record.id }
+        guard Set(references).count == records.count else {
+            throw IrohProtocolError.invalidMessage("operation batch contains duplicate references")
+        }
+    }
+
+    private func detectImmutableConflict(
+        _ incoming: [IrohStoredRecord],
+        original: IrohRoomWorkspace,
+        index: Int,
+        at date: Date
+    ) throws {
+        for candidate in incoming {
+            guard let existing = original.records.first(where: {
+                $0.record.domain == candidate.record.domain && $0.record.id == candidate.record.id
+            }) else { continue }
+            guard existing.digest == candidate.digest else {
+                var conflicted = original
+                conflicted.conflict = IrohConflictEvidence(
+                    domain: candidate.record.domain,
+                    id: candidate.record.id,
+                    localDigest: existing.digest,
+                    receivedDigest: candidate.digest,
+                    detectedAt: date
+                )
+                try committingLocked { state.rooms[index] = conflicted }
+                throw IrohProtocolError.immutableConflict
+            }
+        }
+    }
+
+    private func pendingRecords(from timerState: PersistedTimerState) -> [IrohOperationRecord] {
+        var records = timerState.pendingCommands.map {
+            IrohOperationRecord(domain: .timer, deviceId: timerState.deviceId, payload: .timer($0))
+        }
+        records += timerState.pendingTaskOperations.map {
+            IrohOperationRecord(domain: .task, deviceId: timerState.deviceId, payload: .task($0))
+        }
+        records += timerState.pendingDurationOperations.map {
+            IrohOperationRecord(domain: .duration, deviceId: timerState.deviceId, payload: .duration($0))
+        }
+        records += timerState.pendingAutoStartOperations.map {
+            IrohOperationRecord(
+                domain: .autoStart,
+                deviceId: timerState.deviceId,
+                payload: .autoStart(IrohAutoStartOperation($0))
+            )
+        }
+        records += timerState.pendingSelectedTaskOperations.map {
+            IrohOperationRecord(
+                domain: .selectedTask,
+                deviceId: timerState.deviceId,
+                payload: .selectedTask(IrohSelectedTaskOperation($0))
+            )
+        }
+        return records
+    }
+
+    private func stateWithoutPendingOperations(
+        _ captured: PersistedTimerState
+    ) -> PersistedTimerState {
+        var state = captured
+        state.pendingCommands = []
+        state.localCommandDates = [:]
+        state.pendingTaskOperations = []
+        state.pendingDurationOperations = []
+        state.pendingAutoStartOperations = []
+        state.pendingSelectedTaskOperations = []
+        state.provisionalBreaks = []
+        return state
+    }
+
     private func capturedWorkspaceLocked(
         from stateToCapture: PersistedTimerState,
         index: Int
     ) throws -> IrohRoomWorkspace {
         guard state.rooms[index].conflict == nil else { throw IrohProtocolError.immutableConflict }
-        var records: [IrohOperationRecord] = []
-        records += stateToCapture.pendingCommands.map {
-            IrohOperationRecord(domain: .timer, deviceId: stateToCapture.deviceId, payload: .timer($0))
-        }
-        records += stateToCapture.pendingTaskOperations.map {
-            IrohOperationRecord(domain: .task, deviceId: stateToCapture.deviceId, payload: .task($0))
-        }
-        records += stateToCapture.pendingDurationOperations.map {
-            IrohOperationRecord(domain: .duration, deviceId: stateToCapture.deviceId, payload: .duration($0))
-        }
-        records += stateToCapture.pendingAutoStartOperations.map {
-            IrohOperationRecord(
-                domain: .autoStart,
-                deviceId: stateToCapture.deviceId,
-                payload: .autoStart(IrohAutoStartOperation($0))
-            )
-        }
-        records += stateToCapture.pendingSelectedTaskOperations.map {
-            IrohOperationRecord(
-                domain: .selectedTask,
-                deviceId: stateToCapture.deviceId,
-                payload: .selectedTask(IrohSelectedTaskOperation($0))
-            )
-        }
+        let records = pendingRecords(from: stateToCapture)
         let existingWorkspace = state.rooms[index]
+        try detectCapturedConflict(records, existing: existingWorkspace, index: index)
+        var workspace = existingWorkspace
+        workspace.roomState = stateWithoutPendingOperations(stateToCapture)
+        workspace = try inserting(records, into: workspace)
+        if workspace.genesis != nil {
+            workspace.roomState = try IrohRoomProjection.project(workspace, at: self.now())
+        }
+        return workspace
+    }
+
+    private func detectCapturedConflict(
+        _ records: [IrohOperationRecord],
+        existing: IrohRoomWorkspace,
+        index: Int
+    ) throws {
         for record in records {
-            guard let existing = existingWorkspace.records.first(where: {
+            guard let stored = existing.records.first(where: {
                 $0.record.domain == record.domain && $0.record.id == record.id
             }) else { continue }
             let receivedDigest = try record.digest()
-            guard existing.digest == receivedDigest else {
+            guard stored.digest == receivedDigest else {
                 let evidence = IrohConflictEvidence(
                     domain: record.domain,
                     id: record.id,
-                    localDigest: existing.digest,
+                    localDigest: stored.digest,
                     receivedDigest: receivedDigest,
                     detectedAt: .now
                 )
@@ -686,23 +626,9 @@ final class IrohRoomStore: @unchecked Sendable {
                 throw IrohProtocolError.immutableConflict
             }
         }
-        var workspace = state.rooms[index]
-        workspace.roomState = stateToCapture
-        workspace.roomState.pendingCommands = []
-        workspace.roomState.localCommandDates = [:]
-        workspace.roomState.pendingTaskOperations = []
-        workspace.roomState.pendingDurationOperations = []
-        workspace.roomState.pendingAutoStartOperations = []
-        workspace.roomState.pendingSelectedTaskOperations = []
-        workspace.roomState.provisionalBreaks = []
-        workspace = try inserting(records, into: workspace)
-        if workspace.genesis != nil {
-            workspace.roomState = try IrohRoomProjection.project(workspace)
-        }
-        return workspace
     }
 
-    fileprivate static func validateRecordSet(_ records: [IrohStoredRecord]) throws {
+    static func validateRecordSet(_ records: [IrohStoredRecord]) throws {
         let genesis = records.filter { $0.record.domain == .genesis && $0.record.id == "genesis" }
         guard genesis.count <= 1,
               records.allSatisfy({ $0.record.isValid }),
@@ -746,7 +672,11 @@ final class IrohRoomStore: @unchecked Sendable {
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try JSONEncoder.api.encode(state)
+        #if os(iOS)
         try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        #else
+        try data.write(to: fileURL, options: .atomic)
+        #endif
     }
 
     private func committingLocked<Value>(_ mutation: () throws -> Value) throws -> Value {
@@ -839,144 +769,5 @@ final class IrohRoomStore: @unchecked Sendable {
         return base
             .appendingPathComponent("Pomodorough", isDirectory: true)
             .appendingPathComponent("iroh-rooms-v1.json")
-    }
-}
-
-enum IrohRoomProjection {
-    static func project(_ workspace: IrohRoomWorkspace) throws -> PersistedTimerState {
-        guard workspace.conflict == nil,
-              let genesis = workspace.genesis,
-              genesis.isValid else {
-            throw IrohProtocolError.invalidMessage("room genesis is missing or invalid")
-        }
-        let operations = workspace.records.map(\.record).filter { $0.domain != .genesis }.sorted(by: precedes)
-        var timer = genesis.canonicalTimer
-        var history = genesis.history
-        var tasks = genesis.tasks
-        var durations = genesis.durationsMs
-        var autoStartBreaks = genesis.autoStartBreaks
-        var selectedTaskID = genesis.selectedTaskId
-        var knownTasks = Dictionary(uniqueKeysWithValues: genesis.tasks.map { ($0.id, $0) })
-        let genesisDeviceID = workspace.records.first {
-            $0.record.domain == .genesis && $0.record.id == "genesis"
-        }!.record.deviceId
-        var timerStarters = Dictionary(
-            uniqueKeysWithValues: genesis.history.map { ($0.timerId, genesisDeviceID) }
-        )
-        if let genesisTimer = genesis.canonicalTimer {
-            timerStarters[genesisTimer.id] = genesisTimer.startedByDeviceId ?? genesisDeviceID
-        }
-
-        for record in operations {
-            switch record.payload {
-            case .genesis:
-                throw IrohProtocolError.invalidMessage("room contains an extra genesis record")
-            case .timer(let command):
-                let result = TimerReducer.apply(command, to: timer, history: history)
-                if command.type == .start,
-                   result.0?.id == command.timerId,
-                   result.0?.lastIntent?.commandId == command.id {
-                    timerStarters[command.timerId] = record.deviceId
-                }
-                timer = result.0.map { projectedTimer in
-                    guard projectedTimer.lastIntent?.commandId == command.id,
-                          let intent = projectedTimer.lastIntent else { return projectedTimer }
-                    let startedByDeviceId = command.type == .start
-                        && projectedTimer.lastIntent?.commandId == command.id
-                        ? record.deviceId
-                        : projectedTimer.startedByDeviceId ?? timerStarters[projectedTimer.id]
-                    return CanonicalTimer(
-                        id: projectedTimer.id,
-                        taskId: projectedTimer.taskId,
-                        phase: projectedTimer.phase,
-                        status: projectedTimer.status,
-                        plannedDurationMs: projectedTimer.plannedDurationMs,
-                        elapsedAtAnchorMs: projectedTimer.elapsedAtAnchorMs,
-                        anchorAt: projectedTimer.anchorAt,
-                        startedByDeviceId: startedByDeviceId,
-                        lastIntent: TimerIntent(
-                            type: intent.type,
-                            commandId: intent.commandId,
-                            occurredAt: intent.occurredAt,
-                            deviceId: record.deviceId
-                        )
-                    )
-                }
-                history = result.1
-            case .task(let operation):
-                tasks = TaskReducer.applying([operation], to: tasks)
-                if operation.type == .upsert,
-                   let title = operation.title,
-                   let task = FocusTask(title: title) {
-                    knownTasks[task.id] = task
-                }
-            case .duration(let operation):
-                durations = DurationReducer.applying([operation], to: durations)
-            case .autoStart(let operation):
-                autoStartBreaks = operation.enabled
-            case .selectedTask(let operation):
-                selectedTaskID = operation.taskId
-            }
-        }
-
-        guard IrohSnapshotValidation.isValid(
-            timer: timer,
-            history: history,
-            tasks: tasks,
-            durations: durations
-        ) else {
-            throw IrohProtocolError.invalidMessage("room projection is invalid")
-        }
-        tasks.sort(by: taskPrecedes)
-        history.sort(by: historyPrecedes)
-
-        var state = workspace.roomState
-        state.canonicalTimer = timer
-        state.history = history
-        state.tasks = tasks
-        state.knownTasks = Array(knownTasks.values)
-        state.settings.durationsMs = durations
-        state.autoStartBreaks = autoStartBreaks
-        state.selectedTaskID = selectedTaskID.flatMap(UUID.init(uuidString:))
-        state.pendingCommands = []
-        state.localCommandDates = [:]
-        state.pendingTaskOperations = []
-        state.pendingDurationOperations = []
-        state.pendingAutoStartOperations = []
-        state.pendingSelectedTaskOperations = []
-        state.provisionalBreaks = []
-        let maximum = ([
-            (genesis.hlcWallMs, genesis.hlcCounter),
-            (state.hlcWallMs, state.hlcCounter),
-        ] + operations.map(\.order)).max { $0 < $1 } ?? (0, 0)
-        state.hlcWallMs = maximum.0
-        state.hlcCounter = maximum.1
-        return state
-    }
-
-    static func precedes(_ lhs: IrohOperationRecord, _ rhs: IrohOperationRecord) -> Bool {
-        if lhs.order.wallMs != rhs.order.wallMs { return lhs.order.wallMs < rhs.order.wallMs }
-        if lhs.order.counter != rhs.order.counter { return lhs.order.counter < rhs.order.counter }
-        if lhs.deviceId != rhs.deviceId {
-            return IrohProtocolV1.utf8Precedes(lhs.deviceId, rhs.deviceId)
-        }
-        return IrohProtocolV1.utf8Precedes(lhs.id, rhs.id)
-    }
-
-    private static func taskPrecedes(_ lhs: FocusTask, _ rhs: FocusTask) -> Bool {
-        if lhs.title != rhs.title {
-            return IrohProtocolV1.utf8Precedes(lhs.title, rhs.title)
-        }
-        return IrohProtocolV1.utf8Precedes(
-            lhs.id.uuidString.lowercased(),
-            rhs.id.uuidString.lowercased()
-        )
-    }
-
-    private static func historyPrecedes(_ lhs: HistoryItem, _ rhs: HistoryItem) -> Bool {
-        let lhsDate = lhs.completedAt ?? lhs.endedAt ?? .distantPast
-        let rhsDate = rhs.completedAt ?? rhs.endedAt ?? .distantPast
-        if lhsDate != rhsDate { return lhsDate > rhsDate }
-        return IrohProtocolV1.utf8Precedes(lhs.timerId, rhs.timerId)
     }
 }

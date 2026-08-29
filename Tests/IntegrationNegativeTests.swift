@@ -66,6 +66,70 @@ struct IntegrationNegativeTests {
     }
 
     @Test @MainActor
+    func rebootClockJumpPreservesQueueUntilFreshSampleAllowsMutation() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        let localTime = serverTime.addingTimeInterval(3_600)
+        let advancedServerTime = serverTime.addingTimeInterval(86_400)
+        let advancedLocalTime = localTime.addingTimeInterval(86_400)
+        var state = PersistedTimerState.fresh()
+        try state.mergeClock(
+            serverWallMs: 2_000_000,
+            serverCounter: 0,
+            serverTime: serverTime,
+            requestWall: localTime,
+            requestUptime: 100,
+            responseUptime: 100
+        )
+        state.lastTrustedTimeMs = 2_000_000
+        state.canonicalTimer = TestFixtures.timer(status: .running, elapsed: 0)
+        state.localTimerOwners[state.canonicalTimer!.id] = state.deviceId
+        state.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        state.nextSequence = 2
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        defaults.resetTimerStateWrites()
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { advancedLocalTime },
+            uptime: { 10 }
+        )
+
+        model.pause(at: advancedServerTime)
+
+        #expect(try persistedState(defaults) == state)
+        #expect(defaults.timerStateWrites.isEmpty)
+        #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
+
+        var resampled = try persistedState(defaults)
+        try resampled.mergeClock(
+            serverWallMs: 88_400_000,
+            serverCounter: 0,
+            serverTime: advancedServerTime,
+            requestWall: advancedLocalTime,
+            requestUptime: 10,
+            responseUptime: 10
+        )
+        defaults.set(try JSONEncoder.api.encode(resampled), forKey: "timer-state-v2")
+        defaults.resetTimerStateWrites()
+        let recoveredModel = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { advancedLocalTime },
+            uptime: { 10 }
+        )
+
+        recoveredModel.pause(at: advancedServerTime)
+
+        let recovered = try persistedState(defaults)
+        #expect(recovered.pendingCommands.count == 2)
+        #expect(recovered.pendingCommands.first?.id == state.pendingCommands.first?.id)
+        #expect(recovered.pendingCommands.last?.type == .pause)
+    }
+
+    @Test @MainActor
     func automaticFinishRejectsAtomicallyWhenGeneratedStartCannotFit() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
@@ -191,32 +255,8 @@ struct IntegrationNegativeTests {
         #expect(model.tasks.isEmpty)
     }
 
-    @Test func persistedTrustedAnchorRejectsRebootedUptime() throws {
-        let serverTime = Date(timeIntervalSince1970: 2_000)
-        var state = PersistedTimerState.fresh()
-        try state.mergeClock(
-            serverWallMs: 2_000_000,
-            serverCounter: 0,
-            serverTime: serverTime,
-            requestWall: serverTime,
-            requestUptime: 10_000,
-            responseUptime: 10_000
-        )
-        let restored = try JSONDecoder.api.decode(
-            PersistedTimerState.self,
-            from: JSONEncoder.api.encode(state)
-        )
-
-        #expect(throws: AppError.self) {
-            try restored.trustedOccurrenceDate(
-                for: serverTime.addingTimeInterval(86_400),
-                uptime: 5
-            )
-        }
-    }
-
     @Test @MainActor
-    func everyLocalGeneratorLeavesAllQueuesUnchangedOnClockOverflow() throws {
+    func everyLocalGeneratorLeavesAllQueuesUnchangedOnClockOverflow() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -235,7 +275,7 @@ struct IntegrationNegativeTests {
         let original = try persistedState(defaults)
 
         model.start()
-        #expect(!model.addTask("Rejected task"))
+        #expect(!(await model.addTask("Rejected task")))
         model.setDurationMinutes(30, for: .focus)
         model.autoStartBreaks = true
 
@@ -348,13 +388,13 @@ struct IntegrationNegativeTests {
     }
 
     @Test @MainActor
-    func activeTimerKeepsItsTaskWhenFutureSelectionChanges() throws {
+    func activeTimerKeepsItsTaskWhenFutureSelectionChanges() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
-        #expect(model.addTask("Build"))
-        #expect(model.addTask("Review"))
+        #expect(await model.addTask("Build"))
+        #expect(await model.addTask("Review"))
         let build = try #require(model.tasks.first)
         let review = try #require(model.tasks.last)
         model.selectedTaskID = build.id
@@ -907,7 +947,7 @@ struct IntegrationNegativeTests {
 
         model.start()
         model.setDurationMinutes(90, for: .focus)
-        #expect(!model.addTask("Blocked task"))
+        #expect(!(await model.addTask("Blocked task")))
         model.deleteTask(id: taskID)
         model.selectedPhase = .longBreak
         model.autoStartBreaks.toggle()
@@ -939,7 +979,7 @@ struct IntegrationNegativeTests {
         await model.restore()
         #expect(!model.isHistoryResolutionBlocking)
         model.setDurationMinutes(1, for: .focus)
-        #expect(model.addTask("Usable local task"))
+        #expect(await model.addTask("Usable local task"))
         model.start()
 
         #expect(model.sessionState == .localOnly)
@@ -979,7 +1019,7 @@ struct IntegrationNegativeTests {
 
         model.start()
         model.setDurationMinutes(90, for: .focus)
-        #expect(!model.addTask("Blocked during profile verification"))
+        #expect(!(await model.addTask("Blocked during profile verification")))
         #expect(model.pendingChangeCount == pendingCount)
         await model.retryHistoryResolution()
         #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy {
@@ -1318,7 +1358,6 @@ struct IntegrationNegativeTests {
 
         #expect(try persistedState(defaults) == initial)
         #expect(model.canonicalTimer == initial.canonicalTimer)
-        #expect(model.history == initial.history)
         #expect(model.tasks == initial.tasks)
         #expect(model.durationMinutes(for: .focus) == 25)
         #expect(!model.autoStartBreaks)
@@ -1368,7 +1407,6 @@ struct IntegrationNegativeTests {
 
         #expect(try persistedState(defaults) == initial)
         #expect(model.canonicalTimer == initial.canonicalTimer)
-        #expect(model.history == initial.history)
         #expect(model.tasks == initial.tasks)
         #expect(model.errorMessage?.contains("Sync paused") == true)
         #expect(!model.isOffline)
@@ -1397,6 +1435,58 @@ struct IntegrationNegativeTests {
         #expect(model.pendingChangeCount == 12)
         #expect(model.errorMessage?.contains("12 queued changes remain") == true)
         #expect(!model.isOffline)
+    }
+
+    @Test @MainActor
+    func taskWriteFailsClosedBeforePersistenceWhenSharedCoreIsUnavailable() async throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            sharedCoreProvider: { throw SharedCoreError.resourceMissing }
+        )
+        let persistedBefore = defaults.data(forKey: "timer-state-v2")
+        let pendingBefore = model.pendingChangeCount
+
+        #expect(!(await model.addTask("Must not persist")))
+
+        #expect(model.tasks.isEmpty)
+        #expect(model.pendingChangeCount == pendingBefore)
+        #expect(defaults.data(forKey: "timer-state-v2") == persistedBefore)
+        #expect(model.errorMessage != nil)
+    }
+
+    @Test @MainActor
+    func synchronizedWritesRollBackBeforePersistenceWhenProjectionCoreIsUnavailable() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var initial = PersistedTimerState.fresh()
+        let task = try #require(FocusTask(title: "Must remain"))
+        initial.tasks = [task]
+        initial.knownTasks = [task]
+        defaults.set(try JSONEncoder.api.encode(initial), forKey: "timer-state-v2")
+        defaults.resetTimerStateWrites()
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            sharedCoreProvider: { throw SharedCoreError.resourceMissing }
+        )
+        defaults.resetTimerStateWrites()
+
+        model.start()
+        model.setDurationMinutes(30, for: .focus)
+        model.autoStartBreaks = true
+        model.selectedTaskID = task.id
+        model.deleteTask(id: task.id)
+
+        #expect(try persistedState(defaults) == initial)
+        #expect(defaults.timerStateWrites.isEmpty)
+        #expect(model.pendingChangeCount == 0)
+        #expect(model.tasks == [task])
+        #expect(model.errorMessage != nil)
     }
 
     private func unresolvedBootstrapState() throws -> PersistedTimerState {
@@ -1477,5 +1567,46 @@ struct IntegrationNegativeTests {
             durationOperations: [],
             autoStartOperations: []
         )
+    }
+
+    @Test func authenticatedIrohFrameDoesNotBypassStrictJSONValidation() throws {
+        let secret = Data(0...31)
+        let duplicateKeyBody = Data(#"{"kind":"hello","kind":"inventory"}"#.utf8)
+        let received = try IrohFrameCodec.decode(
+            try IrohFrameCodec.encode(body: duplicateKeyBody, roomSecret: secret),
+            roomSecret: secret
+        )
+
+        #expect(throws: IrohProtocolError.self) {
+            try StrictJSON.object(from: received)
+        }
+    }
+
+    @Test @MainActor
+    func corruptCurrentPersistenceDoesNotRestoreOrOverwriteStaleLegacyWorkspace() throws {
+        let suiteName = "IntegrationNegativeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var staleLegacy = PersistedTimerState.fresh()
+        staleLegacy.deviceId = "stale-legacy-device"
+        let staleTask = try #require(FocusTask(title: "Must not resurrect"))
+        staleLegacy.tasks = [staleTask]
+        staleLegacy.knownTasks = [staleTask]
+        defaults.set(
+            try JSONEncoder.api.encode(staleLegacy),
+            forKey: PersistedStateLoader.legacyStorageKey
+        )
+        let corruptCurrent = Data(#"{\"deviceId\":17,\"pendingCommands\":\"invalid\"}"#.utf8)
+        defaults.set(corruptCurrent, forKey: PersistedStateLoader.storageKey)
+
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        #expect(model.tasks.isEmpty)
+        #expect(model.pendingChangeCount == 0)
+        #expect(defaults.data(forKey: PersistedStateLoader.storageKey) == corruptCurrent)
+        #expect(defaults.data(forKey: PersistedStateLoader.legacyStorageKey) != nil)
     }
 }

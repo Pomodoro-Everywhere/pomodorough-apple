@@ -1124,6 +1124,12 @@
         "value": "‏⟦NOW TIMING⟧"
       }
     },
+    "Navigate between Timer, Tasks, Arrivals, and Network": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Navigate between Timer, Tasks, Arrivals, and Network⟧"
+      }
+    },
     "Network": {
       "stringUnit": {
         "state": "translated",
@@ -1532,6 +1538,12 @@
         "value": "‏⟦Saved sequence or trusted-time state is invalid. No local change was saved.⟧"
       }
     },
+    "Section": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Section⟧"
+      }
+    },
     "Selected": {
       "stringUnit": {
         "state": "translated",
@@ -1778,6 +1790,18 @@
         "value": "‏⟦Sync⟧"
       }
     },
+    "Sync needs attention": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sync needs attention⟧"
+      }
+    },
+    "Sync needs attention. %@. Dismiss": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sync needs attention. %@. Dismiss⟧"
+      }
+    },
     "Sync now": {
       "stringUnit": {
         "state": "translated",
@@ -1962,18 +1986,6 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Timer alert limits⟧"
-      }
-    },
-    "Timer continued elsewhere": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Timer continued elsewhere⟧"
-      }
-    },
-    "Timer continued elsewhere. %@. Dismiss": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Timer continued elsewhere. %@. Dismiss⟧"
       }
     },
     "Timer continues in Pomodorough, but its system alarm could not be updated. %@": {

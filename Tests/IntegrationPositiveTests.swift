@@ -88,7 +88,7 @@ struct IntegrationPositiveTests {
         #expect(model.user == TestFixtures.user)
         #expect(model.tasks == [oldTask])
         #expect(model.history.map(\.id) == ["previous-account-history"])
-        #expect(!model.addTask("Must remain blocked"))
+        #expect(!(await model.addTask("Must remain blocked")))
         let persistedData = try #require(defaults.data(forKey: "timer-state-v2"))
         let persisted = try #require(JSONSerialization.jsonObject(with: persistedData) as? [String: Any])
         let pendingUser = try #require(persisted["pendingAccountSwitchUser"] as? [String: Any])
@@ -97,7 +97,7 @@ struct IntegrationPositiveTests {
 
         let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         #expect(relaunched.tasks == [oldTask])
-        #expect(!relaunched.addTask("Still blocked after relaunch"))
+        #expect(!(await relaunched.addTask("Still blocked after relaunch")))
     }
 
     @Test @MainActor
@@ -134,7 +134,7 @@ struct IntegrationPositiveTests {
         let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         #expect(relaunched.tasks == [oldTask])
         #expect(relaunched.pendingAccountSwitchUser == nil)
-        #expect(relaunched.addTask("Local work resumes"))
+        #expect(await relaunched.addTask("Local work resumes"))
     }
 
     @Test @MainActor
@@ -279,7 +279,7 @@ struct IntegrationPositiveTests {
                 uptime: { uptime.value }
             )
             localModel.start()
-            #expect(localModel.addTask("Trusted task \(deviceSkewSeconds)"))
+            #expect(await localModel.addTask("Trusted task \(deviceSkewSeconds)"))
             localModel.setDurationMinutes(30, for: .focus)
             localModel.autoStartBreaks = true
             persisted = try persistedState(defaults)
@@ -308,10 +308,10 @@ struct IntegrationPositiveTests {
 
             wallClock.value = wallClock.value.addingTimeInterval(6 * 3_600)
             uptime.value += 1
-            #expect(localModel.addTask("After forward jump \(deviceSkewSeconds)"))
+            #expect(await localModel.addTask("After forward jump \(deviceSkewSeconds)"))
             wallClock.value = wallClock.value.addingTimeInterval(-12 * 3_600)
             uptime.value += 1
-            #expect(localModel.addTask("After rollback \(deviceSkewSeconds)"))
+            #expect(await localModel.addTask("After rollback \(deviceSkewSeconds)"))
             persisted = try persistedState(defaults)
             let jumpedDates = persisted.pendingTaskOperations.suffix(2).map(\.occurredAt)
             #expect(jumpedDates == [
@@ -328,7 +328,7 @@ struct IntegrationPositiveTests {
                 now: { wallClock.value },
                 uptime: { uptime.value }
             )
-            #expect(restored.addTask("After restart \(deviceSkewSeconds)"))
+            #expect(await restored.addTask("After restart \(deviceSkewSeconds)"))
             let restoredState = try persistedState(defaults)
             #expect(restoredState.serverTimeOffsetMs == persisted.serverTimeOffsetMs)
             #expect(restoredState.serverTimeUncertaintyMs == persisted.serverTimeUncertaintyMs)
@@ -454,6 +454,33 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func legacyStorageKeyRestoresMigratedStateAcrossRelaunch() throws {
+        let suiteName = "IntegrationPositiveTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let legacy = Data(
+            #"{"deviceId":"legacy-key-device","nextSequence":1,"revision":7,"pendingCommands":[],"pendingTaskOperations":[],"canonicalTimer":null,"history":[],"settings":{"focusMinutes":40,"shortBreakMinutes":5,"longBreakMinutes":15,"autoStartBreaks":false}}"#.utf8
+        )
+        defaults.set(legacy, forKey: PersistedStateLoader.legacyStorageKey)
+
+        let migrated = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        #expect(migrated.durationMinutes(for: .focus) == 40)
+        #expect(migrated.pendingDurationOperationCount == 1)
+        #expect(defaults.data(forKey: PersistedStateLoader.legacyStorageKey) == legacy)
+
+        let relaunched = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        #expect(relaunched.durationMinutes(for: .focus) == 40)
+        #expect(relaunched.pendingDurationOperationCount == 1)
+    }
+
+    @Test @MainActor
     func signedInPullAppliesCanonicalDurationsWithoutSyncingLocalOnlySettings() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -526,14 +553,14 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
-    func localTaskAssignmentSurvivesDeletionPersistenceAndRecreation() throws {
+    func localTaskAssignmentSurvivesDeletionPersistenceAndRecreation() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
 
-        #expect(model.addTask("\tWrite release notes\n"))
-        #expect(model.addTask("Write release notes"))
+        #expect(await model.addTask("\tWrite release notes\n"))
+        #expect(await model.addTask("Write release notes"))
         let task = try #require(model.tasks.first)
         #expect(model.tasks.count == 1)
         model.selectedTaskID = task.id
@@ -557,7 +584,7 @@ struct IntegrationPositiveTests {
         let deletedRestore = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         #expect(deletedRestore.tasks.isEmpty)
         #expect(deletedRestore.completedFocusSummaries().first?.taskTitle == task.title)
-        #expect(model.addTask("Write release notes"))
+        #expect(await model.addTask("Write release notes"))
 
         let restored = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         let recreated = try #require(restored.tasks.first)
@@ -607,10 +634,11 @@ struct IntegrationPositiveTests {
         let migratedData = try #require(defaults.data(forKey: "timer-state-v2"))
         let migratedState = try JSONDecoder.api.decode(PersistedTimerState.self, from: migratedData)
 
-        #expect(summaries == [
-            TaskDailySummary(task: writing, finishedPomodoros: 2, timeSpentMs: 35 * 60_000),
-            TaskDailySummary(task: review, finishedPomodoros: 1, timeSpentMs: 50 * 60_000)
-        ])
+        #expect(summaries.count == 2)
+        #expect(summaries.first(where: { $0.task.id == writing.id }) ==
+            TaskDailySummary(task: writing, finishedPomodoros: 2, timeSpentMs: 35 * 60_000))
+        #expect(summaries.first(where: { $0.task.id == review.id }) ==
+            TaskDailySummary(task: review, finishedPomodoros: 1, timeSpentMs: 50 * 60_000))
         #expect(defaults.data(forKey: "local-tasks-v1") == nil)
         #expect(Set(migratedState.pendingTaskOperations.map(\.taskId)) == Set([writing, review].map { $0.id.uuidString.lowercased() }))
         #expect(migratedState.legacyTaskAssignments.count == timerState.history.count)
@@ -767,6 +795,39 @@ struct IntegrationPositiveTests {
         }
 
         #expect(model.completedFocusCount == 5)
+    }
+
+    @Test @MainActor
+    func exactBoundaryAutomaticCompletionSurvivesSameClockCycle() throws {
+        let suiteName = "PomodoroughTests.ExactBoundaryCycle.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let instant = Date(timeIntervalSince1970: 1_784_620_800.001)
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { instant },
+            uptime: { 100 }
+        )
+        model.setDurationMinutes(1, for: .focus)
+        model.setDurationMinutes(1, for: .shortBreak)
+
+        model.start()
+        let firstFocus = try #require(model.canonicalTimer)
+        model.finish(at: firstFocus.anchorAt.addingTimeInterval(60))
+        model.start()
+        let shortBreak = try #require(model.canonicalTimer)
+        model.finish(at: shortBreak.anchorAt.addingTimeInterval(60))
+        model.start()
+        let secondFocus = try #require(model.canonicalTimer)
+        model.completeIfNeeded(
+            timerID: secondFocus.id,
+            at: secondFocus.anchorAt.addingTimeInterval(60)
+        )
+
+        #expect(model.canonicalTimer?.status == .completed)
+        #expect(model.selectedPhase == .shortBreak)
+        #expect(model.completedFocusCount == 2)
     }
 
     @Test @MainActor
@@ -1603,7 +1664,7 @@ struct IntegrationPositiveTests {
         let pendingBefore = model.pendingChangeCount
         model.start()
         model.setDurationMinutes(90, for: .focus)
-        #expect(!model.addTask("Blocked task"))
+        #expect(!(await model.addTask("Blocked task")))
         #expect(model.pendingChangeCount == pendingBefore)
 
         model.requestHistoryResolution(.keepRemote)
@@ -2020,7 +2081,7 @@ struct IntegrationPositiveTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(TestFixtures.recordedRequests(for: scenario).contains { $0.path == "/api/v1/sync" })
-        #expect(model.addTask("Added in flight"))
+        #expect(await model.addTask("Added in flight"))
 
         await restoreTask.value
         try await Task.sleep(for: .milliseconds(50))
@@ -2294,7 +2355,7 @@ struct IntegrationPositiveTests {
         #expect(model.historyResolutionState == .none)
         #expect(model.pendingAccountSwitchUser == TestFixtures.user)
         #expect(model.history.map(\.id) == ["old-account-history"])
-        #expect(!model.addTask("Must remain blocked"))
+        #expect(!(await model.addTask("Must remain blocked")))
         #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy { $0.path != "/api/v1/bootstrap" })
         #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy { $0.path != "/api/v1/sync" })
     }
@@ -2387,13 +2448,18 @@ struct IntegrationPositiveTests {
             elapsed: 0,
             timerID: "timer-rejected-finish-chain"
         )
+        state.localTimerOwners["timer-rejected-finish-chain"] = state.deviceId
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         let focus = try #require(offline.canonicalTimer)
         offline.finish(at: focus.anchorAt.addingTimeInterval(focus.plannedDuration))
         let provisionalBreak = try #require(offline.canonicalTimer)
         offline.finish(at: provisionalBreak.anchorAt.addingTimeInterval(provisionalBreak.plannedDuration))
-        #expect(try persistedState(defaults).provisionalPhaseAdvances.count == 2)
+        let provisionalState = try persistedState(defaults)
+        #expect(provisionalState.provisionalPhaseAdvances.map(\.sourceTimerId) == [
+            focus.id,
+            provisionalBreak.id,
+        ])
 
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -2839,6 +2905,39 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func stoppingCompletionSoundKeepsCompletedTimerUntilDismissed() async throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        let focus = TestFixtures.timer(status: .running, elapsed: 0, timerID: "timer-stop-sound")
+        state.canonicalTimer = focus
+        state.localTimerOwners[focus.id] = state.deviceId
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let scheduler = RecordingAlarmScheduler()
+        let model = AppModel(defaults: defaults, alarmScheduler: scheduler)
+
+        model.completeIfNeeded(
+            timerID: focus.id,
+            at: focus.anchorAt.addingTimeInterval(focus.plannedDuration)
+        )
+        let completed = try #require(model.canonicalTimer)
+        #expect(completed.status == .completed)
+        #expect(model.hasActiveCompletionAlert)
+
+        model.stopSound()
+        await model.waitForAlarmOperations()
+
+        #expect(!model.hasActiveCompletionAlert)
+        #expect(model.canonicalTimer == completed)
+        #expect(scheduler.operations.last == .cancel(timerID: focus.id))
+
+        model.clear()
+
+        #expect(model.canonicalTimer == nil)
+    }
+
+    @Test @MainActor
     func legacyActiveTimerDoesNotInferOwnershipFromRemoteCanonicalStartDevice() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -2869,7 +2968,8 @@ struct IntegrationPositiveTests {
             at: timer.anchorAt.addingTimeInterval(timer.plannedDuration)
         )
 
-        #expect(model.canonicalTimer == timer)
+        #expect(model.canonicalTimer?.id == timer.id)
+        #expect(model.canonicalTimer?.status == .running)
         #expect(model.pendingCommandCount == 0)
         #expect(try persistedState(defaults).localTimerOwners[timer.id] == nil)
     }
@@ -3106,15 +3206,8 @@ struct IntegrationPositiveTests {
         #expect(commandBatches.count == 2)
         #expect(commandBatches[0].map { $0["timerId"] as? String } == [focus.id, focus.id])
         #expect(commandBatches[0].last?["id"] as? String == provisional.finishCommandId)
-        #expect(commandBatches[1].map { $0["timerId"] as? String } == [
-            provisional.breakTimerId,
-            provisional.breakTimerId,
-            provisional.breakTimerId,
-            nextFocus.id
-        ])
-        #expect(commandBatches[1].compactMap { $0["type"] as? String } == [
-            "start", "finish", "clear", "start"
-        ])
+        #expect(commandBatches[1].map { $0["timerId"] as? String } == [nextFocus.id])
+        #expect(commandBatches[1].compactMap { $0["type"] as? String } == ["start"])
         #expect(model.canonicalTimer?.id == nextFocus.id)
     }
 
@@ -3363,6 +3456,7 @@ struct IntegrationPositiveTests {
             } == exactCompletion
         )
         #expect(try persistedState(defaults).provisionalBreaks.isEmpty)
+        #expect(model.conflictMessage == nil)
         if exactCompletion {
             #expect(model.canonicalTimer?.id == provisional.breakTimerId)
             #expect(model.canonicalTimer?.status == .running)
@@ -3401,7 +3495,6 @@ struct IntegrationPositiveTests {
         model.resume(at: pausedBreak.anchorAt.addingTimeInterval(1))
         let resumedBreak = try #require(model.canonicalTimer)
         model.cancel(at: resumedBreak.anchorAt.addingTimeInterval(1))
-        model.clear()
 
         await model.restore()
         await model.waitForAlarmOperations()
@@ -3417,6 +3510,7 @@ struct IntegrationPositiveTests {
         #expect(model.canonicalTimer?.status == .running)
         #expect(model.pendingCommandCount == 0)
         #expect(try persistedState(defaults).provisionalBreaks.isEmpty)
+        #expect(model.conflictMessage == "lost race")
         #expect(scheduler.operations.last == .schedule(
             timerID: focus.id,
             phase: .focus,
@@ -3535,7 +3629,7 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
-    func provisionalStartWaitsPast256BoundaryUntilFinishAcceptance() async throws {
+    func provisionalStartPast256BoundaryIsSupersededByNewerFocus() async throws {
         let scenario = "auto-start-dependency-boundary"
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -3581,12 +3675,12 @@ struct IntegrationPositiveTests {
 
         let syncs = TestFixtures.recordedRequests(for: scenario).filter { $0.path == "/api/v1/sync" }
         let commandBatches = try syncs.map { try #require(try requestJSON($0)["commands"] as? [[String: Any]]) }
-        #expect(commandBatches.map(\.count) == [256, 4])
+        #expect(commandBatches.map(\.count) == [256, 1])
         #expect(commandBatches[0].last?["id"] as? String == provisional.finishCommandId)
         #expect(!commandBatches[0].contains { $0["id"] as? String == provisional.startCommandId })
-        #expect(commandBatches[1].first?["id"] as? String == provisional.startCommandId)
+        #expect(!commandBatches[1].contains { $0["id"] as? String == provisional.startCommandId })
         #expect(!commandBatches[0].contains { $0["timerId"] as? String == successorFocus.id })
-        #expect(commandBatches[1].last?["timerId"] as? String == successorFocus.id)
+        #expect(commandBatches[1].first?["timerId"] as? String == successorFocus.id)
         #expect(model.pendingCommandCount == 0)
     }
 
@@ -3973,7 +4067,7 @@ struct IntegrationPositiveTests {
         #expect(try persistedState(defaults).pendingDurationOperations.isEmpty)
         #expect(try persistedState(defaults).pendingAutoStartOperations.isEmpty)
         #expect(model.errorMessage == nil)
-        #expect(model.conflictMessage == (outcome == "applied" ? nil : "lost race"))
+        #expect(model.conflictMessage == (outcome == "rejected" ? "lost race" : nil))
     }
 
     private func bootstrapState(hasLocalHistory: Bool) throws -> PersistedTimerState {
@@ -4024,12 +4118,30 @@ struct IntegrationPositiveTests {
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    @Test func authenticatedIrohFrameRoundTripsStrictJSONMessage() throws {
+        let secret = Data(0...31)
+        let body = Data(#"{"kind":"hello","protocolVersion":1}"#.utf8)
+
+        let received = try IrohFrameCodec.decode(
+            try IrohFrameCodec.encode(body: body, roomSecret: secret),
+            roomSecret: secret
+        )
+        let decoded = try StrictJSON.object(from: received)
+        let object = try #require(decoded)
+
+        #expect(object["kind"] as? String == "hello")
+        #expect(object["protocolVersion"] as? Int == 1)
+    }
+
     @MainActor
     private func waitForSyncToDrain(_ model: AppModel) async {
         for _ in 0..<200 {
             if model.pendingChangeCount == 0, !model.isSyncing { return }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        Issue.record("Sync did not drain queued changes")
+        let error = model.errorMessage ?? "nil"
+        Issue.record(
+            "Sync did not drain queued changes: pending=\(model.pendingChangeCount), timerCommands=\(model.pendingCommandCount), syncing=\(model.isSyncing), offline=\(model.isOffline), error=\(error)"
+        )
     }
 }

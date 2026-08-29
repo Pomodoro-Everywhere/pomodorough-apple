@@ -747,15 +747,15 @@ struct UnitNegativeTests {
         #expect(state == original)
     }
 
-    @Test func reducerRejectsInvalidStateTransitions() {
+    @Test func reducerOnlyRejectsActionsForUnknownTimers() {
         let running = TestFixtures.timer(status: .running, elapsed: 5_000)
         let resume = TestFixtures.command(.resume, sequence: 2, elapsed: 10_000)
         let wrongTimerFinish = TestFixtures.command(.finish, sequence: 3, elapsed: 10_000, timerID: "timer-other0001")
         let clear = TestFixtures.command(.clear, sequence: 4, elapsed: 10_000)
 
-        #expect(TimerReducer.apply(resume, to: running, history: []).0 == running)
+        #expect(TimerReducer.apply(resume, to: running, history: []).0?.lastIntent?.commandId == resume.id)
         #expect(TimerReducer.apply(wrongTimerFinish, to: running, history: []).0 == running)
-        #expect(TimerReducer.apply(clear, to: running, history: []).0 == running)
+        #expect(TimerReducer.apply(clear, to: running, history: []).0 == nil)
     }
 
     @Test func duplicateFinishDoesNotDuplicateHistory() {
@@ -779,14 +779,14 @@ struct UnitNegativeTests {
         #expect(duplicateResult.1.count == 1)
     }
 
-    @Test func reducerRejectsPauseAndCancelFromInactiveStates() {
+    @Test func reducerAppliesPauseAndCancelToExistingInactiveStates() {
         let paused = TestFixtures.timer(status: .paused, elapsed: 5_000)
         let completed = TestFixtures.timer(status: .completed, elapsed: 60_000)
         let pause = TestFixtures.command(.pause, sequence: 2, elapsed: 10_000)
         let cancel = TestFixtures.command(.cancel, sequence: 3, elapsed: 10_000)
 
-        #expect(TimerReducer.apply(pause, to: paused, history: []).0 == paused)
-        #expect(TimerReducer.apply(cancel, to: completed, history: []).0 == completed)
+        #expect(TimerReducer.apply(pause, to: paused, history: []).0?.lastIntent?.commandId == pause.id)
+        #expect(TimerReducer.apply(cancel, to: completed, history: []).0?.status == .cancelled)
     }
 
     @Test func parserIgnoresKeepaliveUnknownEventsAndMalformedData() {
@@ -878,6 +878,37 @@ struct UnitNegativeTests {
         #expect(throws: DecodingError.self) {
             try JSONDecoder.api.decode(NativeChallenge.self, from: json)
         }
+    }
+
+    @Test func base64URLRejectsPaddedAndNonCanonicalForms() {
+        for value in ["AP-Af_8=", "AP+Af/8", "A"] {
+            #expect(throws: IrohProtocolError.self) {
+                try Base64URL.decode(value)
+            }
+        }
+    }
+
+    @Test func persistedLoaderDoesNotResurrectLegacyStateBehindCorruptCurrentBytes() throws {
+        let suiteName = "UnitNegativeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var legacy = PersistedTimerState.fresh()
+        legacy.deviceId = "stale-legacy-device"
+        defaults.set(
+            try JSONEncoder.api.encode(legacy),
+            forKey: PersistedStateLoader.legacyStorageKey
+        )
+        let corruptCurrent = Data(#"{\"deviceId\":17}"#.utf8)
+        defaults.set(corruptCurrent, forKey: PersistedStateLoader.storageKey)
+
+        let loaded = PersistedStateLoader(defaults: defaults).load()
+
+        #expect(loaded.storedData == corruptCurrent)
+        #expect(loaded.decodedState == nil)
+        #expect(loaded.localState.deviceId != legacy.deviceId)
+        #expect(loaded.localState.pendingCommands.isEmpty)
+        #expect(loaded.localState.pendingTaskOperations.isEmpty)
+        #expect(loaded.localState.pendingDurationOperations.isEmpty)
     }
 }
 

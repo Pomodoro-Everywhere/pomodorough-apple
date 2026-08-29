@@ -1741,7 +1741,7 @@ final class StubURLProtocol: URLProtocol {
                     "plannedDurationMs": 60_000,
                     "completedAt": completionTimestamp(
                         before: completedAt,
-                        milliseconds: 4 - index
+                        milliseconds: (4 - index) * 1_000
                     )
                 ])
             }
@@ -1880,6 +1880,7 @@ final class StubURLProtocol: URLProtocol {
             var completion = completedHistory(finish: focusFinish, start: focusStart)
             if scenario == "auto-start-provisional-finish-ignored-mismatch" {
                 completion["timerId"] = "timer-mismatched-completion"
+                completion["id"] = "history-mismatched-completion"
             }
             history.append(completion)
         }
@@ -1896,7 +1897,7 @@ final class StubURLProtocol: URLProtocol {
                     "plannedDurationMs": 60_000,
                     "completedAt": completionTimestamp(
                         before: completedAt,
-                        milliseconds: 4 - index
+                        milliseconds: (4 - index) * 1_000
                     )
                 ])
             }
@@ -1984,9 +1985,17 @@ final class StubURLProtocol: URLProtocol {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         guard let date = formatter.date(from: timestamp) else { return timestamp }
-        return formatter.string(
-            from: date.addingTimeInterval(-Double(milliseconds) / 1_000)
-        )
+        let totalMilliseconds = Int64(
+            (date.timeIntervalSince1970 * 1_000).rounded()
+        ) - Int64(milliseconds)
+        let wholeSeconds = totalMilliseconds >= 0
+            ? totalMilliseconds / 1_000
+            : (totalMilliseconds - 999) / 1_000
+        let fractionalMilliseconds = totalMilliseconds - wholeSeconds * 1_000
+        formatter.formatOptions = [.withInternetDateTime]
+        let whole = formatter.string(from: Date(timeIntervalSince1970: Double(wholeSeconds)))
+        return String(whole.dropLast())
+            + String(format: ".%03dZ", fractionalMilliseconds)
     }
 
     private static func timerCycleResponse(
@@ -2328,32 +2337,6 @@ final class StubURLProtocol: URLProtocol {
             durationAcknowledgements.reverse()
             autoStartAcknowledgements.reverse()
             selectedTaskAcknowledgements.reverse()
-            let outcomes = ["applied", "ignored", "rejected"]
-            for index in timerAcknowledgements.indices {
-                let outcome = outcomes[index % 3]
-                timerAcknowledgements[index]["outcome"] = outcome
-                timerAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
-            }
-            for index in taskAcknowledgements.indices {
-                let outcome = outcomes[(index + 1) % 3]
-                taskAcknowledgements[index]["outcome"] = outcome
-                taskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
-            }
-            for index in durationAcknowledgements.indices {
-                let outcome = outcomes[(index + 2) % 3]
-                durationAcknowledgements[index]["outcome"] = outcome
-                durationAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
-            }
-            for index in autoStartAcknowledgements.indices {
-                let outcome = outcomes[index % 3]
-                autoStartAcknowledgements[index]["outcome"] = outcome
-                autoStartAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
-            }
-            for index in selectedTaskAcknowledgements.indices {
-                let outcome = outcomes[(index + 1) % 3]
-                selectedTaskAcknowledgements[index]["outcome"] = outcome
-                selectedTaskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
-            }
         } else if scenario.hasPrefix("sync-contract-unknown-") {
             switch scenario {
             case "sync-contract-unknown-timer": timerAcknowledgements[0]["outcome"] = "unknown"

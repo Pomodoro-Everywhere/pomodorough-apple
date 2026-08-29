@@ -4,8 +4,18 @@ struct ServicePatternScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: AppModel
+    var showsNavigationTitle = true
 
+    @ViewBuilder
     var body: some View {
+        if showsNavigationTitle {
+            content.navigationTitle("Pattern")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         ScrollView {
             ServicePatternCard(model: model)
                 .padding()
@@ -14,7 +24,6 @@ struct ServicePatternScreen: View {
                 .frame(maxWidth: .infinity)
         }
         .background(TimerBackdrop())
-        .navigationTitle("Pattern")
         .inlineNavigationTitleIfSupported()
         .primaryRouteAccountToolbar(model: model)
     }

@@ -42,7 +42,7 @@ struct TimerControls: View {
                 button
                     .accessibilityAction(named: "Finish timer") { model.finish() }
                     .accessibilityAction(named: "Cancel timer") { model.cancel() }
-                    .accessibilityAction(named: clearTimerTitle, model.stopSound)
+                    .accessibilityAction(named: stopSoundTitle, model.stopSound)
             } else {
                 button
                     .accessibilityAction(named: "Finish timer") { model.finish() }
@@ -50,7 +50,7 @@ struct TimerControls: View {
             }
         } else if hasClearableTimer {
             button
-                .accessibilityAction(named: clearTimerTitle, model.stopSound)
+                .accessibilityAction(named: terminalActionTitle, terminalAction)
         } else {
             button
         }
@@ -82,10 +82,10 @@ struct TimerControls: View {
                     controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
                     controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
                     if model.hasActiveCompletionAlert {
-                        controlButton(clearTimerTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
+                        controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
                     }
                 } else if hasClearableTimer {
-                    controlButton(clearTimerTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
+                    controlButton(terminalActionTitle, symbol: terminalActionSymbol, glassID: .clear, prominent: false, glass: glass, action: terminalAction)
                 }
             }
         } else {
@@ -103,14 +103,26 @@ struct TimerControls: View {
                     #endif
                 }
                 if model.hasActiveCompletionAlert || hasClearableTimer {
-                    controlButton(clearTimerTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
+                    controlButton(terminalActionTitle, symbol: terminalActionSymbol, glassID: .clear, prominent: false, glass: glass, action: terminalAction)
                 }
             }
         }
     }
 
-    private var clearTimerTitle: String {
+    private var stopSoundTitle: String {
         TimerAlarmScheduler.stopSoundTitle
+    }
+
+    private var terminalActionTitle: String {
+        model.hasActiveCompletionAlert ? stopSoundTitle : String(localized: "Dismiss")
+    }
+
+    private var terminalActionSymbol: String {
+        model.hasActiveCompletionAlert ? "speaker.slash" : "xmark"
+    }
+
+    private var terminalAction: () -> Void {
+        model.hasActiveCompletionAlert ? model.stopSound : model.clear
     }
 
     @ViewBuilder
