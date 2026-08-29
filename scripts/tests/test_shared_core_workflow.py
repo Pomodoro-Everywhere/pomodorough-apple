@@ -46,6 +46,41 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn("Verify shared core in staged release applications", workflow)
         self.assertIn('test "$verified_apps" -eq 3', workflow)
 
+    def test_release_packages_ad_hoc_signed_simulator_app_and_smokes_exact_archive(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        def assert_contract(candidate: str) -> None:
+            required = (
+                'codesign --force --deep --sign - "$ios_simulator_staged_app"',
+                'codesign --verify --deep --strict "$ios_simulator_staged_app"',
+                'Pomodorough-iOS-Simulator-ad-hoc-signed-non-notarized-${RELEASE_TAG}.zip',
+                'ditto -x -k "$archive" "$extracted"',
+                'codesign --verify --deep --strict "$app"',
+                'launch_output="$(xcrun simctl launch',
+                'test -n "$launch_pid"',
+                '[[ "$launch_pid" =~ ^[0-9]+$ ]]',
+                'sleep 2',
+                'xcrun simctl terminate "$device_id" "$bundle_id"',
+            )
+            for clause in required:
+                self.assertIn(clause, candidate)
+            ordered = required[3:]
+            self.assertEqual(
+                [candidate.index(clause) for clause in ordered],
+                sorted(candidate.index(clause) for clause in ordered),
+            )
+            self.assertNotIn('codesign --remove-signature "$ios_simulator_staged_app"', candidate)
+
+        assert_contract(workflow)
+        survival_clauses = (
+            '[[ "$launch_pid" =~ ^[0-9]+$ ]]',
+            'sleep 2',
+            'xcrun simctl terminate "$device_id" "$bundle_id"',
+        )
+        for clause in survival_clauses:
+            with self.subTest(clause=clause), self.assertRaises(AssertionError):
+                assert_contract(workflow.replace(clause, "", 1))
+
     def test_built_apps_are_checked_for_exact_shared_core(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Verify shared core in built applications", workflow)

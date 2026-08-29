@@ -272,7 +272,7 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           build
 
-      - name: Package unsigned non-notarized apps
+      - name: Package simulator and unsigned non-notarized apps
         shell: bash
         run: |
           set -euo pipefail
@@ -284,7 +284,7 @@ jobs:
           ios_device_staging="$RUNNER_TEMP/Pomodorough-iOS-Device"
           ios_device_staged_app="$ios_device_staging/Payload/Pomodorough.app"
           macos_staged_app="$RUNNER_TEMP/Pomodorough-macOS/Pomodorough.app"
-          ios_simulator_zip="$RELEASE_DIR/Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
+          ios_simulator_zip="$RELEASE_DIR/Pomodorough-iOS-Simulator-ad-hoc-signed-non-notarized-${RELEASE_TAG}.zip"
           ios_device_ipa="$RELEASE_DIR/Pomodorough-iOS-unsigned-${RELEASE_TAG}.ipa"
           macos_zip="$RELEASE_DIR/Pomodorough-macOS-unsigned-non-notarized-${RELEASE_TAG}.zip"
 
@@ -297,16 +297,13 @@ jobs:
           ditto "$ios_simulator_app" "$ios_simulator_staged_app"
           ditto "$ios_device_app" "$ios_device_staged_app"
           ditto "$macos_app" "$macos_staged_app"
-          codesign --remove-signature "$ios_simulator_staged_app"
+          codesign --force --deep --sign - "$ios_simulator_staged_app"
           if codesign -dv "$ios_device_staged_app" >/dev/null 2>&1; then
             codesign --remove-signature "$ios_device_staged_app"
           fi
           codesign --remove-signature "$macos_staged_app"
 
-          if codesign -dv "$ios_simulator_staged_app" >/dev/null 2>&1; then
-            printf 'iOS simulator artifact is still signed\n' >&2
-            exit 1
-          fi
+          codesign --verify --deep --strict "$ios_simulator_staged_app"
           if codesign -dv "$ios_device_staged_app" >/dev/null 2>&1; then
             printf 'iOS device artifact is still signed\n' >&2
             exit 1
@@ -347,20 +344,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RELEASE_DIR/Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
+          archive="$RELEASE_DIR/Pomodorough-iOS-Simulator-ad-hoc-signed-non-notarized-${RELEASE_TAG}.zip"
           extracted="$RUNNER_TEMP/ios-simulator-release-smoke"
           rm -rf "$extracted"
           mkdir -p "$extracted"
           ditto -x -k "$archive" "$extracted"
           app="$extracted/Pomodorough.app"
           test -d "$app"
+          codesign --verify --deep --strict "$app"
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
           device_id="$(xcrun simctl list devices available --json | python3 -c 'import json,sys; data=json.load(sys.stdin)["devices"]; print(next(device["udid"] for runtime in data.values() for device in runtime if device["name"] == "iPhone 17"))')"
           xcrun simctl boot "$device_id" 2>/dev/null || true
           xcrun simctl bootstatus "$device_id" -b
           xcrun simctl uninstall "$device_id" "$bundle_id" 2>/dev/null || true
           xcrun simctl install "$device_id" "$app"
-          xcrun simctl launch "$device_id" "$bundle_id"
+          launch_output="$(xcrun simctl launch "$device_id" "$bundle_id")"
+          printf '%s\n' "$launch_output"
+          launch_pid="${launch_output##*: }"
+          test -n "$launch_pid"
+          [[ "$launch_pid" =~ ^[0-9]+$ ]]
+          sleep 2
           xcrun simctl terminate "$device_id" "$bundle_id"
 
       - name: Export SPDX SBOM
@@ -396,7 +399,7 @@ jobs:
           set -euo pipefail
 
           expected_assets=(
-            "Pomodorough-iOS-Simulator-unsigned-non-notarized-${RELEASE_TAG}.zip"
+            "Pomodorough-iOS-Simulator-ad-hoc-signed-non-notarized-${RELEASE_TAG}.zip"
             "Pomodorough-iOS-unsigned-${RELEASE_TAG}.ipa"
             "Pomodorough-macOS-unsigned-non-notarized-${RELEASE_TAG}.zip"
             "pomodorough-apple.spdx.json"
@@ -441,10 +444,9 @@ jobs:
           notes_file="$RUNNER_TEMP/release-notes.md"
           {
             printf '%s\n' \
-              'Unsigned, non-notarized developer artifacts built without signing credentials.' \
+              'Developer artifacts built without distribution signing credentials or notarization.' \
               '' \
-              '- Linker-generated ad-hoc signatures were removed before packaging.' \
-              '- iOS simulator ZIP: unsigned simulator build; it cannot be installed on a physical device.' \
+              '- iOS simulator ZIP: ad-hoc signed for clean simulator installation; it cannot be installed on a physical device.' \
               '- iOS IPA: unsigned device build; it must be signed and provisioned before installation.' \
               '- macOS artifact: unsigned and non-notarized; Gatekeeper may block normal launch.' \
               '- SHA256SUMS.txt contains SHA-256 checksums for all artifacts.' \
@@ -460,7 +462,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --draft \
-              --title "Pomodorough $RELEASE_TAG unsigned artifacts" \
+              --title "Pomodorough $RELEASE_TAG developer artifacts" \
               --notes-file "$notes_file"
           fi
           while IFS= read -r asset; do
@@ -476,6 +478,6 @@ jobs:
           verify_release_assets
           gh release edit "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Pomodorough $RELEASE_TAG unsigned artifacts" \
+            --title "Pomodorough $RELEASE_TAG developer artifacts" \
             --notes-file "$notes_file" \
             --draft=false
