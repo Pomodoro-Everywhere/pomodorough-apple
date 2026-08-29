@@ -280,7 +280,8 @@ final class SharedCore: @unchecked Sendable {
                 )
             }
             let module = try parseWasm(bytes: Array(moduleData))
-            let store = Store(engine: Engine())
+            let engine = Engine(configuration: EngineConfiguration(threadingModel: .token))
+            let store = Store(engine: engine)
             let instance = try module.instantiate(store: store)
             guard let memory = instance.exports[memory: "memory"] else {
                 throw SharedCoreError.missingExport("memory")
