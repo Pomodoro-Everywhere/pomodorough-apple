@@ -16,8 +16,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      CORE_COMMIT: "4802ba99f9d97ee8d3aee3a84468b2f8c91ee443"
-      CORE_SHA256: "f96e712ca8350ca038888316ad2fc8bd0f08f72b3bc984f916f1127c644e776c"
+      CORE_COMMIT: "0d8603ddaa27f7cbafdeede8784c0a66b2ba959b"
+      CORE_RELEASE_TAG: "v0.2.0"
+      CORE_SHA256: "8a9f7e5291bb6ddb09b1fe6d9f027ac9bf137814bfac1bf16a201bbb633cf235"
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughDerivedData
       IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
@@ -38,7 +39,7 @@ jobs:
           path: .build/pomodorough-core
           persist-credentials: false
 
-      - name: Rebuild and verify pinned shared core
+      - name: Verify pinned source and released shared core
         run: |
           test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
           test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
@@ -58,10 +59,14 @@ jobs:
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
             Resources/SharedCore/pomodorough_core.wasm \
             --sha256 "$CORE_SHA256"
-          python3 scripts/verify_shared_core_provenance.py \
-            --sha256 "$CORE_SHA256" \
-            "$rebuilt" \
-            Resources/SharedCore/pomodorough_core.wasm
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
 
       - name: Check documentation links
         run: python3 scripts/check_docs.py

@@ -37,7 +37,7 @@ struct SharedCoreWASMTests {
             as: CoreVersion.self
         )
 
-        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.1.7"))
+        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.2.0"))
     }
 
     @Test func hlcHeadDispatchesThroughBundledWebAssembly() async throws {
