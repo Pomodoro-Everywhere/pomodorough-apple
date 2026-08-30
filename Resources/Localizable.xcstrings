@@ -365,12 +365,132 @@
         }
       }
     },
+    "Account data remains quarantined until deletion and local cleanup can be confirmed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account data remains quarantined until deletion and local cleanup can be confirmed."
+          }
+        }
+      }
+    },
+    "Account data was removed; use Retry account deletion to continue credential cleanup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account data was removed; use Retry account deletion to continue credential cleanup."
+          }
+        }
+      }
+    },
+    "Account data was removed; use Retry account deletion to continue room cleanup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account data was removed; use Retry account deletion to continue room cleanup."
+          }
+        }
+      }
+    },
+    "Account deletion is waiting for retained credentials.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion is waiting for retained credentials."
+          }
+        }
+      }
+    },
+    "Account deletion is waiting to confirm the remote result.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion is waiting to confirm the remote result."
+          }
+        }
+      }
+    },
+    "Account deletion paused because its recovery state could not be saved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion paused because its recovery state could not be saved."
+          }
+        }
+      }
+    },
     "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm."
+          }
+        }
+      }
+    },
+    "Account deletion recovery": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion recovery"
+          }
+        }
+      }
+    },
+    "Account deletion returned an invalid response.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion returned an invalid response."
+          }
+        }
+      }
+    },
+    "Account deletion was confirmed, but local cleanup is waiting for durable recovery state.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion was confirmed, but local cleanup is waiting for durable recovery state."
+          }
+        }
+      }
+    },
+    "Account deletion was confirmed; use Retry account deletion to continue local cleanup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion was confirmed; use Retry account deletion to continue local cleanup."
+          }
+        }
+      }
+    },
+    "Account deletion was confirmed; use Retry account deletion to continue room cleanup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion was confirmed; use Retry account deletion to continue room cleanup."
+          }
+        }
+      }
+    },
+    "Account deletion was rejected, but its recovery state could not be cleared.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion was rejected, but its recovery state could not be cleared."
           }
         }
       }
@@ -885,6 +1005,16 @@
         }
       }
     },
+    "Finish account deletion cleanup before signing in.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish account deletion cleanup before signing in."
+          }
+        }
+      }
+    },
     "Finish timer": {
       "localizations": {
         "en": {
@@ -1251,6 +1381,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Local account and timer data will be removed from this device."
+          }
+        }
+      }
+    },
+    "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup."
           }
         }
       }
@@ -1871,6 +2011,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Retry"
+          }
+        }
+      }
+    },
+    "Retry account deletion": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry account deletion"
           }
         }
       }

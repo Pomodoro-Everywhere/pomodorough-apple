@@ -2,6 +2,15 @@ import Foundation
 
 @MainActor
 final class RoomReplicationController {
+    private enum RevisionTaskContext {
+        @TaskLocal static var id: UUID?
+    }
+
+    private struct RevisionTaskHandle {
+        let id: UUID?
+        let task: Task<Void, Never>?
+    }
+
     private enum RevisionConnectionResult {
         case reconnect(after: Double)
         case stop
@@ -32,9 +41,11 @@ final class RoomReplicationController {
     private var revisionLifecycle = RevisionStreamLifecycle()
     private var revisionHints = RevisionHintCoalescer()
     private var revisionStreamTask: Task<Void, Never>?
+    private var revisionStreamTaskID: UUID?
     private var remotePollingTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var endpointStartupTask: Task<Void, Never>?
+    private var accountDeletionQuarantined = false
     private var sceneIsActive = false
     private lazy var service = dependencies.makeService(.init(
         status: { [weak self] status in self?.eventHandler(.statusChanged(status)) },
@@ -435,7 +446,8 @@ final class RoomReplicationController {
     }
 
     private func activeContext(environment: RoomReplicationEnvironment) -> IrohServiceContext? {
-        guard mode == .iroh,
+        guard !accountDeletionQuarantined,
+              mode == .iroh,
               let room = dependencies.roomStore.activeSnapshot,
               room.conflict == nil,
               let secret = dependencies.roomStore.activeRoomSecret else { return nil }
@@ -483,11 +495,21 @@ final class RoomReplicationController {
     }
 
     func cancelCentralizedStreams() {
+        _ = cancelCentralizedStreamsRetainingRevisionTask()
+    }
+
+    private func cancelCentralizedStreamsRetainingRevisionTask() -> RevisionTaskHandle {
         revisionLifecycle.cancelCurrent()
-        revisionStreamTask?.cancel()
+        let revisionTask = RevisionTaskHandle(
+            id: revisionStreamTaskID,
+            task: revisionStreamTask
+        )
+        revisionTask.task?.cancel()
         revisionStreamTask = nil
+        revisionStreamTaskID = nil
         remotePollingTask?.cancel()
         remotePollingTask = nil
+        return revisionTask
     }
 
     func resetCentralizedLifecycle() {
@@ -495,6 +517,39 @@ final class RoomReplicationController {
         retryTask?.cancel()
         retryTask = nil
         cancelCentralizedStreams()
+    }
+
+    func quiesceForAccountDeletion() async {
+        accountDeletionQuarantined = true
+        revisionHints = RevisionHintCoalescer()
+        retryTask?.cancel()
+        retryTask = nil
+        let revisionTask = cancelCentralizedStreamsRetainingRevisionTask()
+        let startup = endpointStartupTask
+        startup?.cancel()
+        endpointStartupTask = nil
+        if revisionTask.id != RevisionTaskContext.id {
+            await revisionTask.task?.value
+        }
+        await startup?.value
+        await service.stop()
+    }
+
+    func rollbackAccountDeletion(
+        environment: RoomReplicationEnvironment
+    ) async -> RoomReplicationForegroundAction {
+        guard accountDeletionQuarantined else { return .none }
+        accountDeletionQuarantined = false
+        if mode == .iroh {
+            await startIrohIfNeeded(environment: environment)
+            await service.syncNow()
+            return .none
+        }
+        guard mode == .centralized, sceneIsActive else { return .none }
+        let state = dependencies.centralizedState()
+        guard state.isSignedIn, !state.isWorkspaceMutationBlocked else { return .none }
+        startCentralizedStreams()
+        return .synchronize
     }
 
     func startCentralizedStreams() {
@@ -529,8 +584,12 @@ final class RoomReplicationController {
         guard canStartCentralized(state),
               let streamID = revisionLifecycle.begin() else { return }
         let owner = ownership(sessionGeneration: state.sessionGeneration)
+        let taskID = UUID()
+        revisionStreamTaskID = taskID
         revisionStreamTask = Task { [weak self] in
-            await self?.revisionLoop(owner: owner, streamID: streamID)
+            await RevisionTaskContext.$id.withValue(taskID) {
+                await self?.revisionLoop(owner: owner, streamID: streamID)
+            }
         }
     }
 

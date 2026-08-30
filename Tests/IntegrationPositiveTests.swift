@@ -91,7 +91,7 @@ struct IntegrationPositiveTests {
         let pending: [LogoutRevocationObligation] = try store.load()
         #expect(!pending.isEmpty)
         #expect(store.tokens != nil)
-        store.replaceFailures([])
+        store.setFailures([])
         for _ in 0..<600 {
             let remaining: [LogoutRevocationObligation] = try store.load()
             if remaining.isEmpty { break }
@@ -1265,7 +1265,7 @@ struct IntegrationPositiveTests {
         #expect(request.body == nil)
     }
 
-    @Test func accountDeletionSendsExactConfirmationAndDeletesTokensAfterServerSuccess() async throws {
+    @Test func accountDeletionSendsExactConfirmationWithoutPrematureTokenDeletion() async throws {
         let scenario = "apple-api-coverage-account-delete-success"
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -1278,10 +1278,10 @@ struct IntegrationPositiveTests {
         let client = APIClient(session: session, keychain: store)
         #expect(try await client.restoreTokens())
 
-        try await client.deleteAccount(confirmation: "DELETE")
+        #expect(await client.deleteAccount(confirmation: "DELETE") == .committed)
 
-        #expect(store.operations == [.load, .delete])
-        #expect(store.tokens == nil)
+        #expect(store.operations == [.load])
+        #expect(store.tokens != nil)
         let request = try #require(TestFixtures.recordedRequests(for: scenario).first)
         #expect(request.url == "https://pomodorough.egigoka.me/api/v1/account")
         #expect(request.method == "DELETE")
@@ -1289,27 +1289,6 @@ struct IntegrationPositiveTests {
         #expect(request.contentType == "application/json")
         #expect(request.authorization == "Bearer delete-access")
         #expect(request.body == Data(#"{"confirmation":"DELETE"}"#.utf8))
-    }
-
-    @Test func accountDeletionRemainsSuccessfulWhenLocalTokenCleanupFails() async throws {
-        let scenario = "apple-api-coverage-account-delete-success"
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
-        let store = RecordingTokenStore(
-            tokens: TokenPair(
-                accessToken: "delete-access",
-                accessTokenExpiresAt: .distantFuture,
-                refreshToken: "delete-refresh",
-                refreshTokenExpiresAt: .distantFuture
-            ),
-            failures: [.delete]
-        )
-        let client = APIClient(session: session, keychain: store)
-        #expect(try await client.restoreTokens())
-
-        try await client.deleteAccount(confirmation: "DELETE")
-
-        #expect(store.operations == [.load, .delete])
     }
 
     @Test @MainActor
@@ -1338,10 +1317,12 @@ struct IntegrationPositiveTests {
             refreshToken: "delete-refresh",
             refreshTokenExpiresAt: .distantFuture
         )
+        let tokenStore = RecordingTokenStore(tokens: tokens)
         let identity = RecordingGoogleIdentityProvider()
         let model = AppModel(
-            api: APIClient(session: session, keychain: RecordingTokenStore(tokens: tokens)),
+            api: APIClient(session: session, keychain: tokenStore),
             defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
             alarmScheduler: RecordingAlarmScheduler(),
             googleIdentityProvider: identity
         )
@@ -1355,7 +1336,211 @@ struct IntegrationPositiveTests {
         #expect(model.history.isEmpty)
         #expect(model.pendingChangeCount == 0)
         #expect(identity.signOutCount == 1)
+        #expect(tokenStore.tokens == nil)
         #expect(try persistedState(defaults).cachedUser == nil)
+    }
+
+    @Test @MainActor
+    func durableDeletionWorkspaceOverridesStalePreferencesAfterRestart() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.DurableDelete.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughDurableDelete-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        let workspaceURL = directory.appendingPathComponent("workspace.json")
+        let task = try #require(FocusTask(title: "Stale preference task"))
+        var oldState = PersistedTimerState.fresh()
+        oldState.cachedUser = TestFixtures.user
+        oldState.tasks = [task]
+        oldState.knownTasks = [task]
+        oldState.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        let oldBytes = try JSONEncoder.api.encode(oldState)
+        defaults.set(oldBytes, forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(fileURL: workspaceURL),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .absent)
+        defaults.set(oldBytes, forKey: "timer-state-v2")
+        let restarted = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: AtomicDurableFileStore(fileURL: workspaceURL),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        #expect(restarted.tasks.isEmpty)
+        #expect(restarted.pendingChangeCount == 0)
+        #expect(!restarted.isSignedIn)
+        await restarted.restore()
+        #expect(restarted.tasks.isEmpty)
+        #expect(restarted.pendingChangeCount == 0)
+    }
+
+    @Test @MainActor
+    func malformedAccountDeletionMarkerFailsClosedBeforeRestore() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        state.pendingAccountSwitchUser = TestFixtures.user
+        state.bootstrapUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        defaults.set("damaged-deletion-marker", forKey: "account-deletion-state-v1")
+
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+
+        #expect(!model.isSignedIn)
+        #expect(model.pendingChangeCount == 0)
+        #expect(model.pendingAccountSwitchUser == nil)
+        #expect(!model.isHistoryResolutionBlocking)
+        #expect(model.tasks.isEmpty)
+        #expect(model.history.isEmpty)
+        #expect(model.isWorkspaceMutationBlocked)
+    }
+
+    @Test @MainActor
+    func confirmedDeletionCredentialFailureKeepsRetryableTombstone() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [try #require(FocusTask(title: "Credential failure task"))]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(
+            tokens: TokenPair(
+                accessToken: "delete-access",
+                accessTokenExpiresAt: .distantFuture,
+                refreshToken: "delete-refresh",
+                refreshTokenExpiresAt: .distantFuture
+            ),
+            failures: [.delete]
+        )
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        await model.restore()
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == "remote_committed")
+        #expect(model.tasks.isEmpty)
+        #expect(tokenStore.tokens != nil)
+        #expect(try persistedState(defaults).tasks.isEmpty)
+
+        let restarted = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        #expect(restarted.tasks.isEmpty)
+        await restarted.restore()
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == "remote_committed")
+        #expect(restarted.tasks.isEmpty)
+        #expect(TestFixtures.recordedRequests(for: scenario).filter {
+            $0.path == "/api/v1/account"
+        }.count == 1)
+        tokenStore.setFailures([])
+        let recovered = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        await recovered.restore()
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == nil)
+        #expect(tokenStore.tokens == nil)
+        #expect(recovered.tasks.isEmpty)
+    }
+
+    @Test @MainActor
+    func confirmedAccountDeletionWriteFailureRecoversPurgeObligationOnRestart() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let task = try #require(FocusTask(title: "Must not return"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        await model.restore()
+        defaults.ignoredSetKeys = ["timer-state-v2"]
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == "remote_committed")
+        #expect(model.tasks.isEmpty)
+        #expect(try persistedState(defaults).cachedUser != nil)
+        defaults.ignoredSetKeys = []
+
+        let restarted = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        #expect(restarted.tasks.isEmpty)
+        await restarted.restore()
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == nil)
+        let recovered = try persistedState(defaults)
+        #expect(recovered.cachedUser == nil)
+        #expect(recovered.tasks.isEmpty)
+        #expect(recovered.pendingCommands.isEmpty)
     }
 
     @Test @MainActor
@@ -2348,6 +2533,115 @@ struct IntegrationPositiveTests {
         let reopened = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         #expect(reopened.tasks == [newTask])
         #expect(reopened.pendingChangeCount == 1)
+    }
+
+    @Test @MainActor
+    func accountDeletionWaitsForAuthenticatedSyncTerminationBeforeDeleteRequest() async throws {
+        let scenario = "sync-account-deletion-stale"
+        let suiteName = "PomodoroughTests.SyncDeleteBarrier.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            TestFixtures.releaseScenario(scenario)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let task = try #require(FocusTask(title: "Pending sync"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.knownTasks = [task]
+        state.pendingTaskOperations = [TaskOperation(
+            id: "task-operation-sync-delete-barrier",
+            taskId: task.id.uuidString.lowercased(), type: .upsert, title: task.title,
+            occurredAt: TestFixtures.anchor, hlcWallMs: 1_000_001, hlcCounter: 0
+        )]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access", accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh", refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        let restoreTask = Task { await model.restore() }
+        try #require(await TestFixtures.waitForRequest(in: scenario, path: "/api/v1/sync"))
+
+        let deletionTask = Task { await model.deleteAccount(confirmation: "DELETE") }
+        try #require(await TestFixtures.waitForRequest(in: scenario, path: "/api/v1/account"))
+
+        #expect(TestFixtures.lifecycleEvents(for: scenario) == [
+            "POST /api/v1/sync",
+            "sync terminated",
+            "DELETE /api/v1/account"
+        ])
+        TestFixtures.releaseScenario(scenario)
+        await deletionTask.value
+        await restoreTask.value
+    }
+
+    @Test @MainActor
+    func delayedSyncResponseCannotCrossConfirmedAccountDeletion() async throws {
+        let scenario = "sync-account-deletion-stale"
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            TestFixtures.releaseScenario(scenario)
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let oldTask = try #require(FocusTask(title: "Deleted account task"))
+        var oldState = PersistedTimerState.fresh()
+        oldState.cachedUser = TestFixtures.user
+        oldState.knownTasks = [oldTask]
+        oldState.pendingTaskOperations = [TaskOperation(
+            id: "task-operation-deleted-account",
+            taskId: oldTask.id.uuidString.lowercased(),
+            type: .upsert,
+            title: oldTask.title,
+            occurredAt: TestFixtures.anchor,
+            hlcWallMs: 1_000_001,
+            hlcCounter: 0
+        )]
+        defaults.set(try JSONEncoder.api.encode(oldState), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        let restoreTask = Task { await model.restore() }
+        try #require(await TestFixtures.waitForRequest(
+            in: scenario,
+            path: "/api/v1/sync"
+        ))
+        let deletionTask = Task { await model.deleteAccount(confirmation: "DELETE") }
+        for _ in 0..<100 where defaults.string(forKey: "account-deletion-state-v1") != "prepared" {
+            await Task.yield()
+        }
+        try #require(defaults.string(forKey: "account-deletion-state-v1") == "prepared")
+        TestFixtures.releaseScenario(scenario)
+        await deletionTask.value
+        #expect(model.errorMessage == nil)
+        await restoreTask.value
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == nil)
+        #expect(try persistedState(defaults).cachedUser == nil)
+        #expect(try persistedState(defaults).knownTasks.isEmpty)
+        #expect(try persistedState(defaults).pendingTaskOperations.isEmpty)
+        #expect(model.sessionState == .localOnly)
+        #expect(model.tasks.isEmpty)
+        #expect(tokenStore.tokens == nil)
     }
 
     @Test @MainActor

@@ -566,10 +566,82 @@
         "value": "‏⟦Account⟧"
       }
     },
+    "Account data remains quarantined until deletion and local cleanup can be confirmed.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account data remains quarantined until deletion and local cleanup can be confirmed.⟧"
+      }
+    },
+    "Account data was removed; use Retry account deletion to continue credential cleanup.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account data was removed; use Retry account deletion to continue credential cleanup.⟧"
+      }
+    },
+    "Account data was removed; use Retry account deletion to continue room cleanup.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account data was removed; use Retry account deletion to continue room cleanup.⟧"
+      }
+    },
+    "Account deletion is waiting for retained credentials.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion is waiting for retained credentials.⟧"
+      }
+    },
+    "Account deletion is waiting to confirm the remote result.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion is waiting to confirm the remote result.⟧"
+      }
+    },
+    "Account deletion paused because its recovery state could not be saved.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion paused because its recovery state could not be saved.⟧"
+      }
+    },
     "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.⟧"
+      }
+    },
+    "Account deletion recovery": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion recovery⟧"
+      }
+    },
+    "Account deletion returned an invalid response.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion returned an invalid response.⟧"
+      }
+    },
+    "Account deletion was confirmed, but local cleanup is waiting for durable recovery state.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion was confirmed, but local cleanup is waiting for durable recovery state.⟧"
+      }
+    },
+    "Account deletion was confirmed; use Retry account deletion to continue local cleanup.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion was confirmed; use Retry account deletion to continue local cleanup.⟧"
+      }
+    },
+    "Account deletion was confirmed; use Retry account deletion to continue room cleanup.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion was confirmed; use Retry account deletion to continue room cleanup.⟧"
+      }
+    },
+    "Account deletion was rejected, but its recovery state could not be cleared.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion was rejected, but its recovery state could not be cleared.⟧"
       }
     },
     "Account switch paused because local data could not be saved.": {
@@ -878,6 +950,12 @@
         "value": "‏⟦Finish a focus timer to see its time here.⟧"
       }
     },
+    "Finish account deletion cleanup before signing in.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Finish account deletion cleanup before signing in.⟧"
+      }
+    },
     "Finish timer": {
       "stringUnit": {
         "state": "translated",
@@ -1098,6 +1176,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Local account and timer data will be removed from this device.⟧"
+      }
+    },
+    "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.⟧"
       }
     },
     "Long break": {
@@ -1472,6 +1556,12 @@
         "value": "‏⟦Retry⟧"
       }
     },
+    "Retry account deletion": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Retry account deletion⟧"
+      }
+    },
     "Returns to history choices without changing data": {
       "stringUnit": {
         "state": "translated",
@@ -1826,7 +1916,7 @@
           "one": {
             "stringUnit": {
               "state": "translated",
-              "value": "‏⟦Sync paused because the server response did not match queued change. %lld queued change remain on this device.⟧"
+              "value": "‏⟦Sync paused because the server response did not match queued change. %lld queued change remains on this device.⟧"
             }
           },
           "two": {

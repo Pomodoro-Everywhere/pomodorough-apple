@@ -19,6 +19,258 @@ struct IrohReplicationTests {
     }
 
     @Test @MainActor
+    func confirmedAccountDeletionPurgesLocalAndIrohWorkspacesAcrossRestart() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.IrohAccountDelete.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughIrohDelete-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("rooms.json")
+        let secretStore = MemoryIrohRoomSecretStore()
+        let roomStore = IrohRoomStore(fileURL: fileURL, secretStore: secretStore)
+        let localTask = try #require(FocusTask(title: "Deleted local return task"))
+        var localState = PersistedTimerState.fresh()
+        localState.cachedUser = TestFixtures.user
+        localState.tasks = [localTask]
+        localState.knownTasks = [localTask]
+        defaults.set(try JSONEncoder.api.encode(localState), forKey: "timer-state-v2")
+        let roomTask = try #require(FocusTask(title: "Deleted room task"))
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try roomStore.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Deleted account room",
+            returnState: localState,
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [roomTask],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "delete-access",
+            accessTokenExpiresAt: .distantFuture,
+            refreshToken: "delete-refresh",
+            refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: roomStore,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+        secretStore.setDeleteFailure(true, roomID: roomID)
+
+        await model.deleteAccount(confirmation: "DELETE")
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == "remote_committed")
+        let persistedData = try #require(defaults.data(forKey: "timer-state-v2"))
+        let persisted = try JSONDecoder.api.decode(PersistedTimerState.self, from: persistedData)
+        #expect(persisted.cachedUser == nil)
+        #expect(persisted.tasks.isEmpty)
+        #expect(roomStore.roomIDs.isEmpty)
+        #expect(secretStore.contains(roomID: roomID))
+        #expect(model.tasks.isEmpty)
+        secretStore.setDeleteFailure(false, roomID: roomID)
+        let reopenedStore = IrohRoomStore(fileURL: fileURL, secretStore: secretStore)
+        let reopened = AppModel(
+            api: APIClient(session: session, keychain: tokenStore),
+            defaults: defaults,
+            roomStore: reopenedStore,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        #expect(reopened.tasks.isEmpty)
+        await reopened.restore()
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == nil)
+        #expect(!secretStore.contains(roomID: roomID))
+        #expect(reopenedStore.roomIDs.isEmpty)
+    }
+
+    @Test @MainActor
+    func oldRemoteCommittedJournalPurgesRetainedCanonicalSecretWithoutResendingDelete() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.OldIrohDeleteJournal.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughOldIrohDelete-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let canonicalAccount = "room-secret-v1.\(roomID)"
+        let journalURL = directory.appendingPathComponent("deletion.json")
+        try Data(#"{"phase":"remote_committed","roomIDs":["\#(roomID)"]}"#.utf8)
+            .write(to: journalURL)
+        let security = RecordingKeychainSecurity(accountNames: [canonicalAccount])
+        let roomStore = IrohRoomStore(
+            fileURL: directory.appendingPathComponent("rooms.json"),
+            secretStore: IrohRoomSecretKeychainStore(security: security)
+        )
+        let task = try #require(FocusTask(title: "Cold recovery local task"))
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.tasks = [task]
+        state.knownTasks = [task]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: RecordingTokenStore(tokens: nil)),
+            defaults: defaults,
+            accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
+            durableLocalStore: .init(fileURL: directory.appendingPathComponent("workspace.json")),
+            roomStore: roomStore,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        await model.restore()
+
+        #expect(security.deleteQueries.map(\.account) == [canonicalAccount])
+        #expect(security.copyQueries.count == 2)
+        #expect(try AccountDeletionJournal(fileURL: journalURL).load() == .absent)
+        #expect(model.tasks.isEmpty)
+        #expect(!model.hasPendingAccountDeletionRecovery)
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy {
+            $0.path != "/api/v1/account"
+        })
+    }
+
+    @Test @MainActor
+    func preparedDeletionHidesActiveIrohRoomBeforeRestore() throws {
+        let suiteName = "PomodoroughTests.IrohPreparedProjection.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = temporaryStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Hidden deletion room",
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        defaults.set("prepared", forKey: "account-deletion-state-v1")
+        defaults.set(try JSONEncoder().encode([roomID]), forKey: "account-deletion-room-ids-v1")
+
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        #expect(model.activeRoom == nil)
+        #expect(model.preferredRoom == nil)
+        #expect(!model.hasIrohRoom)
+        #expect(model.isWorkspaceMutationBlocked)
+    }
+
+    @Test
+    func accountDeletionPurgeRequiresEmptyIrohServiceReenumeration() throws {
+        let lingeringAccount = "unexpected-room-credential"
+        let security = RecordingKeychainSecurity(
+            accountNames: [lingeringAccount],
+            removesDeletedAccounts: false
+        )
+        let store = IrohRoomStore(
+            fileURL: temporaryURL(),
+            secretStore: IrohRoomSecretKeychainStore(security: security)
+        )
+
+        #expect(throws: IrohProtocolError.self) {
+            try store.purgeAccountData(
+                retainedRoomIDs: [],
+                roomSecretAccounts: [lingeringAccount]
+            )
+        }
+        #expect(security.deleteQueries.map(\.account) == [lingeringAccount])
+        #expect(security.copyQueries.count == 2)
+    }
+
+    @Test @MainActor
+    func corruptRetainedRoomIDsKeepDeletionQuarantinedAfterPartialRoomPurge() async throws {
+        let suiteName = "PomodoroughTests.IrohCorruptDeleteIDs.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughIrohCorruptDelete-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secretStore = MemoryIrohRoomSecretStore()
+        let roomStore = IrohRoomStore(
+            fileURL: directory.appendingPathComponent("rooms.json"),
+            secretStore: secretStore
+        )
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try roomStore.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Partially purged room",
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: nil,
+                history: [],
+                tasks: [],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        secretStore.setDeleteFailure(true, roomID: roomID)
+        var purgeFailed = false
+        do {
+            try roomStore.purgeAccountData(
+                retainedRoomIDs: [roomID],
+                roomSecretAccounts: ["room-secret-v1.\(roomID)"]
+            )
+        } catch {
+            purgeFailed = true
+        }
+        #expect(purgeFailed)
+        #expect(roomStore.roomIDs.isEmpty)
+        #expect(secretStore.contains(roomID: roomID))
+        defaults.set("remote_committed", forKey: "account-deletion-state-v1")
+        defaults.set(Data("not-json".utf8), forKey: "account-deletion-room-ids-v1")
+        secretStore.setDeleteFailure(false, roomID: roomID)
+
+        let model = AppModel(
+            api: APIClient(keychain: RecordingTokenStore(tokens: nil)),
+            defaults: defaults,
+            roomStore: roomStore,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+
+        #expect(defaults.string(forKey: "account-deletion-state-v1") == "remote_committed")
+        #expect(secretStore.contains(roomID: roomID))
+        #expect(model.isWorkspaceMutationBlocked)
+    }
+
+    @Test @MainActor
     func cancellingRequestedRoomLeavePreservesActiveRoomWorkspace() throws {
         let suiteName = "PomodoroughTests.IrohLeaveCancel.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

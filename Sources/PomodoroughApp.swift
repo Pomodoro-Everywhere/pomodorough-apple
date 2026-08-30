@@ -13,6 +13,7 @@ struct PomodoroughApp: App {
             }
             try? KeychainStore().delete()
             try? IrohRoomStore.resetDefaultStorage()
+            AppModel.resetDefaultDurableStorage()
         }
 #endif
         _model = State(initialValue: AppModel())

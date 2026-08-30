@@ -10,6 +10,7 @@ ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CORE_COMMIT = "dda034612bd9a8b3d0f56959d9eef888980acc7b"
+CORE_RELEASE_TAG = "v0.6.0"
 CORE_SHA256 = "33cb3bc7477a8075a9613e45b309495e44d28f794e6b88362a8073d505309f5a"
 PROVENANCE_SCRIPT = ROOT / "scripts" / "verify_shared_core_provenance.py"
 VALID_WASM = b"\0asm\x01\0\0\0"
@@ -30,7 +31,8 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn(f'CORE_SHA256: "{CORE_SHA256}"', workflow)
         self.assertIn("ref: ${{ env.CORE_COMMIT }}", workflow)
         self.assertIn("cd .build/pomodorough-core", workflow)
-        self.assertIn("Rebuild and verify pinned shared core", workflow)
+        self.assertIn("Rebuild and verify pinned shared core release", workflow)
+        self.assertIn(f'CORE_RELEASE_TAG: "{CORE_RELEASE_TAG}"', workflow)
         self.assertIn("verify_wasm_artifact.py", workflow)
         self.assertIn("scripts/verify_shared_core_provenance.py", workflow)
         self.assertIn("SWIFT_SUPPRESS_WARNINGS=NO", workflow)
@@ -45,10 +47,13 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn('test "$actual_sha" = "$CORE_SHA256"', workflow)
         self.assertIn("test \"$verified_apps\" -eq 2", workflow)
 
-    def test_ci_binds_rebuild_to_embedded_core(self) -> None:
+    def test_ci_binds_canonical_release_to_embedded_core(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(f'CORE_RELEASE_TAG: "{CORE_RELEASE_TAG}"', workflow)
+        self.assertIn("canonicalize_wasm_artifact.py", workflow)
+        self.assertIn("releases/download/$CORE_RELEASE_TAG", workflow)
         self.assertIn("scripts/verify_shared_core_provenance.py", workflow)
-        self.assertIn('"$rebuilt"', workflow)
+        self.assertIn('"$canonical_release"', workflow)
 
     def test_provenance_rejects_different_valid_wasm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,4 +1,132 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
+
+struct AtomicDurableFileStore: Sendable {
+    let fileURL: URL
+    private let afterReplacement: @Sendable () throws -> Void
+
+    init(
+        fileURL: URL,
+        afterReplacement: @escaping @Sendable () throws -> Void = {}
+    ) {
+        self.fileURL = fileURL
+        self.afterReplacement = afterReplacement
+    }
+
+    func read() throws -> Data? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return try Data(contentsOf: fileURL)
+    }
+
+    func write(_ data: Data) throws {
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+#if os(iOS)
+        try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+#else
+        try data.write(to: fileURL, options: .atomic)
+#endif
+        try afterReplacement()
+        let handle = try FileHandle(forWritingTo: fileURL)
+        defer { try? handle.close() }
+        try handle.synchronize()
+        try synchronizeDirectory(directory)
+    }
+
+    func remove() throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        try FileManager.default.removeItem(at: fileURL)
+        try synchronizeDirectory(fileURL.deletingLastPathComponent())
+    }
+
+    private func synchronizeDirectory(_ directory: URL) throws {
+#if canImport(Darwin)
+        let descriptor = Darwin.open(directory.path, O_RDONLY)
+        guard descriptor >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+#endif
+    }
+}
+
+struct AccountDeletionJournal: Sendable {
+    enum Phase: String, Codable, Equatable, Sendable {
+        case prepared
+        case remoteCommitted = "remote_committed"
+    }
+
+    struct Record: Codable, Equatable, Sendable {
+        let phase: Phase
+        let roomIDs: [String]
+        let roomSecretAccounts: [String]
+
+        init(
+            phase: Phase,
+            roomIDs: [String],
+            roomSecretAccounts: [String] = []
+        ) {
+            self.phase = phase
+            self.roomIDs = Array(Set(roomIDs)).sorted()
+            self.roomSecretAccounts = Array(Set(roomSecretAccounts)).sorted()
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case phase
+            case roomIDs
+            case roomSecretAccounts
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                phase: try values.decode(Phase.self, forKey: .phase),
+                roomIDs: try values.decode([String].self, forKey: .roomIDs),
+                roomSecretAccounts: try values.decodeIfPresent(
+                    [String].self, forKey: .roomSecretAccounts
+                ) ?? []
+            )
+        }
+    }
+
+    enum LoadResult: Equatable, Sendable {
+        case absent
+        case record(Record)
+        case corrupt
+    }
+
+    private let store: AtomicDurableFileStore
+    private let beforeSave: @Sendable (Record) throws -> Void
+
+    init(
+        fileURL: URL,
+        afterReplacement: @escaping @Sendable () throws -> Void = {},
+        beforeSave: @escaping @Sendable (Record) throws -> Void = { _ in }
+    ) {
+        store = AtomicDurableFileStore(
+            fileURL: fileURL, afterReplacement: afterReplacement
+        )
+        self.beforeSave = beforeSave
+    }
+
+    func load() throws -> LoadResult {
+        guard let data = try store.read() else { return .absent }
+        guard let record = try? JSONDecoder().decode(Record.self, from: data) else { return .corrupt }
+        return .record(record)
+    }
+
+    func save(_ record: Record) throws {
+        try beforeSave(record)
+        try store.write(JSONEncoder().encode(record))
+    }
+
+    func clear() throws {
+        try store.remove()
+    }
+}
 
 @MainActor
 struct AppStatePersistenceCoordinator {
@@ -50,9 +178,11 @@ struct AppStatePersistenceCoordinator {
     }
 
     private let defaults: UserDefaults
+    private let durableLocalStore: AtomicDurableFileStore?
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults, durableLocalStore: AtomicDurableFileStore? = nil) {
         self.defaults = defaults
+        self.durableLocalStore = durableLocalStore
     }
 
     func load(
@@ -62,7 +192,17 @@ struct AppStatePersistenceCoordinator {
         uptime: TimeInterval
     ) -> LoadTransition {
         let loader = PersistedStateLoader(defaults: defaults)
-        let loaded = loader.load()
+        let durableData: Data?
+        if let durableLocalStore {
+            do {
+                durableData = try durableLocalStore.read()
+            } catch {
+                durableData = Data()
+            }
+        } else {
+            durableData = nil
+        }
+        let loaded = loader.load(preferredStoredData: durableData)
         let roomBootstrap = RoomReplicationController.bootstrapRoomState(
             mode: replicationMode,
             localState: loaded.localState,
@@ -135,7 +275,12 @@ struct AppStatePersistenceCoordinator {
         case .local:
             do {
                 let data = try JSONEncoder.api.encode(state)
+                try durableLocalStore?.write(data)
                 defaults.set(data, forKey: PersistedStateLoader.storageKey)
+                guard durableLocalStore != nil
+                        || defaults.data(forKey: PersistedStateLoader.storageKey) == data else {
+                    return .failed
+                }
                 return .stored(state, bytes: data)
             } catch {
                 return .failed

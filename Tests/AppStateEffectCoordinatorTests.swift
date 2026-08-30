@@ -98,6 +98,41 @@ struct AppStateEffectCoordinatorTests {
         #expect(transition.command.timerId == fixture.timer.id)
     }
 
+    @Test
+    func durableDeletionJournalReopensExactRecordAndFailsClosedOnCorruption() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughDeletionJournal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("journal.json")
+        let record = AccountDeletionJournal.Record(
+            phase: .prepared,
+            roomIDs: ["room-b", "room-a"]
+        )
+
+        try AccountDeletionJournal(fileURL: url).save(record)
+
+        #expect(try AccountDeletionJournal(fileURL: url).load() == .record(
+            .init(phase: .prepared, roomIDs: ["room-a", "room-b"])
+        ))
+        try Data("damaged".utf8).write(to: url, options: .atomic)
+        #expect(try AccountDeletionJournal(fileURL: url).load() == .corrupt)
+    }
+
+    @Test
+    func durableWorkspaceStoreReopensExactBytes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PomodoroughDurableWorkspace-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("workspace.json")
+        let data = Data("durable-workspace".utf8)
+
+        try AtomicDurableFileStore(fileURL: url).write(data)
+
+        #expect(try AtomicDurableFileStore(fileURL: url).read() == data)
+    }
+
     @MainActor
     private func makeFinishFixture(
         timerController: TimerSessionController

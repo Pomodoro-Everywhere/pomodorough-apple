@@ -116,10 +116,13 @@ protocol IrohRoomSecretStoring: Sendable {
     func load(roomID: String) throws -> Data?
     func save(_ secret: Data, roomID: String) throws
     func delete(roomID: String) throws
+    func accountDeletionAccounts() throws -> [String]
+    func deleteAccount(named account: String) throws
 }
 
 protocol KeychainSecurityOperating: Sendable {
     func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?)
+    func copyAccounts(_ query: [String: Any]) -> (status: OSStatus, accounts: [String])
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus
     func add(_ query: [String: Any]) -> OSStatus
     func delete(_ query: [String: Any]) -> OSStatus
@@ -131,6 +134,13 @@ struct SystemKeychainSecurity: KeychainSecurityOperating {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         return (status, result as? Data)
+    }
+
+    func copyAccounts(_ query: [String: Any]) -> (status: OSStatus, accounts: [String]) {
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let items = result as? [[String: Any]] ?? []
+        return (status, items.compactMap { $0[kSecAttrAccount as String] as? String })
     }
 
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus {
@@ -313,11 +323,37 @@ struct IrohRoomSecretKeychainStore: IrohRoomSecretStoring {
         }
     }
 
+    func accountDeletionAccounts() throws -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        let result = security.copyAccounts(query)
+        if result.status == errSecItemNotFound { return [] }
+        guard result.status == errSecSuccess else {
+            throw error(operation: "enumerate", status: result.status)
+        }
+        return Array(Set(result.accounts)).sorted()
+    }
+
+    func deleteAccount(named account: String) throws {
+        let status = security.delete(baseQuery(account: account))
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw error(operation: "delete account", status: status)
+        }
+    }
+
     private func baseQuery(roomID: String) -> [String: Any] {
+        baseQuery(account: "room-secret-v1.\(roomID)")
+    }
+
+    private func baseQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: "room-secret-v1.\(roomID)",
+            kSecAttrAccount as String: account,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
     }

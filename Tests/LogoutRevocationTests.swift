@@ -667,6 +667,10 @@ private final class InterleavingKeychainSecurity: KeychainSecurityOperating, @un
         return snapshot.map { (errSecSuccess, $0) } ?? (errSecItemNotFound, nil)
     }
 
+    func copyAccounts(_ query: [String: Any]) -> (status: OSStatus, accounts: [String]) {
+        (errSecItemNotFound, [])
+    }
+
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus {
         lock.withLock {
             guard data != nil else { return errSecItemNotFound }

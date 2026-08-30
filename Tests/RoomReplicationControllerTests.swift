@@ -184,6 +184,94 @@ struct RoomReplicationControllerTests {
     }
 
     @Test @MainActor
+    func accountDeletionQuiescenceWaitsForQueuedIrohStartupBeforeStoppingService() async throws {
+        let fixture = makeFixture(mode: .iroh)
+        fixture.controller.setSceneActive(true, environment: environment())
+        await Task.yield()
+        let roomState = try makeActiveRoom(in: fixture.store, returnState: .fresh())
+        fixture.workspace.value = workspace(from: roomState)
+        await fixture.service.setStartSuspended(true)
+        let startCountBefore = await fixture.service.startedContexts.count
+        let completionCountBefore = await fixture.service.startCompletionCount
+        fixture.controller.scheduleIrohStartup(environment: environment(for: roomState))
+        await waitUntil { await fixture.service.startedContexts.count == startCountBefore + 1 }
+        let stopCountBeforeQuiescence = await fixture.service.stopCount
+
+        let quiescence = Task { await fixture.controller.quiesceForAccountDeletion() }
+        await Task.yield()
+
+        #expect(await fixture.service.stopCount == stopCountBeforeQuiescence)
+        await fixture.service.releaseStart()
+        await quiescence.value
+
+        #expect(await fixture.service.startCompletionCount == completionCountBefore + 1)
+        #expect(await fixture.service.stopCount == stopCountBeforeQuiescence + 1)
+        #expect(Array(await fixture.service.lifecycleEvents.suffix(3)) == [
+            .startEntered, .startCompleted, .stop
+        ])
+    }
+
+    @Test @MainActor
+    func accountDeletionWaitsForExactRevisionTaskTerminationBeforeDeleteStarts() async throws {
+        let scenario = "apple-api-coverage-account-delete-success"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let lifecycle = LockedTestValue<[String]>([])
+        let probe = RevisionStreamCancellationProbe(lifecycle: lifecycle)
+        let fixture = makeFixture(
+            mode: .centralized,
+            revisionEvents: { try await probe.events() }
+        )
+        fixture.controller.setSceneActive(true, environment: environment())
+        fixture.controller.startRevisionStream()
+        await waitUntil { fixture.revisionRequests.value == 1 }
+
+        let deletion = Task {
+            await fixture.controller.quiesceForAccountDeletion()
+            let outcome = await api.deleteAccount(confirmation: "DELETE")
+            lifecycle.value.append("DELETE completed")
+            return outcome
+        }
+        await waitUntil { lifecycle.value.contains("revision cancellation requested") }
+
+        #expect(lifecycle.value == ["revision cancellation requested"])
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy {
+            $0.path != "/api/v1/account"
+        })
+        probe.releaseTermination()
+        #expect(await deletion.value == .committed)
+        #expect(TestFixtures.recordedRequests(for: scenario).filter {
+            $0.path == "/api/v1/account"
+        }.count == 1)
+        #expect(lifecycle.value == [
+            "revision cancellation requested",
+            "revision terminated",
+            "DELETE completed",
+        ])
+    }
+
+    @Test @MainActor
+    func accountDeletionRollbackRestartsIrohEndpoint() async throws {
+        let fixture = makeFixture(mode: .iroh)
+        let roomState = try makeActiveRoom(in: fixture.store, returnState: .fresh())
+        fixture.workspace.value = workspace(from: roomState)
+        fixture.controller.setSceneActive(true, environment: environment(for: roomState))
+        await waitUntil { await fixture.service.startedContexts.count == 1 }
+        await fixture.controller.quiesceForAccountDeletion()
+        let startCountBeforeRollback = await fixture.service.startedContexts.count
+        let syncCountBeforeRollback = await fixture.service.syncCount
+
+        _ = await fixture.controller.rollbackAccountDeletion(
+            environment: environment(for: roomState)
+        )
+
+        #expect(await fixture.service.startedContexts.count == startCountBeforeRollback + 1)
+        #expect(await fixture.service.syncCount == syncCountBeforeRollback + 1)
+    }
+
+    @Test @MainActor
     func invalidJoinFailsClosedThenResumesCentralizedSynchronization() async {
         let fixture = makeFixture(mode: .centralized)
 
@@ -405,7 +493,8 @@ struct RoomReplicationControllerTests {
         isSyncing: Bool = false,
         revisionStreamUnauthorized: Bool = false,
         cancelsSleep: Bool = true,
-        isHistoryResolutionBlocking: Bool = false
+        isHistoryResolutionBlocking: Bool = false,
+        revisionEvents: (@Sendable () async throws -> AsyncThrowingStream<Int64, Error>)? = nil
     ) -> ControllerFixture {
         let store = IrohRoomStore(
             fileURL: temporaryURL(),
@@ -435,6 +524,7 @@ struct RoomReplicationControllerTests {
             workspaceSnapshot: { workspace.value },
             revisionEvents: {
                 revisionRequests.value += 1
+                if let revisionEvents { return try await revisionEvents() }
                 return AsyncThrowingStream { continuation in
                     if revisionStreamUnauthorized {
                         continuation.finish(throwing: AppError.unauthorized)
@@ -530,6 +620,43 @@ struct RoomReplicationControllerTests {
     }
 }
 
+private final class RevisionStreamCancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let lifecycle: LockedTestValue<[String]>
+    private var terminationContinuation: CheckedContinuation<Void, Never>?
+    private var terminationReleased = false
+
+    init(lifecycle: LockedTestValue<[String]>) {
+        self.lifecycle = lifecycle
+    }
+
+    func events() async throws -> AsyncThrowingStream<Int64, Error> {
+        try await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let resumesImmediately = lock.withLock {
+                    if terminationReleased { return true }
+                    terminationContinuation = continuation
+                    return false
+                }
+                if resumesImmediately { continuation.resume() }
+            }
+            lifecycle.value.append("revision terminated")
+            throw CancellationError()
+        } onCancel: {
+            self.lifecycle.value.append("revision cancellation requested")
+        }
+    }
+
+    func releaseTermination() {
+        let continuation = lock.withLock {
+            terminationReleased = true
+            defer { terminationContinuation = nil }
+            return terminationContinuation
+        }
+        continuation?.resume()
+    }
+}
+
 @MainActor
 private struct ControllerFixture {
     let controller: RoomReplicationController
@@ -545,12 +672,22 @@ private struct ControllerFixture {
 }
 
 private actor RoomReplicationServiceSpy: RoomReplicationServing {
+    enum LifecycleEvent: Equatable, Sendable {
+        case startEntered
+        case startCompleted
+        case stop
+    }
+
     private(set) var startedContexts: [IrohServiceContext] = []
+    private(set) var startCompletionCount = 0
+    private(set) var lifecycleEvents: [LifecycleEvent] = []
     private(set) var markedConflictRoomIDs: [String?] = []
     private(set) var stopCount = 0
     private(set) var syncCount = 0
     private(set) var ticketRequestCount = 0
     private var startHook: (@Sendable () -> Void)?
+    private var suspendsStart = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
     private var startError: TestRoomServiceError?
     private var ticketError: TestRoomServiceError?
 
@@ -558,17 +695,34 @@ private actor RoomReplicationServiceSpy: RoomReplicationServing {
         startHook = hook
     }
 
+    func setStartSuspended(_ suspended: Bool) { suspendsStart = suspended }
+
+    func releaseStart() {
+        suspendsStart = false
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
     func setStartError(_ error: TestRoomServiceError?) { startError = error }
     func setTicketError(_ error: TestRoomServiceError?) { ticketError = error }
 
     func start(_ context: IrohServiceContext) async throws -> String {
         startedContexts.append(context)
+        lifecycleEvents.append(.startEntered)
         startHook?()
+        if suspendsStart {
+            await withCheckedContinuation { startContinuation = $0 }
+        }
         if let startError { throw startError }
+        startCompletionCount += 1
+        lifecycleEvents.append(.startCompleted)
         return "endpoint-ticket"
     }
 
-    func stop() async { stopCount += 1 }
+    func stop() async {
+        stopCount += 1
+        lifecycleEvents.append(.stop)
+    }
 
     func currentEndpointTicket() async throws -> String {
         ticketRequestCount += 1

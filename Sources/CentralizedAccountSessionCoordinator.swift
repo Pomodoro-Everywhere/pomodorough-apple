@@ -253,8 +253,11 @@ extension CentralizedAccountSessionCoordinator {
     }
 
     func logout() async -> String? { await lifecycle.logout() }
-    func clearTokens() async { await lifecycle.clearTokens() }
-    func deleteAccount(confirmation: String) async -> String? {
+    func clearTokens() async -> Bool { await lifecycle.clearTokens() }
+    func restoreAccountDeletionCredentials() async -> Bool {
+        await lifecycle.restoreAccountDeletionCredentials()
+    }
+    func deleteAccount(confirmation: String) async -> AccountDeletionOutcome {
         await lifecycle.deleteAccount(confirmation: confirmation)
     }
     func signOutIdentity() { lifecycle.signOutIdentity() }
