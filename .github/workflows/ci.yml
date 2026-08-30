@@ -39,7 +39,7 @@ jobs:
           path: .build/pomodorough-core
           persist-credentials: false
 
-      - name: Rebuild and verify pinned shared core release
+      - name: Verify pinned source and released shared core
         run: |
           test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
           test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
@@ -57,17 +57,17 @@ jobs:
           rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
           python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
-          canonical_release="$RUNNER_TEMP/pomodorough_core.wasm"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
-            --output "$canonical_release"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
-            "$canonical_release" \
+            Resources/SharedCore/pomodorough_core.wasm \
             --sha256 "$CORE_SHA256"
-          python3 scripts/verify_shared_core_provenance.py \
-            --sha256 "$CORE_SHA256" \
-            "$canonical_release" \
-            Resources/SharedCore/pomodorough_core.wasm
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
 
       - name: Check documentation links
         run: python3 scripts/check_docs.py
