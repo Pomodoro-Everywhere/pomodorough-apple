@@ -53,6 +53,56 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func localSignOutPublishesDespiteActiveCredentialDeleteFailure() async throws {
+        let scenario = "apple-api-coverage-model-local-signout"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore(failures: [.delete])
+        let identity = RecordingGoogleIdentityProvider()
+        identity.identityTokenResult = .success("injected-id-token")
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: session, keychain: store),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: identity
+        )
+
+        model.signIn()
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.isSignedIn)
+
+        model.signOut()
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(model.sessionState == .localOnly)
+        #expect(model.user == nil)
+        #expect(model.errorMessage == nil)
+        #expect(identity.signOutCount == 1)
+        let pending: [LogoutRevocationObligation] = try store.load()
+        #expect(!pending.isEmpty)
+        #expect(store.tokens != nil)
+        store.replaceFailures([])
+        for _ in 0..<600 {
+            let remaining: [LogoutRevocationObligation] = try store.load()
+            if remaining.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let remaining: [LogoutRevocationObligation] = try store.load()
+        #expect(remaining.isEmpty)
+        #expect(store.tokens == nil)
+    }
+
+    @Test @MainActor
     func accountSwitchRequiresDurableConfirmationBeforeRemovingOrMutatingLocalWorkspace() async throws {
         let scenario = "apple-api-coverage-model-sign-in"
         let session = TestFixtures.session(for: scenario)
@@ -2269,6 +2319,10 @@ struct IntegrationPositiveTests {
         )
         try #require(reachedServer, "Timed out waiting for stale account response")
         model.signOut()
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!model.isWorking)
 
         let newUser = User(id: "user-b", email: "b@example.com", name: "B", avatarUrl: "")
         let newTask = try #require(FocusTask(title: "New account task"))

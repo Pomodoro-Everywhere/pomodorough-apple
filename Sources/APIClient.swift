@@ -1,9 +1,10 @@
 import Foundation
 
-actor APIClient {
+actor APIClient: LogoutRevoking, LogoutSessionDetaching {
     private let baseURL: URL
     private let session: URLSession
     private let keychain: any TokenStoring
+    nonisolated let logoutRevocationStore: any LogoutRevocationStoring
     private let wallNow: @Sendable () -> Date
     private let uptime: @Sendable () -> TimeInterval
     private var tokens: TokenPair?
@@ -14,22 +15,45 @@ actor APIClient {
         baseURL: URL = URL(string: "https://pomodorough.egigoka.me")!,
         session: URLSession = .shared,
         keychain: any TokenStoring = KeychainStore(),
+        logoutRevocationStore: (any LogoutRevocationStoring)? = nil,
         wallNow: @escaping @Sendable () -> Date = { Date() },
         uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.baseURL = baseURL
         self.session = session
         self.keychain = keychain
+        self.logoutRevocationStore = logoutRevocationStore
+            ?? (keychain as? any LogoutRevocationStoring)
+            ?? KeychainLogoutRevocationStore()
         self.wallNow = wallNow
         self.uptime = uptime
     }
 
     func restoreTokens() throws -> Bool {
-        tokens = try keychain.load()
+        try installRestoredTokens(keychain.load())
+    }
+
+    func restoreTokens(excluding store: any LogoutRevocationStoring) throws -> Bool {
+        let loaded = try keychain.load()
+        let obligations = try store.load()
+        let retiredRefreshTokens = Set(obligations.flatMap {
+            [$0.activeCredentialRefreshToken, $0.tokens.refreshToken]
+        })
+        guard let loaded else { return installRestoredTokens(nil) }
+        guard !retiredRefreshTokens.contains(loaded.refreshToken) else {
+            _ = installRestoredTokens(nil)
+            _ = deleteDetachedCredential(refreshToken: loaded.refreshToken)
+            return false
+        }
+        return installRestoredTokens(loaded)
+    }
+
+    private func installRestoredTokens(_ restored: TokenPair?) -> Bool {
+        tokens = restored
         tokenGeneration += 1
         refreshTask?.cancel()
         refreshTask = nil
-        return tokens != nil
+        return restored != nil
     }
 
     func challenge() async throws -> NativeChallenge {
@@ -155,6 +179,42 @@ actor APIClient {
         try clearTokens()
     }
 
+    func detachLogoutObligation(
+        into store: any LogoutRevocationStoring
+    ) throws -> LogoutRevocationObligation? {
+        guard let tokens else { return nil }
+        let obligation = LogoutRevocationObligation(tokens: tokens)
+        try store.append(obligation)
+        clearInMemoryTokens()
+        try? keychain.delete()
+        return obligation
+    }
+
+    func deleteDetachedCredential(refreshToken: String) -> Bool {
+        do {
+            guard let stored = try keychain.load() else { return true }
+            guard stored.refreshToken == refreshToken else { return true }
+            try keychain.delete()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func revoke(_ obligation: LogoutRevocationObligation) async -> LogoutRevocationResult {
+        if obligation.requiresRefresh {
+            do {
+                let tokens = try await refreshForRevocation(obligation.tokens.refreshToken)
+                return .refreshed(tokens)
+            } catch AppError.unauthorized {
+                return .refreshUnauthorized
+            } catch {
+                return .retry
+            }
+        }
+        return await submitRevocation(accessToken: obligation.tokens.accessToken)
+    }
+
     func deleteAccount(confirmation: String) async throws {
         _ = try await perform(
             "/api/v1/account",
@@ -166,11 +226,15 @@ actor APIClient {
     }
 
     func clearTokens() throws {
+        clearInMemoryTokens()
+        try keychain.delete()
+    }
+
+    private func clearInMemoryTokens() {
         tokenGeneration += 1
         refreshTask?.cancel()
         refreshTask = nil
         tokens = nil
-        try keychain.delete()
     }
 
     private func validAccessToken() async throws -> String {
@@ -207,6 +271,32 @@ actor APIClient {
         try keychain.save(pair)
         tokens = pair
         return pair
+    }
+
+    private func refreshForRevocation(_ refreshToken: String) async throws -> TokenPair {
+        try await send(
+            "/api/v1/auth/refresh",
+            method: "POST",
+            body: RefreshRequest(refreshToken: refreshToken),
+            authenticated: false
+        )
+    }
+
+    private func submitRevocation(accessToken: String) async -> LogoutRevocationResult {
+        do {
+            _ = try await perform(
+                "/api/v1/auth/logout",
+                method: "POST",
+                body: Optional<String>.none,
+                authenticated: false,
+                bearerToken: accessToken
+            )
+            return .revoked
+        } catch AppError.unauthorized {
+            return .accessUnauthorized
+        } catch {
+            return .retry
+        }
     }
 
     private func send<Response: Decodable>(
@@ -290,7 +380,8 @@ actor APIClient {
         body: Body?,
         authenticated: Bool,
         reportsMissingRoute: Bool = false,
-        capturesTiming: Bool = false
+        capturesTiming: Bool = false,
+        bearerToken: String? = nil
     ) async throws -> HTTPResult {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
@@ -299,7 +390,9 @@ actor APIClient {
             request.httpBody = try JSONEncoder.api.encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        if authenticated {
+        if let bearerToken {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        } else if authenticated {
             request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
         }
 

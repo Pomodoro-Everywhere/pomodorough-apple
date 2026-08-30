@@ -545,12 +545,15 @@ final class AppModel {
             hasPendingAccountSwitch: timerState.pendingAccountSwitchUser != nil,
             isWorking: isWorking
         ) else { return }
+        isWorking = true
+        defer { isWorking = false }
+        if let failure = await accountSessionCoordinator.logout() {
+            errorMessage = failure
+            return
+        }
         applyAccountReset(transition)
         timerState.pendingAccountSwitchUser = nil
         persist()
-        isWorking = true
-        defer { isWorking = false }
-        await accountSessionCoordinator.logout()
     }
 
     func signOut() {
@@ -560,16 +563,31 @@ final class AppModel {
             preservesBootstrapResolution: preservesBootstrapResolution,
             pendingStrategy: timerState.pendingBootstrapResolution?.strategy
         ) else { return }
+        isWorking = true
+        Task {
+            await persistLogoutThenReset(
+                transition,
+                preservesBootstrapResolution: preservesBootstrapResolution
+            )
+        }
+    }
+
+    private func persistLogoutThenReset(
+        _ transition: CentralizedAccountSessionCoordinator.Transition<
+            CentralizedAccountSessionCoordinator.ResetAction
+        >,
+        preservesBootstrapResolution: Bool
+    ) async {
+        defer { isWorking = false }
+        if let failure = await accountSessionCoordinator.logout() {
+            errorMessage = failure
+            return
+        }
         if !preservesBootstrapResolution, let timer = canonicalTimer {
             cancelAlarm(timerID: timer.id)
         }
         applyAccountReset(transition)
         clearSignedOutState(preservesBootstrapResolution: preservesBootstrapResolution)
-
-        Task {
-            defer { isWorking = false }
-            await accountSessionCoordinator.logout()
-        }
     }
 
     private func applyAccountReset(

@@ -9,8 +9,8 @@ import unittest
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-CORE_COMMIT = "4802ba99f9d97ee8d3aee3a84468b2f8c91ee443"
-CORE_SHA256 = "f96e712ca8350ca038888316ad2fc8bd0f08f72b3bc984f916f1127c644e776c"
+CORE_COMMIT = "dda034612bd9a8b3d0f56959d9eef888980acc7b"
+CORE_SHA256 = "33cb3bc7477a8075a9613e45b309495e44d28f794e6b88362a8073d505309f5a"
 PROVENANCE_SCRIPT = ROOT / "scripts" / "verify_shared_core_provenance.py"
 VALID_WASM = b"\0asm\x01\0\0\0"
 DIFFERENT_VALID_WASM = VALID_WASM + b"\0\x01\0"
