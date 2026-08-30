@@ -10,16 +10,22 @@ final class CentralizedAccountSessionCoordinator {
     private(set) var publication: PublicationSnapshot
     private var syncOwnership = SyncOwnership()
     private var bootstrapSnapshot: BootstrapResponse?
+    private var pendingLegacyMigration: AppStatePersistenceCoordinator.LoadTransition?
+    private let legacyMigrationRoomStore: IrohRoomStore?
+    private var pendingLegacyMigrationRoomID: String?
+    private var canRemoveLegacyTasks = false
 
     init(
         lifecycle: AccountLifecycleController,
         synchronization: AccountSynchronization,
         initialPublication: PublicationSnapshot,
-        persistence: AppStatePersistenceCoordinator = AppStatePersistenceCoordinator(defaults: .standard)
+        persistence: AppStatePersistenceCoordinator = AppStatePersistenceCoordinator(defaults: .standard),
+        roomStore: IrohRoomStore? = nil
     ) {
         self.lifecycle = lifecycle
         self.synchronization = synchronization
         self.persistence = persistence
+        legacyMigrationRoomStore = roomStore
         publication = initialPublication
     }
 }
@@ -704,16 +710,23 @@ extension CentralizedAccountSessionCoordinator {
         for transition: AppStatePersistenceCoordinator.LoadTransition,
         projectionSucceeded: Bool
     ) -> [Effect] {
+        pendingLegacyMigration = nil
+        pendingLegacyMigrationRoomID = nil
+        canRemoveLegacyTasks = false
         switch persistence.completionEffect(
             for: transition,
             projectionSucceeded: projectionSucceeded
         ) {
-        case .none: []
-        case .removeLegacyTasks: [.removeLegacyTasks]
-        case .persist: [.persist]
-        case .removeLegacyTasksAndPersist: [.removeLegacyTasks, .persist]
+        case .none: return []
+        case .removeLegacyTasks, .removeLegacyTasksAndPersist:
+            pendingLegacyMigration = transition
+            if transition.replicationMode == .iroh {
+                pendingLegacyMigrationRoomID = legacyMigrationRoomStore?.activeRoomID
+            }
+            return [.persist]
+        case .persist: return [.persist]
         case .reportInvalidLocalClock:
-            [.presentPersistenceFailure(
+            return [.presentPersistenceFailure(
                 String(localized: "Saved sequence or trusted-time state is invalid. No local change was saved."),
                 quarantined: false
             ), .presentError(AppError.invalidLocalClock.localizedDescription)]
@@ -721,7 +734,21 @@ extension CentralizedAccountSessionCoordinator {
     }
 
     func removeLegacyTasks() {
+        guard canRemoveLegacyTasks,
+              let migration = pendingLegacyMigration,
+              persistence.matchesLegacyTaskSource(migration.legacyTaskSource) else { return }
+        if migration.replicationMode == .iroh {
+            guard let stored = legacyMigrationRoomStore?.activeRoomState,
+                  containsCommittedLegacyRecords(migration.state, in: stored),
+                  containsLegacyMigration(migration.state, in: stored) else {
+                canRemoveLegacyTasks = false
+                return
+            }
+        }
         persistence.removeLegacyTasks()
+        pendingLegacyMigration = nil
+        pendingLegacyMigrationRoomID = nil
+        canRemoveLegacyTasks = false
     }
 
     func persist(
@@ -736,6 +763,7 @@ extension CentralizedAccountSessionCoordinator {
         var effects: [Effect] = []
         if application.rebuildsProjection { effects.append(.rebuildProjection) }
         appendPersistenceFailure(from: application, to: &effects)
+        appendLegacyMigrationCompletion(from: application, destination: destination, to: &effects)
         return transition(
             PersistenceAction(state: application.state, succeeded: application.succeeded),
             effects: effects
@@ -759,10 +787,90 @@ extension CentralizedAccountSessionCoordinator {
         var effects: [Effect] = []
         appendPersistenceFailure(from: application, to: &effects)
         if application.rebuildsProjection { effects.append(.rebuildProjection) }
+        appendLegacyMigrationCompletion(from: application, destination: destination, to: &effects)
         return transition(
             PersistenceAction(state: application.state, succeeded: application.succeeded),
             effects: effects
         )
+    }
+}
+
+private extension CentralizedAccountSessionCoordinator {
+    func appendLegacyMigrationCompletion(
+        from application: AppStatePersistenceCoordinator.ApplicationTransition,
+        destination: AppStatePersistenceCoordinator.Destination,
+        to effects: inout [Effect]
+    ) {
+        canRemoveLegacyTasks = false
+        guard application.succeeded, let migration = pendingLegacyMigration,
+              persistence.matchesLegacyTaskSource(migration.legacyTaskSource) else { return }
+        switch (migration.replicationMode, destination) {
+        case (.iroh, .iroh):
+            guard containsCommittedLegacyRecords(migration.state, in: application.state) else { return }
+        case (.offline, .local), (.centralized, .local):
+            guard migration.state.pendingTaskOperations.allSatisfy(application.state.pendingTaskOperations.contains),
+                  migration.state.pendingSelectedTaskOperations.allSatisfy(
+                      application.state.pendingSelectedTaskOperations.contains
+                  ) else { return }
+        default: return
+        }
+        guard containsLegacyMigration(migration.state, in: application.state) else { return }
+        canRemoveLegacyTasks = true
+        effects.append(.removeLegacyTasks)
+    }
+
+    func containsLegacyMigration(
+        _ migrated: PersistedTimerState,
+        in stored: PersistedTimerState
+    ) -> Bool {
+        stored.deviceId == migrated.deviceId
+            && stored.cachedUser?.id == migrated.cachedUser?.id
+            && stored.bootstrapUser?.id == migrated.bootstrapUser?.id
+            && stored.pendingAccountSwitchUser?.id == migrated.pendingAccountSwitchUser?.id
+            && migrated.tasks.allSatisfy(stored.tasks.contains)
+            && migrated.knownTasks.allSatisfy(stored.knownTasks.contains)
+            && stored.selectedTaskID == migrated.selectedTaskID
+            && migrated.legacyTaskAssignments.allSatisfy { stored.legacyTaskAssignments[$0.key] == $0.value }
+    }
+
+    func containsCommittedLegacyRecords(
+        _ migrated: PersistedTimerState,
+        in stored: PersistedTimerState
+    ) -> Bool {
+        guard let roomStore = legacyMigrationRoomStore,
+              let roomID = pendingLegacyMigrationRoomID,
+              roomStore.activeRoomID == roomID,
+              roomStore.activeRoomState == stored,
+              roomStore.activeSnapshot?.conflict == nil else { return false }
+        if let receipt = migrated.irohLegacyTaskMigration {
+            guard receipt.roomID == roomID,
+                  receipt.source == pendingLegacyMigration?.legacyTaskSource,
+                  stored.irohLegacyTaskMigration == receipt,
+                  (try? roomStore.committedLegacyTaskMigration(source: receipt.source)) == receipt else {
+                return false
+            }
+        } else {
+            return false
+        }
+        let records = migrated.pendingTaskOperations.map {
+            IrohOperationRecord(domain: .task, deviceId: migrated.deviceId, payload: .task($0))
+        } + migrated.pendingSelectedTaskOperations.map {
+            IrohOperationRecord(
+                domain: .selectedTask, deviceId: migrated.deviceId,
+                payload: .selectedTask(IrohSelectedTaskOperation($0))
+            )
+        }
+        do {
+            return try records.allSatisfy { record in
+                let committed = try roomStore.operations(
+                    roomID: roomID,
+                    references: [IrohInventoryReference(domain: record.domain, id: record.id)]
+                )
+                return committed == [record]
+            }
+        } catch {
+            return false
+        }
     }
 }
 

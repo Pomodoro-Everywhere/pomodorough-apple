@@ -5,13 +5,17 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            switch model.sessionState {
-            case .restoring:
-                LaunchView()
-            case .localOnly:
-                destination
-            case .signedIn:
-                destination
+            if model.snapshotLoadFailure != nil {
+                snapshotRecovery
+            } else {
+                switch model.sessionState {
+                case .restoring:
+                    LaunchView()
+                case .localOnly:
+                    destination
+                case .signedIn:
+                    destination
+                }
             }
         }
 #if os(macOS)
@@ -28,6 +32,18 @@ struct RootView: View {
         .sheet(isPresented: historyResolutionPresented) {
             HistoryResolutionView(model: model)
                 .interactiveDismissDisabled()
+        }
+    }
+
+    private var snapshotRecovery: some View {
+        ContentUnavailableView {
+            Label("Workspace unavailable", systemImage: "externaldrive.badge.exclamationmark")
+        } description: {
+            Text(model.snapshotLoadFailure?.localizedDescription ?? "")
+        } actions: {
+            Button("Retry loading workspace") {
+                Task { await model.retrySnapshotLoad() }
+            }
         }
     }
 

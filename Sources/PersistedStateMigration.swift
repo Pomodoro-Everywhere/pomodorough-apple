@@ -25,11 +25,17 @@ enum PersistedLegacyMigration {
         at date: Date
     ) throws -> LegacyTaskMigrationResult {
         mergeTaskCatalog(legacy, into: &state)
+        restoreTaskMetadata(legacy, state: &state)
+        let operationIDs = try enqueueTasks(legacy.tasks, state: &state, at: date)
+        return LegacyTaskMigrationResult(enqueuedOperationIDs: operationIDs)
+    }
+
+    static func restoreTaskMetadata(_ legacy: LocalTaskState, state: inout PersistedTimerState) {
+        state.mergeKnownTasks(legacy.tasks + Array(legacy.assignments.values))
+        state.legacyTaskAssignments.merge(legacy.assignments.mapValues(\.id)) { _, migrated in migrated }
         state.pendingCommands = assignTasks(to: state.pendingCommands, assignments: legacy.assignments)
         state.canonicalTimer = assignTask(to: state.canonicalTimer, assignments: legacy.assignments)
         state.history = assignTasks(to: state.history, assignments: legacy.assignments)
-        let operationIDs = try enqueueTasks(legacy.tasks, state: &state, at: date)
-        return LegacyTaskMigrationResult(enqueuedOperationIDs: operationIDs)
     }
 
     static func migrateDurationSettings(
@@ -124,8 +130,6 @@ enum PersistedLegacyMigration {
         _ legacy: LocalTaskState,
         into state: inout PersistedTimerState
     ) {
-        state.mergeKnownTasks(legacy.tasks + Array(legacy.assignments.values))
-        state.legacyTaskAssignments.merge(legacy.assignments.mapValues(\.id)) { _, migrated in migrated }
         for task in legacy.tasks where !state.tasks.contains(where: { $0.id == task.id }) {
             state.tasks.append(task)
         }

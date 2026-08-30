@@ -75,6 +75,21 @@ final class IrohRoomStore: @unchecked Sendable {
         lock.withLock { activeWorkspaceLocked?.roomState }
     }
 
+    func committedLegacyTaskMigration(source: Data) throws -> IrohLegacyTaskMigration? {
+        try lock.withLock {
+            try ensureAvailableLocked()
+            guard let workspace = activeWorkspaceLocked, workspace.conflict == nil else {
+                throw IrohProtocolError.unavailable("No writable Iroh room is active.")
+            }
+            guard let migration = workspace.roomState.irohLegacyTaskMigration else { return nil }
+            guard migration.source == source else {
+                throw IrohProtocolError.invalidMessage("legacy task migration source changed")
+            }
+            try migration.validate(in: workspace)
+            return migration
+        }
+    }
+
     var activeReturnState: PersistedTimerState? {
         lock.withLock { activeWorkspaceLocked?.returnState }
     }
@@ -666,10 +681,22 @@ final class IrohRoomStore: @unchecked Sendable {
         var workspace = existingWorkspace
         workspace.roomState = stateWithoutPendingOperations(stateToCapture)
         workspace = try inserting(records, into: workspace)
+        try validateCapturedMigration(workspace, existing: existingWorkspace)
         if workspace.genesis != nil {
             workspace.roomState = try IrohRoomProjection.project(workspace, at: self.now())
         }
         return workspace
+    }
+
+    private func validateCapturedMigration(
+        _ workspace: IrohRoomWorkspace,
+        existing: IrohRoomWorkspace
+    ) throws {
+        if let committed = existing.roomState.irohLegacyTaskMigration,
+           workspace.roomState.irohLegacyTaskMigration != committed {
+            throw IrohProtocolError.invalidMessage("committed legacy task migration cannot be replaced")
+        }
+        try workspace.roomState.irohLegacyTaskMigration?.validate(in: workspace)
     }
 
     private func detectCapturedConflict(
@@ -793,6 +820,7 @@ final class IrohRoomStore: @unchecked Sendable {
         state.pendingAutoStartOperations = []
         state.pendingSelectedTaskOperations = []
         state.localTimerOwners = [:]
+        state.irohLegacyTaskMigration = nil
         state.provisionalBreaks = []
         state.bootstrapUser = nil
         state.pendingBootstrapResolution = nil

@@ -16,6 +16,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
     private var tokens: TokenPair?
     private var refreshTask: Task<TokenPair, Error>?
     private var tokenGeneration = 0
+    private var accountDeletionInFlight = false
 
     init(
         baseURL: URL = URL(string: "https://pomodorough.egigoka.me")!,
@@ -222,25 +223,49 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
     }
 
     func deleteAccount(confirmation: String) async -> AccountDeletionOutcome {
+        guard !accountDeletionInFlight, let retained = tokens else {
+            return .unknown(AppError.unauthorized.localizedDescription)
+        }
+        accountDeletionInFlight = true
+        defer { accountDeletionInFlight = false }
+        let generation = tokenGeneration
+        refreshTask?.cancel()
+        refreshTask = nil
         do {
-            var request = URLRequest(url: baseURL.appending(path: "/api/v1/account"))
-            request.httpMethod = "DELETE"
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
-            request.httpBody = try JSONEncoder.api.encode(DeleteAccountRequest(confirmation: confirmation))
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                return .unknown(String(localized: "Account deletion returned an invalid response."))
+            var result = try await submitAccountDeletion(confirmation: confirmation, accessToken: retained.accessToken)
+            guard generation == tokenGeneration, tokens == retained else { throw AppError.unauthorized }
+            if result.response.statusCode == 401 {
+                let accessToken = try await refreshedAccessToken(retained, generation: generation)
+                guard generation == tokenGeneration else { throw AppError.unauthorized }
+                result = try await submitAccountDeletion(confirmation: confirmation, accessToken: accessToken)
+                guard generation == tokenGeneration else { throw AppError.unauthorized }
             }
-            if (200..<300).contains(http.statusCode) { return .committed }
-            let message = (try? JSONDecoder.api.decode(APIError.self, from: data).error)
-                ?? "Request failed (\(http.statusCode))."
-            if (400..<500).contains(http.statusCode) { return .rejected(message) }
-            return .unknown(message)
+            return accountDeletionOutcome(data: result.data, response: result.response)
         } catch {
             return .unknown(error.localizedDescription)
         }
+    }
+
+    private func submitAccountDeletion(confirmation: String, accessToken: String) async throws -> (data: Data, response: HTTPURLResponse) {
+        var request = URLRequest(url: baseURL.appending(path: "/api/v1/account"))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder.api.encode(DeleteAccountRequest(confirmation: confirmation))
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AppError.server(String(localized: "Account deletion returned an invalid response."))
+        }
+        return (data, http)
+    }
+
+    private func accountDeletionOutcome(data: Data, response: HTTPURLResponse) -> AccountDeletionOutcome {
+        if response.statusCode == 204 { return .committed }
+        let message = (try? JSONDecoder.api.decode(APIError.self, from: data).error)
+            ?? "Request failed (\(response.statusCode))."
+        if (400..<500).contains(response.statusCode) { return .rejected(message) }
+        return .unknown(message)
     }
 
     func clearTokens() throws {
@@ -257,10 +282,13 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
 
     private func validAccessToken() async throws -> String {
         guard let tokens else { throw AppError.unauthorized }
-        if tokens.accessTokenExpiresAt.timeIntervalSinceNow > 30 {
+        if accountDeletionInFlight || tokens.accessTokenExpiresAt.timeIntervalSinceNow > 30 {
             return tokens.accessToken
         }
-        let generation = tokenGeneration
+        return try await refreshedAccessToken(tokens, generation: tokenGeneration)
+    }
+
+    private func refreshedAccessToken(_ tokens: TokenPair, generation: Int) async throws -> String {
         if let refreshTask {
             let pair = try await refreshTask.value
             guard generation == tokenGeneration else { throw AppError.unauthorized }

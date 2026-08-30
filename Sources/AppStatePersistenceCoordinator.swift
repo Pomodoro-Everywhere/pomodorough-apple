@@ -4,35 +4,87 @@ import Darwin
 #endif
 
 struct AtomicDurableFileStore: Sendable {
+    struct ReplacementFailure: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
     let fileURL: URL
     private let afterReplacement: @Sendable () throws -> Void
+    private let beforeSynchronization: @Sendable () throws -> Void
 
     init(
         fileURL: URL,
         afterReplacement: @escaping @Sendable () throws -> Void = {}
     ) {
+        self.init(fileURL: fileURL, beforeSynchronization: {}, afterReplacement: afterReplacement)
+    }
+
+    init(
+        fileURL: URL,
+        beforeSynchronization: @escaping @Sendable () throws -> Void,
+        afterReplacement: @escaping @Sendable () throws -> Void
+    ) {
         self.fileURL = fileURL
         self.afterReplacement = afterReplacement
+        self.beforeSynchronization = beforeSynchronization
     }
 
     func read() throws -> Data? {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        return try Data(contentsOf: fileURL)
+        do {
+            return try Data(contentsOf: fileURL)
+        } catch CocoaError.fileReadNoSuchFile {
+            return nil
+        }
     }
 
     func write(_ data: Data) throws {
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let replacement = directory.appendingPathComponent(".snapshot-\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: replacement) }
 #if os(iOS)
-        try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        try data.write(to: replacement, options: [.withoutOverwriting, .completeFileProtection])
 #else
-        try data.write(to: fileURL, options: .atomic)
+        try data.write(to: replacement, options: .withoutOverwriting)
 #endif
-        try afterReplacement()
-        let handle = try FileHandle(forWritingTo: fileURL)
+        let handle = try FileHandle(forWritingTo: replacement)
         defer { try? handle.close() }
         try handle.synchronize()
-        try synchronizeDirectory(directory)
+        guard rename(replacement.path, fileURL.path) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        do {
+            try afterReplacement()
+            try synchronize(expectedContents: data)
+        } catch {
+            throw ReplacementFailure(reason: error.localizedDescription)
+        }
+    }
+
+    func synchronize(expectedContents: Data) throws {
+        let handle = try FileHandle(forUpdating: fileURL)
+        defer { try? handle.close() }
+        guard try handle.readToEnd() == expectedContents else { throw POSIXError(.EBUSY) }
+        try beforeSynchronization()
+        try handle.synchronize()
+        try synchronizeDirectory(fileURL.deletingLastPathComponent())
+        try handle.seek(toOffset: 0)
+        guard try handle.readToEnd() == expectedContents,
+              try stillReferences(handle) else { throw POSIXError(.EBUSY) }
+    }
+
+    private func stillReferences(_ handle: FileHandle) throws -> Bool {
+        let current = try FileHandle(forReadingFrom: fileURL)
+        defer { try? current.close() }
+        var originalIdentity = stat()
+        var currentIdentity = stat()
+        guard fstat(handle.fileDescriptor, &originalIdentity) == 0,
+              fstat(current.fileDescriptor, &currentIdentity) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        return originalIdentity.st_dev == currentIdentity.st_dev
+            && originalIdentity.st_ino == currentIdentity.st_ino
     }
 
     func remove() throws {
@@ -129,7 +181,24 @@ struct AccountDeletionJournal: Sendable {
 }
 
 @MainActor
-struct AppStatePersistenceCoordinator {
+final class AppStatePersistenceCoordinator {
+    enum SnapshotLoadFailure: LocalizedError, Equatable, Sendable {
+        case unreadable(String)
+        case corrupt
+        case durabilityUncertain(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unreadable(let reason):
+                String(localized: "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. \(reason)")
+            case .corrupt:
+                String(localized: "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.")
+            case .durabilityUncertain(let reason):
+                String(localized: "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. \(reason)")
+            }
+        }
+    }
+
     enum Destination: Equatable, Sendable {
         case local
         case iroh(RoomReplicationTransition)
@@ -141,6 +210,8 @@ struct AppStatePersistenceCoordinator {
         let removesLegacyTasksAfterProjection: Bool
         let shouldPersistAfterProjection: Bool
         let shouldReportInvalidLocalClock: Bool
+        var snapshotLoadFailure: SnapshotLoadFailure? = nil
+        var legacyTaskSource: Data? = nil
     }
 
     enum LoadCompletionEffect: Equatable, Sendable {
@@ -153,6 +224,7 @@ struct AppStatePersistenceCoordinator {
 
     enum PersistenceTransition: Equatable, Sendable {
         case stored(PersistedTimerState, bytes: Data?)
+        case recoveryRequired(PersistedTimerState, message: String)
         case captureFailed(durable: PersistedTimerState?, message: String, quarantined: Bool)
         case failed
 
@@ -179,6 +251,8 @@ struct AppStatePersistenceCoordinator {
 
     private let defaults: UserDefaults
     private let durableLocalStore: AtomicDurableFileStore?
+    private(set) var snapshotLoadFailure: SnapshotLoadFailure?
+    private var snapshotRecoveryState: PersistedTimerState?
 
     init(defaults: UserDefaults, durableLocalStore: AtomicDurableFileStore? = nil) {
         self.defaults = defaults
@@ -192,17 +266,22 @@ struct AppStatePersistenceCoordinator {
         uptime: TimeInterval
     ) -> LoadTransition {
         let loader = PersistedStateLoader(defaults: defaults)
-        let durableData: Data?
-        if let durableLocalStore {
-            do {
-                durableData = try durableLocalStore.read()
-            } catch {
-                durableData = Data()
-            }
-        } else {
-            durableData = nil
+        let loaded: PersistedStateLoad
+        do {
+            loaded = try loadSnapshot(using: loader)
+            snapshotLoadFailure = nil
+            snapshotRecoveryState = nil
+        } catch {
+            let failure = error as? SnapshotLoadFailure ?? (snapshotRecoveryState == nil
+                ? .unreadable(error.localizedDescription) : .durabilityUncertain(error.localizedDescription))
+            snapshotLoadFailure = failure
+            return LoadTransition(
+                replicationMode: replicationMode, state: snapshotRecoveryState ?? .fresh(),
+                removesLegacyTasksAfterProjection: false,
+                shouldPersistAfterProjection: false, shouldReportInvalidLocalClock: false,
+                snapshotLoadFailure: failure
+            )
         }
-        let loaded = loader.load(preferredStoredData: durableData)
         let roomBootstrap = RoomReplicationController.bootstrapRoomState(
             mode: replicationMode,
             localState: loaded.localState,
@@ -213,7 +292,8 @@ struct AppStatePersistenceCoordinator {
             from: loaded,
             replicationMode: roomBootstrap.mode,
             wallDate: wallDate,
-            uptime: uptime
+            uptime: uptime,
+            roomStore: roomStore
         )
         return LoadTransition(
             replicationMode: roomBootstrap.mode,
@@ -222,14 +302,42 @@ struct AppStatePersistenceCoordinator {
                 && migrated.stagedStateWasValid
                 && migrated.removesLegacyTasksAfterProjection,
             shouldPersistAfterProjection: migrated.shouldPersist(projectionSucceeded: true),
-            shouldReportInvalidLocalClock: migrated.shouldReportInvalidLocalClock
+            shouldReportInvalidLocalClock: migrated.shouldReportInvalidLocalClock,
+            legacyTaskSource: migrated.legacyTaskSource
         )
+    }
+
+    private func loadSnapshot(using loader: PersistedStateLoader) throws -> PersistedStateLoad {
+        let durableData = try durableLocalStore?.read()
+        if let snapshotLoadFailure, durableLocalStore != nil, durableData == nil {
+            throw snapshotLoadFailure
+        }
+        let loaded = loader.load(preferredStoredData: durableData)
+        guard loaded.storedData == nil || loaded.decodedState != nil else {
+            throw SnapshotLoadFailure.corrupt
+        }
+        if let snapshotLoadFailure, loaded.storedData == nil {
+            throw snapshotLoadFailure
+        }
+        if let durableData {
+            do {
+                try durableLocalStore?.synchronize(expectedContents: durableData)
+            } catch {
+                snapshotRecoveryState = loaded.decodedState
+                throw SnapshotLoadFailure.durabilityUncertain(error.localizedDescription)
+            }
+            if defaults.data(forKey: PersistedStateLoader.storageKey) != durableData {
+                defaults.set(durableData, forKey: PersistedStateLoader.storageKey)
+            }
+        }
+        return loaded
     }
 
     func completionEffect(
         for transition: LoadTransition,
         projectionSucceeded: Bool
     ) -> LoadCompletionEffect {
+        guard snapshotLoadFailure == nil, transition.snapshotLoadFailure == nil else { return .none }
         let removesTasks = projectionSucceeded && transition.removesLegacyTasksAfterProjection
         let persists = projectionSucceeded && transition.shouldPersistAfterProjection
         if removesTasks && persists { return .removeLegacyTasksAndPersist }
@@ -240,7 +348,12 @@ struct AppStatePersistenceCoordinator {
     }
 
     func removeLegacyTasks() {
+        guard snapshotLoadFailure == nil else { return }
         defaults.removeObject(forKey: PersistedStateLoader.localTaskStorageKey)
+    }
+
+    func matchesLegacyTaskSource(_ source: Data?) -> Bool {
+        source != nil && defaults.data(forKey: PersistedStateLoader.localTaskStorageKey) == source
     }
 
     func persist(
@@ -248,7 +361,8 @@ struct AppStatePersistenceCoordinator {
         replicationMode: ReplicationMode,
         captureIrohState: (PersistedTimerState) -> RoomReplicationTransition
     ) -> PersistenceTransition {
-        persist(
+        guard snapshotLoadFailure == nil else { return blockedPersistence }
+        return persist(
             state,
             to: replicationMode == .iroh ? .iroh(captureIrohState(state)) : .local
         )
@@ -258,6 +372,7 @@ struct AppStatePersistenceCoordinator {
         _ state: PersistedTimerState,
         to destination: Destination
     ) -> PersistenceTransition {
+        guard snapshotLoadFailure == nil else { return blockedPersistence }
         switch destination {
         case .iroh(let capture):
             switch capture {
@@ -282,10 +397,35 @@ struct AppStatePersistenceCoordinator {
                     return .failed
                 }
                 return .stored(state, bytes: data)
+            } catch let failure as AtomicDurableFileStore.ReplacementFailure {
+                return reconcileReplacementFailure(failure, proposed: state)
             } catch {
                 return .failed
             }
         }
+    }
+
+    private var blockedPersistence: PersistenceTransition {
+        guard let snapshotRecoveryState, let snapshotLoadFailure else { return .failed }
+        return .recoveryRequired(snapshotRecoveryState, message: snapshotLoadFailure.localizedDescription)
+    }
+
+    private func reconcileReplacementFailure(
+        _ failure: AtomicDurableFileStore.ReplacementFailure,
+        proposed: PersistedTimerState
+    ) -> PersistenceTransition {
+        snapshotRecoveryState = proposed
+        var reason = failure.reason
+        do {
+            guard let bytes = try durableLocalStore?.read() else {
+                throw CocoaError(.fileReadNoSuchFile)
+            }
+            snapshotRecoveryState = try JSONDecoder.api.decode(PersistedTimerState.self, from: bytes)
+        } catch {
+            reason += " " + error.localizedDescription
+        }
+        snapshotLoadFailure = .durabilityUncertain(reason)
+        return blockedPersistence
     }
 
     func persistAtomically(
@@ -300,7 +440,7 @@ struct AppStatePersistenceCoordinator {
             captureIrohState: captureIrohState
         )
         switch persistence {
-        case .stored(let stored, _):
+        case .stored(let stored, _), .recoveryRequired(let stored, _):
             return AtomicTransition(state: stored, persistence: persistence)
         case .captureFailed, .failed:
             return AtomicTransition(state: previous, persistence: persistence)
@@ -314,7 +454,7 @@ struct AppStatePersistenceCoordinator {
     ) -> AtomicTransition {
         let persistence = persist(proposed, to: destination)
         switch persistence {
-        case .stored(let stored, _):
+        case .stored(let stored, _), .recoveryRequired(let stored, _):
             return AtomicTransition(state: stored, persistence: persistence)
         case .captureFailed, .failed:
             return AtomicTransition(state: previous, persistence: persistence)
@@ -339,6 +479,11 @@ extension AppStatePersistenceCoordinator {
                 state: durable ?? current, succeeded: false,
                 rebuildsProjection: rebuildsOnFailure && durable != nil,
                 conflictMessage: message, marksIrohConflict: quarantined
+            )
+        case .recoveryRequired(let observed, let message):
+            return ApplicationTransition(
+                state: observed, succeeded: false, rebuildsProjection: false,
+                conflictMessage: message, marksIrohConflict: false
             )
         case .failed:
             return ApplicationTransition(

@@ -77,7 +77,7 @@ enum IrohRoomProjection {
         )
         tasks.sort(by: taskPrecedes)
         history.sort(by: historyPrecedes)
-        return projectedState(
+        var projected = projectedState(
             workspace,
             genesis: genesis,
             operations: operations,
@@ -87,6 +87,11 @@ enum IrohRoomProjection {
             history: history,
             tasks: tasks
         )
+        if let migration = projected.irohLegacyTaskMigration {
+            try migration.validate(in: workspace)
+            try migration.restoreMetadata(to: &projected)
+        }
+        return projected
     }
 
     private static func applySharedProjection(

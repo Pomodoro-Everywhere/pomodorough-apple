@@ -34,6 +34,8 @@ final class AppModel {
 
     private let api: APIClient
     private let defaults: UserDefaults
+    private let persistence: AppStatePersistenceCoordinator
+    private let googleIdentityProvider: any GoogleIdentityProviding
     private let accountDeletionJournal: AccountDeletionJournal?
     private let roomStore: IrohRoomStore
     private let endpointKeyStore: any IrohEndpointKeyStoring
@@ -43,7 +45,7 @@ final class AppModel {
     private let uptime: () -> TimeInterval
     private let timerSessionController: TimerSessionController
     private let workspaceMutationController: SynchronizedWorkspaceMutationController
-    private let accountSessionCoordinator: CentralizedAccountSessionCoordinator
+    private var accountSessionCoordinator: CentralizedAccountSessionCoordinator
     private let statePublisher = AppStatePublisher()
     private let alarmEffectCoordinator: AlarmEffectCoordinator
     private let taskIdentityCoreProvider: @MainActor () throws -> SharedCore
@@ -58,6 +60,7 @@ final class AppModel {
     @ObservationIgnored private var taskIdentityCore: SharedCore?
     @ObservationIgnored private var projectedAutoStartBreaks = false
     @ObservationIgnored private var projectedSelectedTaskID: UUID?
+    @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private lazy var roomReplicationController = makeRoomReplicationController()
 
     private(set) var sessionState: SessionState = .restoring
@@ -78,6 +81,7 @@ final class AppModel {
     private(set) var completionAlertTimerID: String?
     private(set) var isIrohRoomLeaveConfirmationPresented = false
     private(set) var isLeavingIrohRoom = false
+    private(set) var snapshotLoadFailure: AppStatePersistenceCoordinator.SnapshotLoadFailure?
     var errorMessage: String?
 
     init(
@@ -102,6 +106,8 @@ final class AppModel {
             now: now, uptime: uptime, sharedCoreProvider: sharedCoreProvider)
         self.api = api
         self.defaults = defaults
+        persistence = startup.persistence
+        self.googleIdentityProvider = googleIdentityProvider
         self.accountDeletionJournal = startup.accountDeletionJournal
         self.roomStore = roomStore
         self.endpointKeyStore = endpointKeyStore
@@ -114,10 +120,8 @@ final class AppModel {
             timerSessionController: startup.timerSessionController
         )
         accountSessionCoordinator = Self.makeAccountSessionCoordinator(
-            api: api,
-            googleIdentityProvider: googleIdentityProvider,
-            sharedCoreProvider: sharedCoreProvider,
-            persistence: startup.persistence,
+            api: api, googleIdentityProvider: googleIdentityProvider,
+            sharedCoreProvider: sharedCoreProvider, persistence: startup.persistence, roomStore: roomStore,
             initialState: startup.initialState.transition.state
         )
         alarmEffectCoordinator = AlarmEffectCoordinator(timerSessionController: startup.timerSessionController)
@@ -247,6 +251,7 @@ final class AppModel {
         googleIdentityProvider: any GoogleIdentityProviding,
         sharedCoreProvider: @escaping @MainActor () throws -> SharedCore,
         persistence: AppStatePersistenceCoordinator,
+        roomStore: IrohRoomStore,
         initialState: PersistedTimerState
     ) -> CentralizedAccountSessionCoordinator {
         let historyResolution: AccountHistoryResolutionState
@@ -264,13 +269,16 @@ final class AppModel {
                 sessionState: .restoring,
                 historyResolutionState: historyResolution
             ),
-            persistence: persistence
+            persistence: persistence,
+            roomStore: roomStore
         )
     }
 
     private func restoreInitialState(
         _ transition: AppStatePersistenceCoordinator.LoadTransition
     ) {
+        snapshotLoadFailure = transition.snapshotLoadFailure
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else {
             quarantineAccountDeletion()
             return
@@ -281,6 +289,27 @@ final class AppModel {
             for: transition,
             projectionSucceeded: projectionSucceeded
         ))
+    }
+
+    func retrySnapshotLoad() async {
+        guard snapshotLoadFailure != nil else { return }
+        let initialState = Self.loadInitialState(
+            defaults: defaults, roomStore: roomStore, persistence: persistence,
+            now: now, uptime: uptime
+        )
+        snapshotLoadFailure = initialState.transition.snapshotLoadFailure
+        guard snapshotLoadFailure == nil else { return }
+        timerState = initialState.transition.state
+        replicationMode = initialState.replicationMode
+        physicalAnchor = initialState.physicalAnchor
+        accountSessionCoordinator = Self.makeAccountSessionCoordinator(
+            api: api, googleIdentityProvider: googleIdentityProvider,
+            sharedCoreProvider: taskIdentityCoreProvider, persistence: persistence, roomStore: roomStore,
+            initialState: timerState
+        )
+        restoreInitialState(initialState.transition)
+        setSceneActive(sceneIsActive)
+        await restore()
     }
 
     deinit {
@@ -375,6 +404,7 @@ final class AppModel {
     private var sessionGeneration: Int { accountSessionCoordinator.generation }
 
     private func applyRoomReplicationEvent(_ event: RoomReplicationEvent) {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         switch event {
         case .centralizedQuiesced:
@@ -471,7 +501,8 @@ final class AppModel {
     var irohStatusLabel: String { irohStatus.label }
     var pendingAccountSwitchUser: User? { timerState.pendingAccountSwitchUser }
     var isWorkspaceMutationBlocked: Bool {
-        accountDeletionPurgeState != nil
+        snapshotLoadFailure != nil
+            || accountDeletionPurgeState != nil
             || isHistoryResolutionBlocking
             || pendingAccountSwitchUser != nil
     }
@@ -585,6 +616,7 @@ final class AppModel {
     }
 
     func restore() async {
+        guard snapshotLoadFailure == nil else { return }
         if accountDeletionPurgeState != nil {
             await resumeAccountDeletion()
             return
@@ -613,6 +645,7 @@ final class AppModel {
     }
 
     func signIn() {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else {
             errorMessage = String(localized: "Finish account deletion cleanup before signing in.")
             return
@@ -683,6 +716,7 @@ final class AppModel {
     }
 
     func signOut() {
+        guard snapshotLoadFailure == nil else { return }
         let preservesBootstrapResolution = timerState.cachedUser == nil && timerState.bootstrapUser != nil
         guard let transition = accountSessionCoordinator.beginSignOut(
             isWorking: isWorking,
@@ -1339,6 +1373,7 @@ final class AppModel {
     }
 
     func sync(force: Bool = false, showsActivity: Bool = true) async {
+        guard snapshotLoadFailure == nil else { return }
         let start = accountSessionCoordinator.beginSync(
             workspace: centralizedWorkspace,
             force: force,
@@ -1492,6 +1527,7 @@ final class AppModel {
     }
 
     func refreshAfterForeground() async {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         completionQueuedFor = nil
         let action = await roomReplicationController.refreshAfterForeground(
@@ -1501,11 +1537,14 @@ final class AppModel {
     }
 
     func setSceneActive(_ active: Bool) {
+        sceneIsActive = active
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         roomReplicationController.setSceneActive(active, environment: roomReplicationEnvironment)
     }
 
     func setReplicationMode(_ mode: ReplicationMode) async {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         guard mode != replicationMode else {
             if mode == .iroh {
@@ -1539,6 +1578,7 @@ final class AppModel {
     }
 
     func createIrohRoom(name rawName: String) async -> Bool {
+        guard snapshotLoadFailure == nil else { return false }
         guard accountDeletionPurgeState == nil else { return false }
         let transition = await roomReplicationController.createRoom(
             name: rawName,
@@ -1585,6 +1625,7 @@ final class AppModel {
     }
 
     func refreshIrohInvite() async {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         let transition = await roomReplicationController.refreshInvite(
             environment: roomReplicationEnvironment
@@ -1594,6 +1635,7 @@ final class AppModel {
     }
 
     func joinIrohRoom(inviteText: String) async -> Bool {
+        guard snapshotLoadFailure == nil else { return false }
         guard accountDeletionPurgeState == nil else { return false }
         let transition = await roomReplicationController.joinRoom(
             inviteText: inviteText,
@@ -1624,6 +1666,7 @@ final class AppModel {
     }
 
     func confirmIrohRoomLeave() async {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         guard replicationMode == .iroh,
               isIrohRoomLeaveConfirmationPresented,
@@ -1647,6 +1690,7 @@ final class AppModel {
     }
 
     func syncIrohNow() async {
+        guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         await roomReplicationController.syncIroh(environment: roomReplicationEnvironment)
     }
@@ -2280,7 +2324,8 @@ final class AppModel {
 
     @discardableResult
     private func persist() -> Bool {
-        applyPersistenceTransition(accountSessionCoordinator.persist(
+        guard snapshotLoadFailure == nil else { return false }
+        return applyPersistenceTransition(accountSessionCoordinator.persist(
             timerState,
             to: persistenceDestination(for: timerState)
         ))
@@ -2291,7 +2336,8 @@ final class AppModel {
         previous: PersistedTimerState,
         rebuildsOnRollback: Bool
     ) -> Bool {
-        applyPersistenceTransition(accountSessionCoordinator.persistAtomically(
+        guard snapshotLoadFailure == nil else { return false }
+        return applyPersistenceTransition(accountSessionCoordinator.persistAtomically(
             previous: previous,
             proposed: timerState,
             to: persistenceDestination(for: timerState),
@@ -2314,6 +2360,11 @@ final class AppModel {
     ) -> Bool {
         applyCoordinatorPublication(transition.publication)
         timerState = transition.action.state
+        snapshotLoadFailure = persistence.snapshotLoadFailure
+        if snapshotLoadFailure != nil {
+            roomReplicationController.cancelRetry()
+            roomReplicationController.cancelCentralizedStreams()
+        }
         applyCoordinatorEffects(transition.effects)
         return transition.action.succeeded
     }

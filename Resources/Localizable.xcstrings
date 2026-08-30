@@ -2025,6 +2025,16 @@
         }
       }
     },
+    "Retry loading workspace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry loading workspace"
+          }
+        }
+      }
+    },
     "Returns to history choices without changing data": {
       "localizations": {
         "en": {
@@ -2707,6 +2717,36 @@
         }
       }
     },
+    "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry."
+          }
+        }
+      }
+    },
+    "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@"
+          }
+        }
+      }
+    },
+    "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@"
+          }
+        }
+      }
+    },
     "These changes do not alter the running or paused timer.": {
       "localizations": {
         "en": {
@@ -2875,6 +2915,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Work"
+          }
+        }
+      }
+    },
+    "Workspace unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace unavailable"
           }
         }
       }

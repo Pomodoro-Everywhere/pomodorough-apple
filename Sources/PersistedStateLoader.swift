@@ -20,6 +20,7 @@ struct PersistedStateTransition: Sendable {
     let removesLegacyTasksAfterProjection: Bool
     let migrationFailed: Bool
     let stagedStateWasValid: Bool
+    var legacyTaskSource: Data? = nil
 
     var shouldReportInvalidLocalClock: Bool {
         migrationFailed || !state.hasValidPendingWireOperations
@@ -59,7 +60,8 @@ struct PersistedStateLoader {
         from load: PersistedStateLoad,
         replicationMode: ReplicationMode,
         wallDate: Date,
-        uptime: TimeInterval
+        uptime: TimeInterval,
+        roomStore: IrohRoomStore? = nil
     ) -> PersistedStateTransition {
         let persisted = migratePersistedFields(
             in: stagedState,
@@ -67,7 +69,10 @@ struct PersistedStateLoader {
             wallDate: wallDate,
             uptime: uptime
         )
-        let tasks = migrateLegacyTasks(in: persisted, wallDate: wallDate, uptime: uptime)
+        let tasks = migrateLegacyTasks(
+            in: persisted, wallDate: wallDate, uptime: uptime,
+            roomStore: replicationMode == .iroh ? roomStore : nil
+        )
         let hasPersistedSelectedTaskOperations = load.storedData.map(
             Self.hasPersistedSelectedTaskOperations(in:)
         ) ?? false
@@ -79,11 +84,12 @@ struct PersistedStateLoader {
         )
         let stagedStateWasValid = selectedTask.state.hasValidPendingWireOperations
         return PersistedStateTransition(
-            state: !selectedTask.failed && stagedStateWasValid ? selectedTask.state : load.localState,
+            state: !selectedTask.failed && stagedStateWasValid ? selectedTask.state : stagedState,
             migrations: selectedTask.migrations,
             removesLegacyTasksAfterProjection: selectedTask.removesLegacyTasksAfterProjection,
             migrationFailed: selectedTask.failed,
-            stagedStateWasValid: stagedStateWasValid
+            stagedStateWasValid: stagedStateWasValid,
+            legacyTaskSource: selectedTask.legacyTaskSource
         )
     }
 
@@ -92,6 +98,7 @@ struct PersistedStateLoader {
         var migrations: Set<PersistedStateMigration> = []
         var removesLegacyTasksAfterProjection = false
         var failed = false
+        var legacyTaskSource: Data? = nil
     }
 
     private func migratePersistedFields(
@@ -127,22 +134,48 @@ struct PersistedStateLoader {
     private func migrateLegacyTasks(
         in progress: MigrationProgress,
         wallDate: Date,
-        uptime: TimeInterval
+        uptime: TimeInterval,
+        roomStore: IrohRoomStore?
     ) -> MigrationProgress {
         guard let data = defaults.data(forKey: Self.localTaskStorageKey),
               let legacyState = try? JSONDecoder.api.decode(LocalTaskState.self, from: data) else {
             return progress
         }
         var progress = progress
+        progress.legacyTaskSource = data
         do {
-            let migrationDate = try progress.state.trustedOccurrenceDate(for: wallDate, uptime: uptime)
-            try progress.state.migrateLegacyTasks(legacyState, at: migrationDate)
+            if let committed = try roomStore?.committedLegacyTaskMigration(source: data) {
+                guard progress.state.irohLegacyTaskMigration == committed else {
+                    throw IrohProtocolError.invalidMessage("legacy task migration workspace changed")
+                }
+            } else {
+                let migrationDate = try progress.state.trustedOccurrenceDate(for: wallDate, uptime: uptime)
+                try progress.state.migrateLegacyTasks(legacyState, at: migrationDate)
+                if let roomStore {
+                    try prepareRoomMigration(source: data, state: &progress.state, roomStore: roomStore, at: migrationDate)
+                }
+            }
             progress.migrations.insert(.tasks)
             progress.removesLegacyTasksAfterProjection = true
         } catch {
             progress.failed = true
         }
         return progress
+    }
+
+    private func prepareRoomMigration(
+        source: Data,
+        state: inout PersistedTimerState,
+        roomStore: IrohRoomStore,
+        at date: Date
+    ) throws {
+        guard let roomID = roomStore.activeRoomID else {
+            throw IrohProtocolError.unavailable("No Iroh room is active.")
+        }
+        if state.pendingSelectedTaskOperations.isEmpty {
+            _ = try state.migrateLegacySelectedTask(at: date)
+        }
+        state.irohLegacyTaskMigration = IrohLegacyTaskMigration(roomID: roomID, source: source, state: state)
     }
 
     private func migrateLegacySelectedTask(

@@ -31,6 +31,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var knownTasks: [FocusTask]
     var selectedTaskID: UUID?
     var legacyTaskAssignments: [String: UUID]
+    var irohLegacyTaskMigration: IrohLegacyTaskMigration? = nil
     var hasCorruptPendingOperations: Bool
     var settings: TimerSettings
     var cachedUser: User?
@@ -66,6 +67,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
         case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
         case tasks, knownTasks, selectedTaskID, legacyTaskAssignments, hasCorruptPendingOperations
+        case irohLegacyTaskMigration
         case settings, cachedUser, pendingAccountSwitchUser
         case bootstrapUser, pendingBootstrapResolution
     }
@@ -149,6 +151,8 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         self = try PersistedStateSchema.decode(from: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        irohLegacyTaskMigration = try values.decodeIfPresent(IrohLegacyTaskMigration.self, forKey: .irohLegacyTaskMigration)
     }
 }
 

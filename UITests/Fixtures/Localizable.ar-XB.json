@@ -1562,6 +1562,12 @@
         "value": "‏⟦Retry account deletion⟧"
       }
     },
+    "Retry loading workspace": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Retry loading workspace⟧"
+      }
+    },
     "Returns to history choices without changing data": {
       "stringUnit": {
         "state": "translated",
@@ -2000,6 +2006,24 @@
         "value": "‏⟦Tasks⟧"
       }
     },
+    "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.⟧"
+      }
+    },
+    "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@⟧"
+      }
+    },
+    "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@⟧"
+      }
+    },
     "These changes do not alter the running or paused timer.": {
       "stringUnit": {
         "state": "translated",
@@ -2130,6 +2154,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Work⟧"
+      }
+    },
+    "Workspace unavailable": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Workspace unavailable⟧"
       }
     },
     "Write release notes": {

@@ -2,6 +2,7 @@
 .claude/
 graphify-out/
 __pycache__/
+*.pyc
 DerivedData/
 .build/
 *.xcuserstate
@@ -9,3 +10,6 @@ xcuserdata/
 .env
 *.p12
 *.mobileprovision
+.cache_ggshield
+.ruff_cache/
+/.audit/
