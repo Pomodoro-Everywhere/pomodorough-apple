@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -12,14 +14,74 @@ from pathlib import Path
 from unittest.mock import patch
 import sys
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import capture_completed_native_log as capture
 
 TOKEN = "fake-secret-never-retained"
 BASE = "https://api.github.com/repos/example/apple"
 SIGNED = "https://production.blob.core.windows.net/logs/job?signature=fake"
+SUCCESSOR_BOUNDARY = "\n  retain-completed-native-log:\n"
+WORKFLOW_PREFIX_SHA256 = "9dc131c9c9438d4171ddfe7382b2a8db072fe67147369f4df2f5da19a05c3e26"
+SUCCESSOR_SOURCE = '''    name: <name>
+    if: <condition>
+    needs: <needs>
+    runs-on: <runner>
+    timeout-minutes: <timeout>
+    permissions:
+      contents: <contents>
+      actions: <actions>
+    steps:
+      - name: Check out repository
+        uses: <checkout> # v5
+        with:
+          persist-credentials: <persist_credentials>
+      - name: Verify checked out source
+        run: <verify>
+      - name: Capture completed native job log
+        env:
+          GITHUB_TOKEN: <token>
+          CANDIDATE_INPUTS: <inputs>
+        run: <command>
+      - name: Retain completed native job log
+        uses: <upload>
+        with:
+          name: <artifact>
+          path: <path>
+          if-no-files-found: <missing_files>
+          retention-days: 14
+          overwrite: <overwrite>
+'''
+
+
+def successor_workflow_job(source):
+    """Decode only this source schema, not YAML; enclosing-source drift requires review.
+
+    The pinned prefix fixes the jobs mapping and native dependency. Full matching
+    rejects duplicate keys/jobs, extra steps, and comment or block-scalar decoys.
+    """
+    prefix, boundary, successor = source.partition(SUCCESSOR_BOUNDARY)
+    if boundary != SUCCESSOR_BOUNDARY or hashlib.sha256(prefix.encode()).hexdigest() != WORKFLOW_PREFIX_SHA256:
+        raise AssertionError("CI workflow prefix changed; review enclosing jobs before updating the source pin")
+    scalar_patterns = {"timeout": r"[0-9]+", "persist_credentials": "true|false", "overwrite": "true|false"}
+    pattern = re.sub(r"<([a-z_]+)>",
+                     lambda field: "(?P<{}>{})".format(field[1], scalar_patterns.get(field[1], r"[^\n]+")),
+                     re.escape(SUCCESSOR_SOURCE))
+    match = re.fullmatch(pattern, successor)
+    if match is None:
+        raise AssertionError("Successor job source changed; review the complete job schema")
+    fields = match.groupdict()
+    return {"name": fields["name"], "needs": fields["needs"], "if": fields["condition"],
+            "runs-on": fields["runner"], "timeout-minutes": json.loads(fields["timeout"]),
+            "permissions": {"contents": fields["contents"], "actions": fields["actions"]},
+            "steps": [{"uses": fields["checkout"],
+                       "with": {"persist-credentials": json.loads(fields["persist_credentials"])}},
+                      {"run": fields["verify"]},
+                      {"run": fields["command"], "env": {"GITHUB_TOKEN": fields["token"],
+                                                          "CANDIDATE_INPUTS": fields["inputs"]}},
+                      {"uses": fields["upload"],
+                       "with": {"name": fields["artifact"], "path": fields["path"],
+                                "if-no-files-found": fields["missing_files"],
+                                "overwrite": json.loads(fields["overwrite"])}}]}
 
 
 class Response(io.BytesIO):
@@ -116,8 +178,11 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         self.assertFalse(any(TOKEN.encode() in path.read_bytes() for path in output.iterdir()))
 
     def test_successor_workflow_is_bounded_read_only_and_temp_scoped(self):
-        workflow = yaml.safe_load((Path(capture.__file__).resolve().parents[1] / capture.WORKFLOW).read_text())
-        job = workflow["jobs"]["retain-completed-native-log"]
+        source = (Path(capture.__file__).resolve().parents[1] / capture.WORKFLOW).read_text()
+        self.assert_successor_workflow_contract(source)
+
+    def assert_successor_workflow_contract(self, source):
+        job = successor_workflow_job(source)
         self.assertEqual(job["name"], capture.CAPTURE_JOB)
         self.assertEqual(job["needs"], "build-and-test")
         self.assertEqual(job["if"], "github.event_name == 'workflow_dispatch' && needs.build-and-test.result == 'success'")
@@ -137,6 +202,106 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         self.assertTrue(all("if" not in step for step in steps))
         for step in (steps[0], steps[3]):
             self.assertRegex(step["uses"], r"@[0-9a-f]{40}$")
+        self.assertRegex(steps[0]["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+        self.assertRegex(steps[3]["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+
+    def test_successor_workflow_rejects_changed_contract_values(self):
+        source = (Path(capture.__file__).resolve().parents[1] / capture.WORKFLOW).read_text()
+        prefix, boundary, successor = source.partition(SUCCESSOR_BOUNDARY)
+        changes = [
+            ("    name: Retain completed native job log", "    name: Other job"),
+            ("github.event_name == 'workflow_dispatch'", "github.event_name == 'push'"),
+            (" && needs.build-and-test.result == 'success'", ""),
+            (" && needs.build-and-test.result == 'success'", " || needs.build-and-test.result == 'success'"),
+            ("needs.build-and-test.result == 'success'", "needs.build-and-test.result != 'success'"),
+            ("needs: build-and-test", "needs: candidate-source"),
+            ("runs-on: ubuntu-24.04", "runs-on: self-hosted"),
+            ("timeout-minutes: 5", "timeout-minutes: 50"),
+            ("timeout-minutes: 5", "timeout-minutes: 5e0"),
+            ("contents: read", "contents: write"),
+            ("actions: read", "actions: write"),
+            ("persist-credentials: false", "persist-credentials: true"),
+            ("persist-credentials: false", "persist-credentials: null"),
+            ('run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', "run: true"),
+            ('--output "$RUNNER_TEMP/completed-native-log"', '--output "$GITHUB_WORKSPACE/completed-native-log"'),
+            ("GITHUB_TOKEN: ${{ github.token }}", "GITHUB_TOKEN: ${{ secrets.OTHER_TOKEN }}"),
+            ("CANDIDATE_INPUTS: ${{ toJSON(github.event.inputs) }}", "CANDIDATE_INPUTS: '{}'"),
+            ("name: completed-native-log-${{ inputs.candidate-request }}", "name: completed-native-log"),
+            ("path: ${{ runner.temp }}/completed-native-log/", "path: ${{ github.workspace }}/"),
+            ("if-no-files-found: error", "if-no-files-found: warn"),
+            ("overwrite: false", "overwrite: true"),
+            ("overwrite: false", "overwrite: null"),
+            ("uses: actions/checkout@", "uses: attacker/checkout@"),
+            ("uses: actions/upload-artifact@", "uses: invalid: actions/upload-artifact@"),
+            ("@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "@v5"),
+            ("@ea165f8d65b6e75b540449e92b4886f43607fa02", "@" + "a" * 39),
+        ]
+        for original, replacement in changes:
+            with self.subTest(original=original):
+                self.assertEqual(successor.count(original), 1)
+                changed = prefix + boundary + successor.replace(original, replacement)
+                with self.assertRaises(AssertionError):
+                    self.assert_successor_workflow_contract(changed)
+
+    def test_successor_workflow_rejects_structural_and_context_decoys(self):
+        source = (Path(capture.__file__).resolve().parents[1] / capture.WORKFLOW).read_text()
+        prefix, boundary, successor = source.partition(SUCCESSOR_BOUNDARY)
+        condition = next(line for line in successor.splitlines(keepends=True) if line.startswith("    if:"))
+        changes = {
+            "missing condition": successor.replace(condition, ""),
+            "commented condition": successor.replace(condition, "    #" + condition[4:]),
+            "condition in block scalar": successor.replace(condition, "    description: |\n  " + condition),
+            "duplicate condition before": "    if: always()\n" + successor,
+            "duplicate condition after": successor + "    if: always()\n",
+            "missing dependency": successor.replace("    needs: build-and-test\n", ""),
+            "duplicate dependency": successor + "    needs: other-job\n",
+            "extra permission": successor.replace("    steps:\n", "      checks: write\n    steps:\n"),
+            "extra environment": successor.replace("        run: python3", "          EXTRA: unsafe\n        run: python3"),
+            "extra job": successor + "  other-job:\n    runs-on: self-hosted\n",
+            "duplicate job": successor + boundary + successor,
+            "duplicate jobs mapping": successor + "jobs: {}\n",
+            "second document": successor + "---\njobs: {}\n",
+            "merge alias": "    <<: *unsafe\n" + successor,
+        }
+        candidates = {name: prefix + boundary + changed for name, changed in changes.items()}
+        candidates.update({
+            "renamed job": prefix + boundary.replace("retain-completed-native-log", "other-job") + successor,
+            "wrong parent": source.replace("\njobs:\n", "\nother:\n"),
+            "renamed native dependency": source.replace("\n  build-and-test:\n", "\n  other-native:\n"),
+            "block scalar job decoy": "description: |\n" + "\n".join("  " + line for line in source.splitlines()),
+            "comment job decoy": "\n".join("# " + line for line in source.splitlines()),
+        })
+        for name, changed in candidates.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(changed, source)
+                with self.assertRaises(AssertionError):
+                    self.assert_successor_workflow_contract(changed)
+
+    def test_successor_workflow_rejects_missing_duplicate_reordered_or_conditional_steps(self):
+        source = (Path(capture.__file__).resolve().parents[1] / capture.WORKFLOW).read_text()
+        prefix, boundary, successor = source.partition(SUCCESSOR_BOUNDARY)
+        header, *steps = successor.split("      - name: ")
+        self.assertEqual(len(steps), 4)
+        for index in range(len(steps)):
+            reordered = steps.copy()
+            other = (index + 1) % len(steps)
+            reordered[index], reordered[other] = reordered[other], reordered[index]
+            changes = {"missing": steps[:index] + steps[index + 1:],
+                       "duplicate": steps[:index] + [steps[index]] + steps[index:],
+                       "reordered": reordered,
+                       "conditional": steps[:index] + [steps[index].replace("\n", "\n        if: always()\n", 1)] + steps[index + 1:]}
+            for name, changed in changes.items():
+                candidate = prefix + boundary + header + "".join("      - name: " + step for step in changed)
+                with self.subTest(index=index, name=name), self.assertRaises(AssertionError):
+                    self.assert_successor_workflow_contract(candidate)
+
+    def test_successor_workflow_accepts_full_length_action_pins(self):
+        source = (Path(capture.__file__).resolve().parents[1] / capture.WORKFLOW).read_text()
+        prefix, boundary, successor = source.partition(SUCCESSOR_BOUNDARY)
+        for original in ("fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "ea165f8d65b6e75b540449e92b4886f43607fa02"):
+            with self.subTest(original=original):
+                self.assertEqual(successor.count(original), 1)
+                self.assert_successor_workflow_contract(prefix + boundary + successor.replace(original, "a" * 40))
 
     def test_dispatch_identity_and_types_reject(self):
         changes = {"GITHUB_EVENT_NAME": "push", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_JOB": "build-and-test",
