@@ -2030,7 +2030,7 @@ final class AppModel {
     }
 
     @discardableResult
-    private func rebuildOptimisticState() -> Bool {
+    func rebuildOptimisticState() -> Bool {
         do {
             let output = try project(timerState)
             installProjection(output)

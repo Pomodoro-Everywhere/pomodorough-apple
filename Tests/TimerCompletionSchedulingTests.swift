@@ -295,6 +295,7 @@ struct TimerCompletionSchedulingTests {
         let fixture = try CompletionModelFixture()
         defer { fixture.cleanUp() }
         try fixture.seedIrohTimer(owned: true)
+        try fixture.expectIrohCompletionDecision(owned: true)
         let model = fixture.makeModel()
         let focus = try #require(fixture.roomStore.activeRoomState?.canonicalTimer)
         let operationCount = try #require(fixture.roomStore.activeSnapshot?.operationCount)
@@ -312,7 +313,7 @@ struct TimerCompletionSchedulingTests {
         }
 
         try fixture.restoreRoomWrites()
-        for _ in 0..<100 { model.selectPhase(.focus) }
+        for _ in 0..<100 { #expect(model.rebuildOptimisticState()) }
         try await Task.sleep(for: .milliseconds(10))
         #expect(fixture.sleeper.count == 4)
         fixture.sleeper.release(3)
@@ -332,17 +333,52 @@ struct TimerCompletionSchedulingTests {
         let fixture = try CompletionModelFixture()
         defer { fixture.cleanUp() }
         try fixture.seedIrohTimer(owned: false)
+        try fixture.expectIrohCompletionDecision(owned: false)
         let model = fixture.makeModel()
         let operationCount = fixture.roomStore.activeSnapshot?.operationCount
         try await completionEventually { fixture.sleeper.count == 1 }
         fixture.clock.elapsed = 60
         fixture.sleeper.release(0)
         try await Task.sleep(for: .milliseconds(10))
-        for _ in 0..<100 { model.selectPhase(.focus) }
+        for _ in 0..<100 { #expect(model.rebuildOptimisticState()) }
         try await Task.sleep(for: .milliseconds(10))
         #expect(fixture.sleeper.count == 1)
         #expect(model.canonicalTimer?.phase == .focus)
         #expect(fixture.roomStore.activeSnapshot?.operationCount == operationCount)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func irohExplicitPhaseSelectionClearsExpiredFocus(owned: Bool) async throws {
+        let fixture = try CompletionModelFixture()
+        defer { fixture.cleanUp() }
+        try fixture.seedIrohTimer(owned: owned)
+        let model = fixture.makeModel()
+        let focus = try #require(fixture.roomStore.activeRoomState?.canonicalTimer)
+        let operationCount = try #require(fixture.roomStore.activeSnapshot?.operationCount)
+        try await completionEventually { fixture.sleeper.count == 1 }
+        if owned { try fixture.blockRoomWrites() }
+        fixture.clock.elapsed = 60
+        fixture.sleeper.release(0)
+        if owned {
+            try await completionEventually { fixture.sleeper.count == 2 }
+            #expect(fixture.sleeper.durations[1] == .seconds(5))
+            #expect(fixture.roomStore.activeRoomState?.canonicalTimer == focus)
+            try fixture.restoreRoomWrites()
+        }
+        try await completionEventually { model.canonicalTimer?.status == .completed }
+        #expect(fixture.roomStore.activeSnapshot?.operationCount == operationCount)
+        model.selectPhase(.focus)
+        #expect(model.canonicalTimer == nil)
+        #expect(fixture.roomStore.activeRoomState?.canonicalTimer == nil)
+        #expect(fixture.roomStore.activeSnapshot?.operationCount == operationCount + 1)
+        #expect(model.completedFocusCount == 1)
+        fixture.clock.elapsed = 65
+        fixture.sleeper.releaseAll()
+        try await Task.sleep(for: .milliseconds(10))
+        #expect(model.canonicalTimer == nil)
+        #expect(fixture.sleeper.count == (owned ? 2 : 1))
+        #expect(fixture.roomStore.activeSnapshot?.operationCount == operationCount + 1)
+        #expect(model.completedFocusCount == 1)
     }
 }
 
@@ -436,6 +472,29 @@ private struct CompletionModelFixture {
             ), now: clock.anchor
         )
         defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+    }
+
+    func expectIrohCompletionDecision(owned: Bool) throws {
+        let state = try #require(roomStore.activeRoomState)
+        let timer = try #require(state.canonicalTimer)
+        #expect(timer.status == .running)
+        #expect((timer.startedByDeviceId == state.deviceId) == owned)
+        #expect((state.localTimerOwners[timer.id] == state.deviceId) == owned)
+        let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })
+        let beforeDeadline = try controller.completionDecision(
+            for: timer, at: clock.anchor, state: state, replicationMode: .iroh,
+            physicalNow: clock.anchor, autoStartsBreak: true
+        )
+        #expect(beforeDeadline == nil)
+        let deadline = clock.anchor.addingTimeInterval(60)
+        let afterDeadline = try controller.completionDecision(
+            for: timer, at: deadline, state: state, replicationMode: .iroh,
+            physicalNow: deadline, autoStartsBreak: true
+        )
+        let decision = try #require(afterDeadline)
+        #expect(decision.completedAt == deadline)
+        #expect(decision.selectedPhase == .shortBreak)
+        #expect(decision.generatedBreakPhase == (owned ? .shortBreak : nil))
     }
 
     func blockRoomWrites() throws {
