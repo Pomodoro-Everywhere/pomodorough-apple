@@ -153,12 +153,91 @@ jobs:
       - name: Regenerate Xcode project and verify idempotence
         run: |
           command -v xcodegen >/dev/null || brew install xcodegen
-          rm -rf Pomodorough.xcodeproj
-          xcodegen generate
-          git diff --exit-code -- Pomodorough.xcodeproj
-          xcodegen generate
-          git diff --exit-code -- Pomodorough.xcodeproj
-          test -z "$(git ls-files --others --exclude-standard -- Pomodorough.xcodeproj)"
+          python3 - <<'PY'
+          import json
+          import re
+          import shutil
+          import stat
+          import subprocess
+          from pathlib import Path
+
+          project = Path("Pomodorough.xcodeproj")
+          lock = project / "project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+
+          def run(*arguments, capture=False):
+              result = subprocess.run(arguments, stdout=subprocess.PIPE if capture else None)
+              if result.returncode:
+                  raise SystemExit(result.returncode)
+              return result.stdout
+
+          def verify_project_types():
+              pending = [project]
+              while pending:
+                  path = pending.pop()
+                  mode = path.lstat().st_mode
+                  if stat.S_ISDIR(mode):
+                      pending.extend(path.iterdir())
+                  elif not stat.S_ISREG(mode):
+                      raise SystemExit(f"Non-regular Xcode project content: {path}")
+
+          def read_lock():
+              try:
+                  mode = lock.lstat().st_mode
+              except FileNotFoundError:
+                  return None
+              if not stat.S_ISREG(mode):
+                  raise SystemExit("Missing or non-regular Package.resolved")
+              return lock.read_bytes()
+
+          def verify_project():
+              run("git", "diff", "--exit-code", "HEAD", "--", str(project))
+              run("git", "diff", "--cached", "--exit-code", "HEAD", "--", str(project))
+              if run("git", "ls-files", "--others", "-z", "--", str(project), capture=True):
+                  raise SystemExit("Untracked Xcode project content")
+
+          def valid_lock(document):
+              if not isinstance(document, dict) or document.get("version") != 3:
+                  return False
+              origin = document.get("originHash")
+              if not isinstance(origin, str) or not re.fullmatch(r"[0-9a-f]{64}", origin):
+                  return False
+              pins = document.get("pins")
+              if not isinstance(pins, list) or not pins:
+                  return False
+              for pin in pins:
+                  if not isinstance(pin, dict) or not isinstance(pin.get("state"), dict):
+                      return False
+                  if not all(isinstance(pin.get(field), str) and pin[field] for field in ("identity", "kind", "location")):
+                      return False
+                  revision = pin["state"].get("revision")
+                  if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+                      return False
+              return True
+
+          run("git", "ls-files", "--error-unmatch", "--", str(lock), capture=True)
+          verify_project_types()
+          preserved_lock = read_lock()
+          if preserved_lock is None:
+              raise SystemExit("Missing or non-regular Package.resolved")
+          try:
+              document = json.loads(preserved_lock)
+          except (UnicodeDecodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"Malformed Package.resolved: {error}") from error
+          if not valid_lock(document):
+              raise SystemExit("Malformed Package.resolved pins")
+          verify_project()
+          for generation in range(2):
+              shutil.rmtree(project)
+              run("xcodegen", "generate")
+              verify_project_types()
+              generated_lock = read_lock()
+              if generated_lock is not None and generated_lock != preserved_lock:
+                  raise SystemExit("XcodeGen changed Package.resolved")
+              if generated_lock is None:
+                  lock.parent.mkdir(parents=True, exist_ok=True)
+                  lock.write_bytes(preserved_lock)
+              verify_project()
+          PY
 
       - name: Resolve Swift packages
         run: >-
@@ -306,3 +385,33 @@ jobs:
           persist-credentials: false
       - name: Review dependency changes
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+
+  retain-completed-native-log:
+    name: Retain completed native job log
+    if: github.event_name == 'workflow_dispatch' && needs.build-and-test.result == 'success'
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Verify checked out source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Capture completed native job log
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CANDIDATE_INPUTS: ${{ toJSON(github.event.inputs) }}
+        run: python3 scripts/capture_completed_native_log.py --output "$RUNNER_TEMP/completed-native-log"
+      - name: Retain completed native job log
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: completed-native-log-${{ inputs.candidate-request }}
+          path: ${{ runner.temp }}/completed-native-log/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
