@@ -28,8 +28,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      CORE_COMMIT: "4802ba99f9d97ee8d3aee3a84468b2f8c91ee443"
-      CORE_SHA256: "f96e712ca8350ca038888316ad2fc8bd0f08f72b3bc984f916f1127c644e776c"
+      CORE_COMMIT: "dda034612bd9a8b3d0f56959d9eef888980acc7b"
+      CORE_RELEASE_TAG: "v0.6.0"
+      CORE_SHA256: "33cb3bc7477a8075a9613e45b309495e44d28f794e6b88362a8073d505309f5a"
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughReleaseDerivedData
       IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
@@ -49,7 +50,7 @@ jobs:
           path: .build/pomodorough-core
           persist-credentials: false
 
-      - name: Rebuild and verify pinned shared core
+      - name: Rebuild and verify pinned shared core release
         shell: bash
         run: |
           set -euo pipefail
@@ -67,13 +68,18 @@ jobs:
               --locked
           )
           rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          canonical_release="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$canonical_release"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
-            Resources/SharedCore/pomodorough_core.wasm \
+            "$canonical_release" \
             --sha256 "$CORE_SHA256"
           python3 scripts/verify_shared_core_provenance.py \
             --sha256 "$CORE_SHA256" \
-            "$rebuilt" \
+            "$canonical_release" \
             Resources/SharedCore/pomodorough_core.wasm
 
       - name: Check documentation links

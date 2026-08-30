@@ -2,9 +2,109 @@ import Foundation
 import Security
 
 protocol TokenStoring: Sendable {
+    // size-exception: protocol requirement is one declaration; the audit span includes a separate conformer's body.
     func load() throws -> TokenPair?
     func save(_ tokens: TokenPair) throws
     func delete() throws
+}
+
+struct KeychainLogoutRevocationStore: LogoutRevocationStoring {
+    private struct Payload: Codable {
+        let obligations: [LogoutRevocationObligation]
+    }
+
+    private let service = "me.egigoka.pomodorough.native-auth"
+    private let account = "logout-revocations-v1"
+    private let security: any KeychainSecurityOperating
+    private static let mutationLock = NSLock()
+
+    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+        self.security = security
+    }
+
+    func load() throws -> [LogoutRevocationObligation] {
+        try Self.mutationLock.withLock { try loadUnlocked() }
+    }
+
+    private func loadUnlocked() throws -> [LogoutRevocationObligation] {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let result = security.copyMatching(query)
+        if result.status == errSecItemNotFound { return [] }
+        guard result.status == errSecSuccess, let data = result.data else {
+            throw error(operation: "load", status: result.status)
+        }
+        return try JSONDecoder.api.decode(Payload.self, from: data).obligations
+    }
+
+    func append(_ obligation: LogoutRevocationObligation) throws {
+        try Self.mutationLock.withLock {
+            var obligations = try loadUnlocked()
+            obligations.append(obligation)
+            try save(obligations)
+        }
+    }
+
+    func replace(_ obligation: LogoutRevocationObligation) throws {
+        try Self.mutationLock.withLock {
+            var obligations = try loadUnlocked()
+            guard let index = obligations.firstIndex(where: { $0.id == obligation.id }) else {
+                throw KeychainError(
+                    operation: "logout revocation replace",
+                    status: errSecItemNotFound,
+                    message: "Pending logout obligation was not found"
+                )
+            }
+            obligations[index] = obligation
+            try save(obligations)
+        }
+    }
+
+    func remove(id: UUID) throws {
+        try Self.mutationLock.withLock {
+            var obligations = try loadUnlocked()
+            obligations.removeAll { $0.id == id }
+            if obligations.isEmpty { try delete() } else { try save(obligations) }
+        }
+    }
+
+    private func save(_ obligations: [LogoutRevocationObligation]) throws {
+        let data = try JSONEncoder.api.encode(Payload(obligations: obligations))
+        let status = security.update(baseQuery, attributes: [kSecValueData as String: data])
+        if status == errSecItemNotFound {
+            var query = baseQuery
+            query[kSecValueData as String] = data
+            let added = security.add(query)
+            guard added == errSecSuccess else { throw error(operation: "save", status: added) }
+        } else if status != errSecSuccess {
+            throw error(operation: "save", status: status)
+        }
+    }
+
+    private func delete() throws {
+        let status = security.delete(baseQuery)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw error(operation: "delete", status: status)
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+    }
+
+    private func error(operation: String, status: OSStatus) -> KeychainError {
+        KeychainError(
+            operation: "logout revocation \(operation)",
+            status: status,
+            message: security.errorMessage(for: status) ?? "Unknown error"
+        )
+    }
 }
 
 protocol IrohEndpointKeyStoring: Sendable {

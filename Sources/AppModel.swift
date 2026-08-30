@@ -13,6 +13,19 @@ private struct InitialAppState {
     let needsPermissionIntroduction: Bool
 }
 
+private struct AccountDeletionRecovery {
+    let record: AccountDeletionJournal.Record?
+    let purgeState: AccountDeletionPurgeState?
+}
+
+private struct AppModelStartup {
+    let accountDeletionJournal: AccountDeletionJournal?
+    let timerSessionController: TimerSessionController
+    let persistence: AppStatePersistenceCoordinator
+    let initialState: InitialAppState
+    let accountDeletionRecovery: AccountDeletionRecovery
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -83,75 +96,103 @@ final class AppModel {
             try SharedCore.bundled()
         }
     ) {
-        let usesProductionStorage = defaults === UserDefaults.standard
-        let resolvedJournal = accountDeletionJournal ?? (usesProductionStorage
-            ? AccountDeletionJournal(fileURL: Self.productionStorageURL("account-deletion-v1.json"))
-            : nil)
-        let resolvedLocalStore = durableLocalStore ?? (usesProductionStorage
-            ? AtomicDurableFileStore(fileURL: Self.productionStorageURL("timer-state-v2.json"))
-            : nil)
-        let timerController = TimerSessionController(sharedCoreProvider: sharedCoreProvider)
-        let persistence = AppStatePersistenceCoordinator(
-            defaults: defaults,
-            durableLocalStore: resolvedLocalStore
-        )
-        let initial = Self.loadInitialState(
-            defaults: defaults, roomStore: roomStore, persistence: persistence,
-            now: now, uptime: uptime
-        )
+        let startup = Self.makeStartup(
+            defaults: defaults, accountDeletionJournal: accountDeletionJournal,
+            durableLocalStore: durableLocalStore, roomStore: roomStore,
+            now: now, uptime: uptime, sharedCoreProvider: sharedCoreProvider)
         self.api = api
         self.defaults = defaults
-        self.accountDeletionJournal = resolvedJournal
+        self.accountDeletionJournal = startup.accountDeletionJournal
         self.roomStore = roomStore
         self.endpointKeyStore = endpointKeyStore
         self.alarmScheduler = alarmScheduler ?? TimerAlarmScheduler()
         self.retryDelay = retryDelay
         self.now = now
         self.uptime = uptime
-        self.timerSessionController = timerController
+        timerSessionController = startup.timerSessionController
         workspaceMutationController = SynchronizedWorkspaceMutationController(
-            timerSessionController: timerController
+            timerSessionController: startup.timerSessionController
         )
         accountSessionCoordinator = Self.makeAccountSessionCoordinator(
             api: api,
             googleIdentityProvider: googleIdentityProvider,
             sharedCoreProvider: sharedCoreProvider,
-            persistence: persistence,
-            initialState: initial.transition.state
+            persistence: startup.persistence,
+            initialState: startup.initialState.transition.state
         )
-        alarmEffectCoordinator = AlarmEffectCoordinator(timerSessionController: timerController)
+        alarmEffectCoordinator = AlarmEffectCoordinator(timerSessionController: startup.timerSessionController)
         taskIdentityCoreProvider = sharedCoreProvider
-        replicationMode = initial.replicationMode
-        timerState = initial.transition.state
-        let journalLoad: AccountDeletionJournal.LoadResult?
-        if let resolvedJournal {
-            journalLoad = (try? resolvedJournal.load()) ?? .corrupt
-        } else {
-            journalLoad = nil
-        }
+        replicationMode = startup.initialState.replicationMode
+        timerState = startup.initialState.transition.state
+        accountDeletionRecord = startup.accountDeletionRecovery.record
+        accountDeletionPurgeState = startup.accountDeletionRecovery.purgeState
+        physicalAnchor = startup.initialState.physicalAnchor
+        needsPermissionIntroduction = startup.initialState.needsPermissionIntroduction
+        restoreInitialState(startup.initialState.transition)
+    }
+
+    private static func makeStartup(
+        defaults: UserDefaults,
+        accountDeletionJournal: AccountDeletionJournal?,
+        durableLocalStore: AtomicDurableFileStore?,
+        roomStore: IrohRoomStore,
+        now: () -> Date,
+        uptime: () -> TimeInterval,
+        sharedCoreProvider: @escaping @MainActor () throws -> SharedCore
+    ) -> AppModelStartup {
+        let usesProductionStorage = defaults === UserDefaults.standard
+        let journal = accountDeletionJournal ?? (usesProductionStorage
+            ? AccountDeletionJournal(fileURL: productionStorageURL("account-deletion-v1.json"))
+            : nil)
+        let localStore = durableLocalStore ?? (usesProductionStorage
+            ? AtomicDurableFileStore(fileURL: productionStorageURL("timer-state-v2.json"))
+            : nil)
+        let timerController = TimerSessionController(sharedCoreProvider: sharedCoreProvider)
+        let persistence = AppStatePersistenceCoordinator(
+            defaults: defaults,
+            durableLocalStore: localStore
+        )
+        return AppModelStartup(
+            accountDeletionJournal: journal,
+            timerSessionController: timerController,
+            persistence: persistence,
+            initialState: loadInitialState(
+                defaults: defaults, roomStore: roomStore, persistence: persistence,
+                now: now, uptime: uptime
+            ),
+            accountDeletionRecovery: loadAccountDeletionRecovery(
+                journal: journal, defaults: defaults, roomStore: roomStore
+            )
+        )
+    }
+
+    private static func loadAccountDeletionRecovery(
+        journal: AccountDeletionJournal?,
+        defaults: UserDefaults,
+        roomStore: IrohRoomStore
+    ) -> AccountDeletionRecovery {
+        let journalLoad = journal.map { (try? $0.load()) ?? .corrupt }
         switch journalLoad {
         case .record(let record):
-            accountDeletionRecord = record
-            accountDeletionPurgeState = record.phase == .prepared ? .prepared : .remoteCommitted
+            let purgeState: AccountDeletionPurgeState = record.phase == .prepared
+                ? .prepared : .remoteCommitted
+            return AccountDeletionRecovery(record: record, purgeState: purgeState)
         case .corrupt:
             let topology = try? roomStore.accountDeletionTopology()
-            accountDeletionRecord = AccountDeletionJournal.Record(
+            let record = AccountDeletionJournal.Record(
                 phase: .prepared,
                 roomIDs: topology?.roomIDs ?? [],
                 roomSecretAccounts: topology?.roomSecretAccounts ?? []
             )
-            accountDeletionPurgeState = .prepared
+            return AccountDeletionRecovery(record: record, purgeState: .prepared)
         default:
-            if defaults.object(forKey: Self.accountDeletionStateKey) == nil {
-                accountDeletionPurgeState = nil
-            } else {
-                accountDeletionPurgeState = defaults.string(forKey: Self.accountDeletionStateKey)
-                    .flatMap(AccountDeletionPurgeState.init(rawValue:)) ?? .prepared
+            guard defaults.object(forKey: accountDeletionStateKey) != nil else {
+                return AccountDeletionRecovery(record: nil, purgeState: nil)
             }
+            let purgeState = defaults.string(forKey: accountDeletionStateKey)
+                .flatMap(AccountDeletionPurgeState.init(rawValue:)) ?? .prepared
+            return AccountDeletionRecovery(record: nil, purgeState: purgeState)
         }
-        physicalAnchor = initial.physicalAnchor
-        needsPermissionIntroduction = initial.needsPermissionIntroduction
-        restoreInitialState(initial.transition)
     }
 
     private static func productionStorageURL(_ name: String) -> URL {
@@ -630,12 +671,15 @@ final class AppModel {
             hasPendingAccountSwitch: timerState.pendingAccountSwitchUser != nil,
             isWorking: isWorking
         ) else { return }
+        isWorking = true
+        defer { isWorking = false }
+        if let failure = await accountSessionCoordinator.logout() {
+            errorMessage = failure
+            return
+        }
         applyAccountReset(transition)
         timerState.pendingAccountSwitchUser = nil
         persist()
-        isWorking = true
-        defer { isWorking = false }
-        await accountSessionCoordinator.logout()
     }
 
     func signOut() {
@@ -645,16 +689,31 @@ final class AppModel {
             preservesBootstrapResolution: preservesBootstrapResolution,
             pendingStrategy: timerState.pendingBootstrapResolution?.strategy
         ) else { return }
+        isWorking = true
+        Task {
+            await persistLogoutThenReset(
+                transition,
+                preservesBootstrapResolution: preservesBootstrapResolution
+            )
+        }
+    }
+
+    private func persistLogoutThenReset(
+        _ transition: CentralizedAccountSessionCoordinator.Transition<
+            CentralizedAccountSessionCoordinator.ResetAction
+        >,
+        preservesBootstrapResolution: Bool
+    ) async {
+        defer { isWorking = false }
+        if let failure = await accountSessionCoordinator.logout() {
+            errorMessage = failure
+            return
+        }
         if !preservesBootstrapResolution, let timer = canonicalTimer {
             cancelAlarm(timerID: timer.id)
         }
         applyAccountReset(transition)
         clearSignedOutState(preservesBootstrapResolution: preservesBootstrapResolution)
-
-        Task {
-            defer { isWorking = false }
-            await accountSessionCoordinator.logout()
-        }
     }
 
     private func applyAccountReset(

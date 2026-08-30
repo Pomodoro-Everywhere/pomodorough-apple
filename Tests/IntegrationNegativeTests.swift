@@ -865,6 +865,7 @@ struct IntegrationNegativeTests {
             durableLocalStore: AtomicDurableFileStore(
                 fileURL: directory.appendingPathComponent("workspace.json")
             ),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler()
         )
         await model.restore()
@@ -1027,6 +1028,7 @@ struct IntegrationNegativeTests {
             durableLocalStore: AtomicDurableFileStore(
                 fileURL: directory.appendingPathComponent("workspace.json")
             ),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler()
         )
         await model.restore()
@@ -1075,6 +1077,7 @@ struct IntegrationNegativeTests {
             durableLocalStore: AtomicDurableFileStore(
                 fileURL: directory.appendingPathComponent("workspace.json")
             ),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler()
         )
         await model.restore()
@@ -1124,6 +1127,7 @@ struct IntegrationNegativeTests {
             durableLocalStore: AtomicDurableFileStore(
                 fileURL: directory.appendingPathComponent("workspace.json")
             ),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler()
         )
         await model.restore()
@@ -1168,6 +1172,7 @@ struct IntegrationNegativeTests {
             durableLocalStore: AtomicDurableFileStore(
                 fileURL: directory.appendingPathComponent("workspace.json")
             ),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler()
         )
         await model.restore()
@@ -1261,6 +1266,7 @@ struct IntegrationNegativeTests {
             defaults: defaults,
             accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
             durableLocalStore: AtomicDurableFileStore(fileURL: workspaceURL),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler(),
             googleIdentityProvider: identity
         )
@@ -1294,6 +1300,7 @@ struct IntegrationNegativeTests {
             defaults: defaults,
             accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
             durableLocalStore: AtomicDurableFileStore(fileURL: workspaceURL),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler(),
             googleIdentityProvider: RecordingGoogleIdentityProvider()
         )

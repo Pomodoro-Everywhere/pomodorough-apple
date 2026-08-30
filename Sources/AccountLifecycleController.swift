@@ -90,16 +90,23 @@ final class AccountLifecycleController {
 
     private let api: APIClient
     private let googleIdentityProvider: any GoogleIdentityProviding
+    private let revocations: SessionRevocationController
+    private let revocationStore: any LogoutRevocationStoring
     private(set) var generation = 0
     private var verification = SessionVerification()
     private var verificationOwner: UUID?
 
     init(
         api: APIClient,
-        googleIdentityProvider: any GoogleIdentityProviding
+        googleIdentityProvider: any GoogleIdentityProviding,
+        revocations: SessionRevocationController? = nil,
+        revocationStore: (any LogoutRevocationStoring)? = nil
     ) {
+        let resolvedRevocationStore = revocationStore ?? api.logoutRevocationStore
         self.api = api
         self.googleIdentityProvider = googleIdentityProvider
+        self.revocationStore = resolvedRevocationStore
+        self.revocations = revocations ?? SessionRevocationController(api: api, store: resolvedRevocationStore)
     }
 
     var currentOperation: Operation { Operation(generation: generation) }
@@ -150,9 +157,10 @@ final class AccountLifecycleController {
     }
 
     func restore(cachedUser: User?) async -> RestoreTransition {
+        await revocations.resumePending()
         let operation = currentOperation
         do {
-            guard try await api.restoreTokens() else {
+            guard try await api.restoreTokens(excluding: revocationStore) else {
                 return owns(operation)
                     ? .localOnly(invalidatesSynchronization: false)
                     : .stale
@@ -174,7 +182,7 @@ final class AccountLifecycleController {
     }
 
     func restoreAccountDeletionCredentials() async -> Bool {
-        (try? await api.restoreTokens()) == true
+        (try? await api.restoreTokens(excluding: revocationStore)) == true
     }
 
     func verifyRestoredSession(
@@ -294,11 +302,12 @@ final class AccountLifecycleController {
         )
     }
 
-    func logout() async {
+    func logout() async -> String? {
         do {
-            try await api.logout()
+            try await revocations.signOut()
+            return nil
         } catch {
-            try? await api.clearTokens()
+            return error.localizedDescription
         }
     }
 

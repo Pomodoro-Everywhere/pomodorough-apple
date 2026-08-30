@@ -18,7 +18,7 @@ struct NativeChallenge: Codable, Sendable {
     let expiresAt: Date
 }
 
-struct TokenPair: Codable, Sendable {
+struct TokenPair: Codable, Equatable, Sendable {
     let accessToken: String
     let accessTokenExpiresAt: Date
     let refreshToken: String

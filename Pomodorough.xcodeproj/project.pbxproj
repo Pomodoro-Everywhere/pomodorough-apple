@@ -18,6 +18,7 @@
 		08B842AA74B8633316A97C7A /* CoverageGapBehaviorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */; };
 		097F6024855A8B8AA75B5F22 /* ModernTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B78A6C72FEDDC6BCC6B7DC1 /* ModernTabs.swift */; };
 		09FAB91AC913CC5933287240 /* SharedCoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CEEC2337A192634D24A340C /* SharedCoreModels.swift */; };
+		0A4D8FC8A0D036F6FCF4F3CC /* LogoutRevocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */; };
 		0BA0AC733AC870B50A7FEAE7 /* AccountSyncToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */; };
 		0DD0CA0C903D547E17D0117D /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
 		0EAF8323E5B547A935B98DB1 /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
@@ -55,6 +56,7 @@
 		2EC15A7B22650818465F13BE /* IROH_THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */; };
 		2F6D5211BF9FEA54F15DF94C /* protocol-fixtures-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 22A0FB54C793C4B2090D7DBD /* protocol-fixtures-v1.json */; };
 		2FE2B8F3D32C47449D4298C3 /* PreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */; };
+		3272D417CFE6E7BC0C61D505 /* SessionRevocationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */; };
 		32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */; };
 		32CD7FD4021BF0DF052D4CF7 /* IrohRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */; };
 		32E6F4F113879D715D9BE1E3 /* SynchronizationWireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */; };
@@ -111,6 +113,7 @@
 		636FC1EB4790528FB52E9BAB /* SharedCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */; };
 		6489DB8DEDA781EDD7C19DF6 /* GoogleAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C24F7A45B3B70459A21180A /* GoogleAuthService.swift */; };
 		64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C3F5C1F22298E87DE9EE29 /* SectionHeading.swift */; };
+		660C51357760DC93057A38B9 /* LogoutRevocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */; };
 		676287219F6B9615143E7180 /* View+Pomodorough.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */; };
 		6899487C295654FF83F562B3 /* InviteCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7363E2F7FD511798C672E19 /* InviteCodec.swift */; };
 		6C22FC68AA539A2A4F4238AA /* TasksScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3338212C1D24087870295D /* TasksScreen.swift */; };
@@ -242,6 +245,7 @@
 		D5C32DBB4C9015F58CA59E14 /* PortraitDialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB75F33697B6208245E8B417 /* PortraitDialFace.swift */; };
 		D609FCF16D8D6E68089319AE /* uuidv7-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EE9592BD58F7F316E722046D /* uuidv7-v1.json */; };
 		D60B269071AAC3DB77975630 /* AppStatePublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BE335886A3A7C806ECEB12F /* AppStatePublisher.swift */; };
+		D65BD6C38713D53E03C57251 /* SessionRevocationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */; };
 		D66ACE3D1488CAF5B712287F /* TimerTaskPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E68FD6BB00A16B79EFC34AC7 /* TimerTaskPicker.swift */; };
 		D71BC324CAE1DF74369577E1 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */; };
 		D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */; };
@@ -337,6 +341,7 @@
 		16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationWireModels.swift; sourceTree = "<group>"; };
 		17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationServiceCoverageTests.swift; sourceTree = "<group>"; };
 		17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Pomodorough.swift"; sourceTree = "<group>"; };
+		20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRevocationController.swift; sourceTree = "<group>"; };
 		21209644D253E40E15EC9998 /* RPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RPCMessage.swift; sourceTree = "<group>"; };
 		22A0FB54C793C4B2090D7DBD /* protocol-fixtures-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "protocol-fixtures-v1.json"; sourceTree = "<group>"; };
 		22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedStateDecouplingCompatibilityTests.swift; sourceTree = "<group>"; };
@@ -394,6 +399,7 @@
 		72BF1D497AF443928BE729AE /* TimerBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerBackdrop.swift; sourceTree = "<group>"; };
 		756912FE081EC76B3B459175 /* SynchronizationLifecycleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationLifecycleModels.swift; sourceTree = "<group>"; };
 		75D48B773F39678A5656B048 /* PersistedStateCompatibilityTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PersistedStateCompatibilityTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogoutRevocationTests.swift; sourceTree = "<group>"; };
 		79CCD9795C8F102246EAE998 /* TaskBoardHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardHeader.swift; sourceTree = "<group>"; };
 		7A06BAAC59FEFFB625D50DE7 /* LaunchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchView.swift; sourceTree = "<group>"; };
 		7A213BE759E634BCEE87C4C3 /* ConflictBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictBanner.swift; sourceTree = "<group>"; };
@@ -529,6 +535,7 @@
 				F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */,
 				363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */,
 				E07295C5A8844F45C157C394 /* RoomReplicationTransitions.swift */,
+				20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */,
 				29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */,
 				9CEEC2337A192634D24A340C /* SharedCoreModels.swift */,
 				756912FE081EC76B3B459175 /* SynchronizationLifecycleModels.swift */,
@@ -572,6 +579,7 @@
 				D4C0A72BA43DCAFC4D61584F /* IrohProtocolNegativeCompatibilityTests.swift */,
 				17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */,
 				3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */,
+				7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */,
 				6D043EE67CA1960F20CF2749 /* MacOSTests.swift */,
 				23E73A1D6F89C1AAFBC49A74 /* ModelsSourceSplitCompatibilityTests.swift */,
 				9A3CD9AE3AA80976EBF73221 /* PersistedStateCompatibilityTests.swift */,
@@ -1000,6 +1008,7 @@
 				27B798A28C490F1DC7540C90 /* LegacyOperationReducers.swift in Sources */,
 				01726D520AE2DE65375938D6 /* LegacyPendingOperationRebase.swift in Sources */,
 				B040FF19CFC14691E4273A6E /* LegacyTimerReducer.swift in Sources */,
+				0A4D8FC8A0D036F6FCF4F3CC /* LogoutRevocationTests.swift in Sources */,
 				586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */,
 				773AEB98B6A6EE50655C58E7 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
 				7B32DC7AAB3CACBC785C665C /* PersistedStateCompatibilityTests.swift in Sources */,
@@ -1045,6 +1054,7 @@
 				9C386677BF85BC5733C300C7 /* LegacyOperationReducers.swift in Sources */,
 				7BDF5C7BFA243BF6DA34E67E /* LegacyPendingOperationRebase.swift in Sources */,
 				62983357E57112E9ABD54E9E /* LegacyTimerReducer.swift in Sources */,
+				660C51357760DC93057A38B9 /* LogoutRevocationTests.swift in Sources */,
 				74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */,
 				9A572722943C8D6ABA5DDD97 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
 				24398B245363C38C96EF7316 /* PersistedStateCompatibilityTests.swift in Sources */,
@@ -1131,6 +1141,7 @@
 				F7538DA7270901F11D96D9F8 /* SectionHeading.swift in Sources */,
 				AFA72B55F24D175A803F93BF /* ServicePatternCard.swift in Sources */,
 				388A95C362B47A5F9C63E734 /* ServicePatternScreen.swift in Sources */,
+				D65BD6C38713D53E03C57251 /* SessionRevocationController.swift in Sources */,
 				636FC1EB4790528FB52E9BAB /* SharedCore.swift in Sources */,
 				09FAB91AC913CC5933287240 /* SharedCoreModels.swift in Sources */,
 				8CF07ED3A9E4017A0B73A201 /* StepButton.swift in Sources */,
@@ -1249,6 +1260,7 @@
 				64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */,
 				CBD6A118EB50CD13A585FD53 /* ServicePatternCard.swift in Sources */,
 				BE2AFABAAE1ADE3CC7C78A1B /* ServicePatternScreen.swift in Sources */,
+				3272D417CFE6E7BC0C61D505 /* SessionRevocationController.swift in Sources */,
 				D4711C68D5C327020D8C7571 /* SharedCore.swift in Sources */,
 				7B812507B5E505B4BCD00BBD /* SharedCoreModels.swift in Sources */,
 				C6E287C347E7FFCC158CD69B /* StepButton.swift in Sources */,

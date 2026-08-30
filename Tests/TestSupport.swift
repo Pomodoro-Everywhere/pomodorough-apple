@@ -7,6 +7,19 @@ enum TestFixtures {
     static let anchor = Date(timeIntervalSince1970: 1_000)
     static let user = User(id: "user-duration-sync", email: "sync@example.com", name: "Sync", avatarUrl: "")
 
+    static func emptyIrohRoomStore(in directory: URL) -> IrohRoomStore {
+        IrohRoomStore(
+            fileURL: directory.appendingPathComponent("iroh-rooms.json"),
+            secretStore: MemoryIrohRoomSecretStore()
+        )
+    }
+
+    static func emptyIrohRoomStore() -> IrohRoomStore {
+        emptyIrohRoomStore(
+            in: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        )
+    }
+
     static func timer(
         status: CanonicalTimer.Status,
         elapsed: Int64,
@@ -283,13 +296,46 @@ final class ScriptedUptimeClock: @unchecked Sendable {
     }
 }
 
-struct EmptyTokenStore: TokenStoring {
+final class TestLogoutRevocationStore: LogoutRevocationStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var obligations: [LogoutRevocationObligation] = []
+
+    func load() throws -> [LogoutRevocationObligation] { lock.withLock { obligations } }
+    func append(_ obligation: LogoutRevocationObligation) throws {
+        lock.withLock { obligations.append(obligation) }
+    }
+    func replace(_ obligation: LogoutRevocationObligation) throws {
+        lock.withLock {
+            guard let index = obligations.firstIndex(where: { $0.id == obligation.id }) else { return }
+            obligations[index] = obligation
+        }
+    }
+    func remove(id: UUID) throws {
+        lock.withLock { obligations.removeAll { $0.id == id } }
+    }
+}
+
+protocol TestTokenStoreWithRevocations: LogoutRevocationStoring {
+    var revocationStore: TestLogoutRevocationStore { get }
+}
+
+extension TestTokenStoreWithRevocations {
+    func load() throws -> [LogoutRevocationObligation] { try revocationStore.load() }
+    func append(_ obligation: LogoutRevocationObligation) throws { try revocationStore.append(obligation) }
+    func replace(_ obligation: LogoutRevocationObligation) throws { try revocationStore.replace(obligation) }
+    func remove(id: UUID) throws { try revocationStore.remove(id: id) }
+}
+
+struct EmptyTokenStore: TokenStoring, TestTokenStoreWithRevocations {
+    let revocationStore = TestLogoutRevocationStore()
+
     func load() throws -> TokenPair? { nil }
     func save(_ tokens: TokenPair) throws {}
     func delete() throws {}
 }
 
-struct StaticTokenStore: TokenStoring {
+struct StaticTokenStore: TokenStoring, TestTokenStoreWithRevocations {
+    let revocationStore = TestLogoutRevocationStore()
     let tokens = TokenPair(
         accessToken: "access-token",
         accessTokenExpiresAt: Date.distantFuture,
@@ -314,10 +360,11 @@ enum RecordedTokenStoreOperation: Equatable, Sendable {
     case delete
 }
 
-final class RecordingTokenStore: TokenStoring, @unchecked Sendable {
+final class RecordingTokenStore: TokenStoring, LogoutRevocationStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var failures: Set<RecordingTokenStoreFailure>
     private var storedTokens: TokenPair?
+    private var logoutObligations: [LogoutRevocationObligation] = []
     private var recordedOperations: [RecordedTokenStoreOperation] = []
 
     init(
@@ -369,6 +416,25 @@ final class RecordingTokenStore: TokenStoring, @unchecked Sendable {
             if failures.contains(.delete) { throw RecordingTokenStoreFailure.delete }
             storedTokens = nil
         }
+    }
+
+    func load() throws -> [LogoutRevocationObligation] {
+        lock.withLock { logoutObligations }
+    }
+
+    func append(_ obligation: LogoutRevocationObligation) throws {
+        lock.withLock { logoutObligations.append(obligation) }
+    }
+
+    func replace(_ obligation: LogoutRevocationObligation) throws {
+        lock.withLock {
+            guard let index = logoutObligations.firstIndex(where: { $0.id == obligation.id }) else { return }
+            logoutObligations[index] = obligation
+        }
+    }
+
+    func remove(id: UUID) throws {
+        lock.withLock { logoutObligations.removeAll { $0.id == id } }
     }
 }
 
@@ -1414,20 +1480,25 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
              ("apple-api-coverage-concurrent-refresh-single-flight", "/api/v1/me"),
              ("apple-api-coverage-stale-refresh-generation", "/api/v1/me"),
              ("apple-api-coverage-exchange-save-me", "/api/v1/me"),
+             ("apple-api-coverage-model-local-signout", "/api/v1/me"),
              ("apple-api-coverage-model-sign-in", "/api/v1/me"):
             statusCode = 200
             body = Self.meBody
         case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/challenge"),
+             ("apple-api-coverage-model-local-signout", "/api/v1/auth/google/challenge"),
              ("apple-api-coverage-model-identity-failure", "/api/v1/auth/google/challenge"):
             statusCode = 200
             body = Data(#"{"challenge":"model-challenge","nonce":"model-nonce","expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
-        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/exchange"):
+        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/exchange"),
+             ("apple-api-coverage-model-local-signout", "/api/v1/auth/google/exchange"):
             statusCode = 200
             body = Self.tokenPairBody(accessToken: "model-access", refreshToken: "model-refresh")
-        case ("apple-api-coverage-model-sign-in", "/api/v1/sync"):
+        case ("apple-api-coverage-model-sign-in", "/api/v1/sync"),
+             ("apple-api-coverage-model-local-signout", "/api/v1/sync"):
             statusCode = 200
             body = Self.syncResponse(revision: 0, history: [])
-        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/logout"):
+        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/logout"),
+             ("apple-api-coverage-model-local-signout", "/api/v1/auth/logout"):
             statusCode = 204
             body = Data()
         case ("apple-api-coverage-exchange-save-me", "/api/v1/auth/google/exchange"),
