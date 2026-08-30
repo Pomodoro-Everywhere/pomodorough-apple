@@ -264,19 +264,21 @@ final class RoomReplicationController {
     ) async -> RoomReplicationTransition {
         let resumesCentralized = mode == .centralized
         if resumesCentralized { quiesceCentralized() }
-        var preparedRoomID: String?
+        var preparation: IrohRoomStore.JoinPreparation?
         do {
             let invite = try IrohRoomInvite.decode(
                 inviteText.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            try prepareJoinedRoom(invite, state: dependencies.workspaceSnapshot().state)
-            preparedRoomID = invite.roomID
+            let returnState = dependencies.workspaceSnapshot().state
+            let prepared = try prepareJoinedRoom(invite, state: returnState)
+            if prepared.alreadyActive { return .unchanged }
+            preparation = prepared
             let context = context(roomID: invite.roomID, secret: invite.roomSecret, environment: environment)
             _ = try await service.start(context)
             try await service.join(invite: invite)
             let joined = try dependencies.roomStore.activateJoinedRoom(
                 roomID: invite.roomID,
-                returnState: dependencies.workspaceSnapshot().state
+                returnState: returnState
             )
             mode = .iroh
             cancelCentralizedStreams()
@@ -284,14 +286,16 @@ final class RoomReplicationController {
         } catch {
             return await recoverFailedJoin(
                 error,
-                preparedRoomID: preparedRoomID,
+                preparation: preparation,
                 resumesCentralized: resumesCentralized,
                 environment: environment
             )
         }
     }
 
-    private func prepareJoinedRoom(_ invite: IrohRoomInvite, state: PersistedTimerState) throws {
+    private func prepareJoinedRoom(
+        _ invite: IrohRoomInvite, state: PersistedTimerState
+    ) throws -> IrohRoomStore.JoinPreparation {
         try dependencies.roomStore.prepareJoinedRoom(
             roomID: invite.roomID,
             roomSecret: invite.roomSecret,
@@ -309,17 +313,22 @@ final class RoomReplicationController {
 
     private func recoverFailedJoin(
         _ error: Error,
-        preparedRoomID: String?,
+        preparation: IrohRoomStore.JoinPreparation?,
         resumesCentralized: Bool,
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationTransition {
-        await service.stop()
-        if let preparedRoomID {
-            try? dependencies.roomStore.discardUnconflictedInactiveRoom(roomID: preparedRoomID)
+        var message = error.localizedDescription
+        if preparation != nil || mode != .iroh { await service.stop() }
+        if let preparation {
+            do {
+                try dependencies.roomStore.rollbackJoinedRoom(preparation)
+            } catch {
+                message = String(localized: "\(message) Room join rollback failed: \(error.localizedDescription)")
+            }
         }
         if resumesCentralized { resumeCentralized() }
         if mode == .iroh { await startIrohIfNeeded(environment: environment) }
-        return .failed(error.localizedDescription)
+        return .failed(message)
     }
 
     func leaveRoom(

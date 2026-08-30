@@ -40,6 +40,7 @@ final class AppModel {
     private let roomStore: IrohRoomStore
     private let endpointKeyStore: any IrohEndpointKeyStoring
     private let alarmScheduler: any TimerAlarmScheduling
+    private let completionScheduler: TimerCompletionScheduler
     private let retryDelay: Duration
     private let now: () -> Date
     private let uptime: () -> TimeInterval
@@ -53,6 +54,9 @@ final class AppModel {
     private var accountDeletionPurgeState: AccountDeletionPurgeState?
     private var accountDeletionRecord: AccountDeletionJournal.Record?
     @ObservationIgnored private var alarmOperationTask: Task<Void, Never>?
+    @ObservationIgnored private var timerCompletionTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledCompletionTimer: CanonicalTimer?
+    @ObservationIgnored private var timerCompletionSuspensions = 0
     @ObservationIgnored private var centralizedSyncTask: Task<Void, Never>?
     @ObservationIgnored private var centralizedSyncTaskID: UUID?
     @ObservationIgnored private var completionQueuedFor: String?
@@ -92,13 +96,12 @@ final class AppModel {
         roomStore: IrohRoomStore = IrohRoomStore(),
         endpointKeyStore: any IrohEndpointKeyStoring = IrohEndpointKeychainStore(),
         alarmScheduler: (any TimerAlarmScheduling)? = nil,
+        completionScheduler: TimerCompletionScheduler = TimerCompletionScheduler(),
         googleIdentityProvider: any GoogleIdentityProviding = SystemGoogleIdentityProvider(),
         retryDelay: Duration = .seconds(5),
         now: @escaping () -> Date = { .now },
         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-        sharedCoreProvider: @escaping @MainActor () throws -> SharedCore = {
-            try SharedCore.bundled()
-        }
+        sharedCoreProvider: @escaping @MainActor () throws -> SharedCore = { try SharedCore.bundled() }
     ) {
         let startup = Self.makeStartup(
             defaults: defaults, accountDeletionJournal: accountDeletionJournal,
@@ -112,6 +115,7 @@ final class AppModel {
         self.roomStore = roomStore
         self.endpointKeyStore = endpointKeyStore
         self.alarmScheduler = alarmScheduler ?? TimerAlarmScheduler()
+        self.completionScheduler = completionScheduler
         self.retryDelay = retryDelay
         self.now = now
         self.uptime = uptime
@@ -314,6 +318,7 @@ final class AppModel {
 
     deinit {
         alarmOperationTask?.cancel()
+        timerCompletionTask?.cancel()
     }
 
     private func makeRoomReplicationController() -> RoomReplicationController {
@@ -1310,7 +1315,12 @@ final class AppModel {
         guard commitSynchronizedState(
             preparation.state,
             requiringTimerCommandIDs: [preparation.command.id]
-        ) else { return }
+        ) else {
+            guard timerForCompletionDeadline()?.id == timer.id else { return }
+            cancelTimerCompletion()
+            scheduleTimerCompletion(minimumDelay: 5)
+            return
+        }
         completionAlertTimerID = timer.id
         stopCompletionAlertIfTimerStarted()
         scheduleAlarm(for: preparation.automaticBreak)
@@ -1327,6 +1337,68 @@ final class AppModel {
     func completeIfNeeded(timerID: String) {
         guard let date = effectivePhysicalNow() else { return }
         completeIfNeeded(timerID: timerID, at: date)
+    }
+
+    private func cancelTimerCompletion() {
+        timerCompletionTask?.cancel()
+        timerCompletionTask = nil
+        scheduledCompletionTimer = nil
+    }
+
+    private func timerForCompletionDeadline() -> CanonicalTimer? {
+        guard let timer = durableIrohTimerNeedingCompletion else { return canonicalTimer }
+        do {
+            return try timerState.physicalCanonicalTimer(timer)
+        } catch {
+            reportInvalidLocalClock()
+            return nil
+        }
+    }
+
+    private func scheduleTimerCompletion(minimumDelay: TimeInterval = 0) {
+        guard timerCompletionSuspensions == 0, !isWorkspaceMutationBlocked,
+              let timer = timerForCompletionDeadline(),
+              timer.status == .running,
+              completionQueuedFor != timer.id,
+              let date = effectivePhysicalNow() else {
+            cancelTimerCompletion()
+            return
+        }
+        guard scheduledCompletionTimer != timer else { return }
+        cancelTimerCompletion()
+        scheduledCompletionTimer = timer
+        let delay = max(minimumDelay, timer.remaining(at: date))
+        timerCompletionTask = completionScheduler.schedule(after: delay) { [weak self] in
+            self?.timerCompletionDeadlineFired(timerID: timer.id)
+        }
+    }
+
+    private func timerCompletionDeadlineFired(timerID: String) {
+        completeIfNeeded(timerID: timerID)
+        guard let timer = timerForCompletionDeadline(),
+              timer.id == timerID, timer.status == .running,
+              let date = effectivePhysicalNow(), timer.remaining(at: date) > 0 else { return }
+        cancelTimerCompletion()
+        scheduleTimerCompletion()
+    }
+
+    private func reconcileTimerCompletion() {
+        cancelTimerCompletion()
+        scheduleTimerCompletion()
+        guard let timer = scheduledCompletionTimer,
+              let date = effectivePhysicalNow(), timer.remaining(at: date) <= 0 else { return }
+        timerCompletionTask?.cancel()
+        timerCompletionDeadlineFired(timerID: timer.id)
+    }
+
+    private func suspendTimerCompletion() {
+        timerCompletionSuspensions += 1
+        cancelTimerCompletion()
+    }
+
+    private func resumeTimerCompletion() {
+        timerCompletionSuspensions -= 1
+        scheduleTimerCompletion()
     }
 
     func waitForAlarmOperations() async {
@@ -1530,6 +1602,7 @@ final class AppModel {
         guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         completionQueuedFor = nil
+        reconcileTimerCompletion()
         let action = await roomReplicationController.refreshAfterForeground(
             environment: roomReplicationEnvironment
         )
@@ -1540,6 +1613,7 @@ final class AppModel {
         sceneIsActive = active
         guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
+        if active { reconcileTimerCompletion() }
         roomReplicationController.setSceneActive(active, environment: roomReplicationEnvironment)
     }
 
@@ -1554,10 +1628,12 @@ final class AppModel {
         }
         errorMessage = nil
         roomInvite = nil
+        suspendTimerCompletion()
         let transition = await roomReplicationController.changeMode(
             to: mode,
             environment: roomReplicationEnvironment
         )
+        resumeTimerCompletion()
         guard case .modeChanged(let target, let state) = transition else {
             if case .failed(let message) = transition { errorMessage = message }
             return
@@ -1580,10 +1656,12 @@ final class AppModel {
     func createIrohRoom(name rawName: String) async -> Bool {
         guard snapshotLoadFailure == nil else { return false }
         guard accountDeletionPurgeState == nil else { return false }
+        suspendTimerCompletion()
         let transition = await roomReplicationController.createRoom(
             name: rawName,
             environment: roomReplicationEnvironment
         )
+        resumeTimerCompletion()
         guard case .roomCreated(let state, let invite, let status) = transition else {
             if case .failed(let message) = transition { errorMessage = message }
             return false
@@ -1637,10 +1715,12 @@ final class AppModel {
     func joinIrohRoom(inviteText: String) async -> Bool {
         guard snapshotLoadFailure == nil else { return false }
         guard accountDeletionPurgeState == nil else { return false }
+        suspendTimerCompletion()
         let transition = await roomReplicationController.joinRoom(
             inviteText: inviteText,
             environment: roomReplicationEnvironment
         )
+        resumeTimerCompletion()
         guard case .roomJoined(let state) = transition else {
             if case .failed(let message) = transition { errorMessage = message }
             return false
@@ -1673,10 +1753,12 @@ final class AppModel {
               !isLeavingIrohRoom else { return }
         isIrohRoomLeaveConfirmationPresented = false
         isLeavingIrohRoom = true
+        suspendTimerCompletion()
         defer { isLeavingIrohRoom = false }
         let transition = await roomReplicationController.leaveRoom(
             environment: roomReplicationEnvironment
         )
+        resumeTimerCompletion()
         guard case .roomLeft(let state) = transition else {
             if case .failed(let message) = transition { errorMessage = message }
             return
@@ -1992,9 +2074,11 @@ final class AppModel {
         executeAlarmEffects(
             alarmEffectCoordinator.effects(for: publication.effects)
         )
+        scheduleTimerCompletion()
     }
 
     private func installUnreducedBaseSnapshot() {
+        cancelTimerCompletion()
         let publication = statePublisher.fallbackPublication(from: timerState)
         canonicalTimer = publication.canonicalTimer
         history = publication.history
@@ -2387,6 +2471,7 @@ final class AppModel {
         historyResolutionState = publication.historyResolutionState
         localHistoryResolutionCount = publication.localHistoryResolutionCount
         remoteHistoryResolutionCount = publication.remoteHistoryResolutionCount
+        scheduleTimerCompletion()
     }
 
     private func applyCoordinatorEffects(

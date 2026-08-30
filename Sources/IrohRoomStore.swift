@@ -6,6 +6,13 @@ struct AccountDeletionRoomTopology: Equatable, Sendable {
 }
 
 final class IrohRoomStore: @unchecked Sendable {
+    struct JoinPreparation: Sendable {
+        fileprivate let roomID: String
+        fileprivate let original: IrohRoomWorkspace?
+        fileprivate let installedSecret: Bool
+        let alreadyActive: Bool
+    }
+
     private let lock = NSLock()
     private let fileURL: URL
     private let secretStore: any IrohRoomSecretStoring
@@ -265,6 +272,7 @@ final class IrohRoomStore: @unchecked Sendable {
         )
     }
 
+    @discardableResult
     func prepareJoinedRoom(
         roomID: String,
         roomSecret: Data,
@@ -272,7 +280,7 @@ final class IrohRoomStore: @unchecked Sendable {
         returnState: PersistedTimerState,
         initialPeer: IrohPeer,
         now: Date = .now
-    ) throws {
+    ) throws -> JoinPreparation {
         try lock.withLock {
             try ensureAvailableLocked()
             guard IrohProtocolV1.isValidRoomID(roomID),
@@ -280,33 +288,99 @@ final class IrohRoomStore: @unchecked Sendable {
                   IrohProtocolV1.isValidDisplayName(name) else {
                 throw IrohProtocolError.invalidInvite("room metadata is invalid")
             }
+            let original = roomIndexLocked(roomID).map { state.rooms[$0] }
+            try validateJoinLocked(original, roomID: roomID, secret: roomSecret)
+            if state.activeRoomID == roomID {
+                return JoinPreparation(roomID: roomID, original: original,
+                    installedSecret: false, alreadyActive: true)
+            }
+            var workspace = original ?? IrohRoomWorkspace(
+                roomID: roomID, roomSecret: roomSecret, roomName: name,
+                returnState: returnState, roomState: Self.makeRoomDeviceState(from: returnState),
+                peers: [], records: [], conflict: nil, createdAt: now
+            )
+            try refreshJoinPeer(initialPeer, in: &workspace)
             let installedSecret = try installSecretLocked(roomID: roomID, secret: roomSecret)
             do {
                 try committingLocked {
                     if let existingIndex = roomIndexLocked(roomID) {
-                        guard state.activeRoomID != roomID,
-                              state.rooms[existingIndex].genesis == nil,
-                              state.rooms[existingIndex].conflict == nil,
-                              state.rooms[existingIndex].roomSecret == roomSecret else {
-                            throw IrohProtocolError.immutableConflict
-                        }
-                        state.rooms.remove(at: existingIndex)
+                        state.rooms[existingIndex] = workspace
+                    } else {
+                        state.rooms.append(workspace)
                     }
-                    state.rooms.append(IrohRoomWorkspace(
-                        roomID: roomID,
-                        roomSecret: roomSecret,
-                        roomName: name,
-                        returnState: returnState,
-                        roomState: Self.makeRoomDeviceState(from: returnState),
-                        peers: [initialPeer],
-                        records: [],
-                        conflict: nil,
-                        createdAt: now
-                    ))
                 }
             } catch {
-                if installedSecret { try? secretStore.delete(roomID: roomID) }
+                if installedSecret { throw compensatingJoinSecretLocked(roomID: roomID, after: error) }
                 throw error
+            }
+            return JoinPreparation(roomID: roomID, original: original,
+                installedSecret: installedSecret, alreadyActive: false)
+        }
+    }
+
+    private func validateJoinLocked(
+        _ original: IrohRoomWorkspace?, roomID: String, secret: Data
+    ) throws {
+        guard state.activeRoomID == nil || state.activeRoomID == roomID else {
+            throw IrohProtocolError.invalidMessage("Leave the current room before joining another room.")
+        }
+        if let original {
+            guard original.roomSecret == secret, original.conflict == nil else {
+                throw IrohProtocolError.immutableConflict
+            }
+            try Self.validateRecordSet(original.records)
+            if let genesis = original.genesis, !genesis.isValid {
+                throw IrohProtocolError.invalidMessage("retained room genesis is invalid")
+            }
+        }
+        if let stored = try secretStore.load(roomID: roomID), stored != secret {
+            throw IrohProtocolError.immutableConflict
+        }
+        if state.activeRoomID == roomID, original?.genesis == nil {
+            throw IrohProtocolError.invalidMessage("active room has no valid genesis")
+        }
+    }
+
+    private func refreshJoinPeer(_ peer: IrohPeer, in workspace: inout IrohRoomWorkspace) throws {
+        guard peer.endpointTicket.utf8.count <= IrohProtocolV1.maxEndpointTicketBytes,
+              IrohProtocolV1.isValidDisplayName(peer.displayName) else {
+            throw IrohProtocolError.invalidMessage("peer metadata is invalid")
+        }
+        if let index = workspace.peers.firstIndex(where: { $0.endpointID == peer.endpointID }) {
+            workspace.peers[index].endpointTicket = peer.endpointTicket
+            if let deviceID = peer.deviceID { workspace.peers[index].deviceID = deviceID }
+            if let displayName = peer.displayName { workspace.peers[index].displayName = displayName }
+            if let lastSeenAt = peer.lastSeenAt { workspace.peers[index].lastSeenAt = lastSeenAt }
+        } else {
+            guard workspace.peers.count < IrohProtocolV1.maxPeers else {
+                throw IrohProtocolError.limit("room address book contains 64 peers")
+            }
+            workspace.peers.append(peer)
+        }
+    }
+
+    func rollbackJoinedRoom(_ preparation: JoinPreparation) throws {
+        try lock.withLock {
+            try ensureAvailableLocked()
+            guard !preparation.alreadyActive else { return }
+            guard state.activeRoomID != preparation.roomID else {
+                throw IrohProtocolError.invalidMessage("active room cannot be rolled back")
+            }
+            guard let index = roomIndexLocked(preparation.roomID) else {
+                if preparation.installedSecret { try secretStore.delete(roomID: preparation.roomID) }
+                return
+            }
+            let conflict = state.rooms[index].conflict
+            try committingLocked {
+                if var original = preparation.original {
+                    original.conflict = conflict ?? original.conflict
+                    state.rooms[index] = original
+                } else if conflict == nil {
+                    state.rooms.remove(at: index)
+                }
+            }
+            if preparation.installedSecret, conflict == nil {
+                try secretStore.delete(roomID: preparation.roomID)
             }
         }
     }
@@ -318,10 +392,14 @@ final class IrohRoomStore: @unchecked Sendable {
         try lock.withLock {
             try ensureAvailableLocked()
             guard let index = roomIndexLocked(roomID),
-                  state.rooms[index].genesis != nil,
+                  state.rooms[index].genesis?.isValid == true,
                   state.rooms[index].conflict == nil else {
                 throw IrohProtocolError.invalidMessage("joined room has no valid genesis")
             }
+            guard state.activeRoomID == nil || state.activeRoomID == roomID else {
+                throw IrohProtocolError.invalidMessage("Leave the current room before joining another room.")
+            }
+            if state.activeRoomID == roomID { return state.rooms[index].roomState }
             let projected = try IrohRoomProjection.project(state.rooms[index], at: self.now())
             return try committingLocked {
                 state.rooms[index].returnState = returnState
@@ -335,9 +413,11 @@ final class IrohRoomStore: @unchecked Sendable {
     func activateExistingRoom(roomID: String, returnState: PersistedTimerState) throws -> PersistedTimerState {
         try lock.withLock {
             try ensureAvailableLocked()
-            guard let index = roomIndexLocked(roomID), state.rooms[index].conflict == nil else {
+            guard let index = roomIndexLocked(roomID), state.rooms[index].conflict == nil,
+                  state.rooms[index].genesis?.isValid == true else {
                 throw IrohProtocolError.invalidMessage("room is unavailable or requires repair")
             }
+            if state.activeRoomID == roomID { return state.rooms[index].roomState }
             return try committingLocked {
                 state.rooms[index].returnState = returnState
                 state.activeRoomID = roomID
@@ -354,7 +434,8 @@ final class IrohRoomStore: @unchecked Sendable {
             guard state.activeRoomID != roomID else {
                 throw IrohProtocolError.invalidMessage("active room cannot be discarded")
             }
-            guard let index = roomIndexLocked(roomID), state.rooms[index].conflict == nil else { return }
+            guard let index = roomIndexLocked(roomID), state.rooms[index].conflict == nil,
+                  state.rooms[index].genesis == nil else { return }
             try committingLocked { _ = state.rooms.remove(at: index) }
             try secretStore.delete(roomID: roomID)
         }
@@ -759,8 +840,23 @@ final class IrohRoomStore: @unchecked Sendable {
             guard existing == secret else { throw IrohProtocolError.immutableConflict }
             return false
         }
-        try secretStore.save(secret, roomID: roomID)
+        do {
+            try secretStore.save(secret, roomID: roomID)
+        } catch {
+            throw compensatingJoinSecretLocked(roomID: roomID, after: error)
+        }
         return true
+    }
+
+    private func compensatingJoinSecretLocked(roomID: String, after failure: Error) -> Error {
+        do {
+            try secretStore.delete(roomID: roomID)
+            return failure
+        } catch {
+            return IrohProtocolError.unavailable(
+                String(localized: "\(failure.localizedDescription) Room secret cleanup failed: \(error.localizedDescription)")
+            )
+        }
     }
 
     private func persistLocked() throws {

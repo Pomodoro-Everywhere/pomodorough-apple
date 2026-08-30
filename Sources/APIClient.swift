@@ -620,12 +620,7 @@ private extension JSONDecoder.DateDecodingStrategy {
     static var iso8601WithFractionalSeconds: Self {
         .custom { decoder in
             let value = try decoder.singleValueContainer().decode(String.self)
-            let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-            let standard = Date.ISO8601FormatStyle()
-            if let date = try? fractional.parse(value) {
-                return date
-            }
-            if let date = try? standard.parse(value) { return date }
+            if let date = APIDateCodec.parse(value) { return date }
             throw DecodingError.dataCorruptedError(in: try decoder.singleValueContainer(), debugDescription: "Invalid RFC 3339 date")
         }
     }
@@ -635,7 +630,13 @@ private extension JSONEncoder.DateEncodingStrategy {
     static var iso8601WithFractionalSeconds: Self {
         .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+            guard let value = APIDateCodec.string(from: date) else {
+                throw EncodingError.invalidValue(date, .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Date is outside the supported RFC 3339 range"
+                ))
+            }
+            try container.encode(value)
         }
     }
 }

@@ -5,9 +5,9 @@ import unittest
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-CORE_COMMIT = "440f5364f036d02d46abca048f09b893b0134791"
-CORE_RELEASE_TAG = "v0.7.0"
-CORE_SHA256 = "4a58bd2b702e0d43d6f2262d21f7e940dfdf05cc911d6519b67c1b5e988d8b0b"
+CORE_COMMIT = "ca552f64308de254b6c4f70ce5efa1e1f1f4271a"
+CORE_RELEASE_TAG = "v0.8.0"
+CORE_SHA256 = "e7b05b66569ba4e3735b8d935aa0cbdf24f71d17f1c221b84e612e8155f778a8"
 class SharedCoreWorkflowTests(unittest.TestCase):
     def assert_portable_provenance_contract(self, workflow: str) -> None:
         normalized = "\n".join(line.strip() for line in workflow.splitlines())

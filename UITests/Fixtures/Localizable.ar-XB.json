@@ -2,6 +2,18 @@
   "locale": "ar-XB",
   "layoutDirection": "right-to-left",
   "strings": {
+    "%@ Room join rollback failed: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ Room join rollback failed: %@⟧"
+      }
+    },
+    "%@ Room secret cleanup failed: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ Room secret cleanup failed: %@⟧"
+      }
+    },
     "%@ duration": {
       "stringUnit": {
         "state": "translated",

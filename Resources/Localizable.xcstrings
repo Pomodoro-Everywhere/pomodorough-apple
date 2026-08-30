@@ -1,6 +1,26 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ Room join rollback failed: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ Room join rollback failed: %@"
+          }
+        }
+      }
+    },
+    "%@ Room secret cleanup failed: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ Room secret cleanup failed: %@"
+          }
+        }
+      }
+    },
     "%@ duration": {
       "localizations": {
         "en": {

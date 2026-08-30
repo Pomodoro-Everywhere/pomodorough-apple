@@ -7,7 +7,7 @@ struct TimerDial: View {
     let layout: TimerLayout
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+        TimelineView(.periodic(from: .now, by: 0.25)) { _ in
             let elapsed = model.elapsedForDisplay(timer)
             let remaining = model.remainingForDisplay(timer)
             let progress = timer.plannedDuration > 0 ? elapsed / timer.plannedDuration : 0
@@ -18,9 +18,6 @@ struct TimerDial: View {
                 timeText: Self.timeText(remaining),
                 layout: layout
             )
-            .onChange(of: remaining <= 0, initial: true) {
-                if remaining <= 0 { model.completeIfNeeded(timerID: timer.id) }
-            }
         }
     }
 
