@@ -83,23 +83,27 @@ struct IrohServicePositiveIntegrationCoverageTests {
     @Test func incomingMacPeerAuthenticatesAndServesRoomRecords() async throws {
         let fixture = try IrohServiceFixture()
         let session = try await IncomingMacPeerSession.connect(to: fixture)
-        defer { Task { await session.close(service: fixture.service) } }
+        do {
+            let inventory = try await session.requestInventory(roomID: fixture.context.roomID)
+            let genesis = try #require(inventory.entries.first { entry in
+                entry.reference == .init(domain: .genesis, id: "genesis")
+            })
+            let operations = try await session.requestOperations(
+                [genesis.reference],
+                roomID: fixture.context.roomID
+            )
 
-        let inventory = try await session.requestInventory(roomID: fixture.context.roomID)
-        let genesis = try #require(inventory.entries.first { entry in
-            entry.reference == .init(domain: .genesis, id: "genesis")
-        })
-        let operations = try await session.requestOperations(
-            [genesis.reference],
-            roomID: fixture.context.roomID
-        )
-
-        #expect(operations.records.count == 1)
-        #expect(operations.records.first?.domain == .genesis)
-        #expect(try operations.records.first?.digest() == genesis.digest)
-        let peers = try fixture.store.peers(roomID: fixture.context.roomID)
-        #expect(peers.first?.deviceID == "device-macos-peer")
-        #expect(peers.first?.displayName == "Mac peer")
+            #expect(operations.records.count == 1)
+            #expect(operations.records.first?.domain == .genesis)
+            #expect(try operations.records.first?.digest() == genesis.digest)
+            let peers = try fixture.store.peers(roomID: fixture.context.roomID)
+            #expect(peers.first?.deviceID == "device-macos-peer")
+            #expect(peers.first?.displayName == "Mac peer")
+        } catch {
+            await session.close(service: fixture.service)
+            throw error
+        }
+        await session.close(service: fixture.service)
     }
 }
 
@@ -124,30 +128,34 @@ struct IrohServiceNegativeIntegrationCoverageTests {
     @Test func authenticatedMacPeerGetsTypedErrorsAndConnectionRecovers() async throws {
         let fixture = try IrohServiceFixture()
         let session = try await IncomingMacPeerSession.connect(to: fixture)
-        defer { Task { await session.close(service: fixture.service) } }
+        do {
+            let wrongRoom = try await session.request(.inventory(.init(
+                protocolVersion: IrohProtocolV1.version,
+                roomId: try IrohProtocolV1.roomID(for: Data(repeating: 42, count: 32)),
+                requestId: IrohProtocolV1.makeRequestID(),
+                kind: "inventory",
+                after: nil,
+                limit: 1
+            )))
+            let rejectedKind = try await session.request(.hello(try session.peerHello(
+                roomID: fixture.context.roomID,
+                requestID: IrohProtocolV1.makeRequestID()
+            )))
+            let missing = try await session.requestOperationsMessage(
+                [.init(domain: .timer, id: "missing-operation")],
+                roomID: fixture.context.roomID
+            )
 
-        let wrongRoom = try await session.request(.inventory(.init(
-            protocolVersion: IrohProtocolV1.version,
-            roomId: try IrohProtocolV1.roomID(for: Data(repeating: 42, count: 32)),
-            requestId: IrohProtocolV1.makeRequestID(),
-            kind: "inventory",
-            after: nil,
-            limit: 1
-        )))
-        let rejectedKind = try await session.request(.hello(try session.peerHello(
-            roomID: fixture.context.roomID,
-            requestID: IrohProtocolV1.makeRequestID()
-        )))
-        let missing = try await session.requestOperationsMessage(
-            [.init(domain: .timer, id: "missing-operation")],
-            roomID: fixture.context.roomID
-        )
-
-        #expect(errorCode(in: wrongRoom) == .wrongRoom)
-        #expect(errorCode(in: rejectedKind) == .invalidRequest)
-        #expect(errorCode(in: missing) == .notFound)
-        let recovered = try await session.requestInventory(roomID: fixture.context.roomID)
-        #expect(recovered.entries.contains { $0.domain == .genesis })
+            #expect(errorCode(in: wrongRoom) == .wrongRoom)
+            #expect(errorCode(in: rejectedKind) == .invalidRequest)
+            #expect(errorCode(in: missing) == .notFound)
+            let recovered = try await session.requestInventory(roomID: fixture.context.roomID)
+            #expect(recovered.entries.contains { $0.domain == .genesis })
+        } catch {
+            await session.close(service: fixture.service)
+            throw error
+        }
+        await session.close(service: fixture.service)
     }
 
     private func errorCode(in message: IrohRPCMessage) -> IrohErrorCode? {
@@ -269,25 +277,36 @@ private final class IncomingMacPeerSession: @unchecked Sendable {
     }
 
     static func connect(to fixture: IrohServiceFixture) async throws -> IncomingMacPeerSession {
-        let serviceTicket = try await fixture.service.start(fixture.context)
-        let endpoint = try await Endpoint.bind(options: EndpointOptions(
-            preset: presetMinimal(),
-            relayMode: RelayMode.disabled()
-        ))
-        let endpointTicket = try EndpointTicket.fromAddr(addr: endpoint.addr()).description
-        let ticket = try EndpointTicket.fromString(str: serviceTicket)
-        let connection = try await endpoint.connect(
-            addr: ticket.endpointAddr(),
-            alpn: IrohProtocolV1.alpn
-        )
-        let session = IncomingMacPeerSession(
-            endpoint: endpoint,
-            connection: connection,
-            endpointTicket: endpointTicket,
-            secret: fixture.context.roomSecret
-        )
-        try await session.authenticate(roomID: fixture.context.roomID, platform: fixture.context.platform)
-        return session
+        var endpoint: Endpoint?
+        var connection: Connection?
+        do {
+            let serviceTicket = try await fixture.service.start(fixture.context)
+            let bound = try await Endpoint.bind(options: EndpointOptions(
+                preset: presetMinimal(),
+                relayMode: RelayMode.disabled()
+            ))
+            endpoint = bound
+            let endpointTicket = try EndpointTicket.fromAddr(addr: bound.addr()).description
+            let ticket = try EndpointTicket.fromString(str: serviceTicket)
+            let connected = try await bound.connect(
+                addr: ticket.endpointAddr(),
+                alpn: IrohProtocolV1.alpn
+            )
+            connection = connected
+            let session = IncomingMacPeerSession(
+                endpoint: bound,
+                connection: connected,
+                endpointTicket: endpointTicket,
+                secret: fixture.context.roomSecret
+            )
+            try await session.authenticate(roomID: fixture.context.roomID, platform: fixture.context.platform)
+            return session
+        } catch {
+            try? connection?.close(errorCode: 0, reason: Data("connect failed".utf8))
+            try? await endpoint?.close()
+            await fixture.service.stop()
+            throw error
+        }
     }
 
     func peerHello(roomID: String, requestID: String) throws -> IrohHello {

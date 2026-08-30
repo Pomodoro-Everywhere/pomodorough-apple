@@ -1284,33 +1284,47 @@ struct IrohReplicationTests {
             alpns: [IrohProtocolV1.alpn],
             relayMode: RelayMode.disabled()
         ))
-        let client = try await Endpoint.bind(options: EndpointOptions(
-            preset: presetMinimal(),
-            relayMode: RelayMode.disabled()
-        ))
-        let accepting = Task {
-            let incoming = try #require(await server.acceptNext())
-            let connection = try await incoming.accept().connect()
-            #expect(connection.alpn() == IrohProtocolV1.alpn)
-            let stream = try await connection.acceptBi()
-            let body = try await stream.recv().readToEnd(sizeLimit: 64)
-            try await stream.send().writeAll(buf: body)
+        var client: Endpoint?
+        var accepting: Task<Void, Error>?
+        do {
+            let endpoint = try await Endpoint.bind(options: EndpointOptions(
+                preset: presetMinimal(),
+                relayMode: RelayMode.disabled()
+            ))
+            client = endpoint
+            let echo = Task { try await echoTestConnection(on: server) }
+            accepting = echo
+            let connection = try await endpoint.connect(addr: server.addr(), alpn: IrohProtocolV1.alpn)
+            #expect(connection.remoteId() == server.id())
+            let stream = try await connection.openBi()
+            try await stream.send().writeAll(buf: Data("pomodorough".utf8))
             try await stream.send().finish()
-            _ = await connection.closed()
+            #expect(try await stream.recv().readToEnd(sizeLimit: 64) == Data("pomodorough".utf8))
+            try connection.close(errorCode: 0, reason: Data("test complete".utf8))
+            try await echo.value
+            try await endpoint.close()
+            try await server.close()
+            #expect(endpoint.isClosed())
+            #expect(server.isClosed())
+        } catch {
+            accepting?.cancel()
+            try? await client?.close()
+            try? await server.close()
+            _ = await accepting?.result
+            throw error
         }
+    }
 
-        let connection = try await client.connect(addr: server.addr(), alpn: IrohProtocolV1.alpn)
-        #expect(connection.remoteId() == server.id())
-        let stream = try await connection.openBi()
-        try await stream.send().writeAll(buf: Data("pomodorough".utf8))
+    private func echoTestConnection(on server: Endpoint) async throws {
+        let incoming = try #require(await server.acceptNext())
+        let connection = try await incoming.accept().connect()
+        defer { try? connection.close(errorCode: 0, reason: Data("echo complete".utf8)) }
+        #expect(connection.alpn() == IrohProtocolV1.alpn)
+        let stream = try await connection.acceptBi()
+        let body = try await stream.recv().readToEnd(sizeLimit: 64)
+        try await stream.send().writeAll(buf: body)
         try await stream.send().finish()
-        #expect(try await stream.recv().readToEnd(sizeLimit: 64) == Data("pomodorough".utf8))
-        try connection.close(errorCode: 0, reason: Data("test complete".utf8))
-        try await accepting.value
-        try await client.close()
-        try await server.close()
-        #expect(client.isClosed())
-        #expect(server.isClosed())
+        _ = await connection.closed()
     }
 
     #if os(macOS)
@@ -1442,112 +1456,140 @@ struct IrohReplicationTests {
             statusHandler: { _ in },
             projectionHandler: { _, _ in }
         )
-        _ = try await service.start(IrohServiceContext(
-            roomID: roomID,
-            roomSecret: secret,
-            deviceID: "device-client01",
-            displayName: nil,
-            platform: "ios"
-        ))
-        defer { Task { await service.stop() } }
+        do {
+            _ = try await service.start(IrohServiceContext(
+                roomID: roomID,
+                roomSecret: secret,
+                deviceID: "device-client01",
+                displayName: nil,
+                platform: "ios"
+            ))
+            try await exerciseDialingServicePeer(service, roomID: roomID, secret: secret)
+        } catch {
+            await service.stop()
+            throw error
+        }
+        await service.stop()
+    }
 
+    private func exerciseDialingServicePeer(
+        _ service: IrohReplicationService,
+        roomID: String,
+        secret: Data
+    ) async throws {
         let peer = try await Endpoint.bind(options: EndpointOptions(
             preset: presetMinimal(),
             alpns: [IrohProtocolV1.alpn],
             relayMode: RelayMode.disabled()
         ))
-        defer { Task { try? await peer.close() } }
-        let peerTicket = try EndpointTicket.fromAddr(addr: peer.addr()).description
-        let invite = try IrohRoomInvite(
-            roomID: roomID,
-            roomName: nil,
-            endpointTicket: peerTicket,
-            roomSecret: secret
-        )
-
-        let peerTask = Task { () -> Error? in
-            do {
-                let incoming = try #require(await peer.acceptNext())
-                let connection = try await incoming.accept().connect()
-                let helloStream = try await connection.acceptBi()
-                let hello = try await readTestMessage(from: helloStream.recv(), secret: secret)
-                guard case .hello(let request) = hello else {
-                    Issue.record("Expected hello")
-                    return nil
-                }
-                try await writeTestMessage(
-                    .hello(IrohHello(
-                        protocolVersion: IrohProtocolV1.version,
-                        roomId: roomID,
-                        requestId: request.requestId,
-                        kind: "hello",
-                        deviceId: "device-peer0001",
-                        endpointTicket: peerTicket,
-                        platform: "linux",
-                        displayName: nil
-                    )),
-                    to: helloStream.send(),
-                    secret: secret
-                )
-
-                let clientRequestStream = try await connection.acceptBi()
-                let clientRequest = try await readTestMessage(from: clientRequestStream.recv(), secret: secret)
-                guard case .inventory(let inventoryRequest) = clientRequest else {
-                    Issue.record("Expected client inventory request")
-                    return nil
-                }
-
-                let reverseRequestID = try IrohProtocolV1.makeRequestID()
-                let reverseStream = try await connection.openBi()
-                try await writeTestMessage(
-                    .inventory(IrohInventoryRequest(
-                        protocolVersion: IrohProtocolV1.version,
-                        roomId: roomID,
-                        requestId: reverseRequestID,
-                        kind: "inventory",
-                        after: nil,
-                        limit: IrohProtocolV1.maxInventoryEntries
-                    )),
-                    to: reverseStream.send(),
-                    secret: secret
-                )
-                let reverseResponse = try await readTestMessage(from: reverseStream.recv(), secret: secret)
-                guard case .inventoryResult(let inventory) = reverseResponse else {
-                    Issue.record("Expected reverse inventory response")
-                    return nil
-                }
-                #expect(inventory.requestId == reverseRequestID)
-                #expect(inventory.entries.contains { $0.domain == .genesis && $0.id == "genesis" })
-
-                try await writeTestMessage(
-                    .inventoryResult(IrohInventoryResult(
-                        protocolVersion: IrohProtocolV1.version,
-                        roomId: roomID,
-                        requestId: inventoryRequest.requestId,
-                        kind: "inventoryResult",
-                        entries: [],
-                        next: nil
-                    )),
-                    to: clientRequestStream.send(),
-                    secret: secret
-                )
-                _ = await connection.closed()
-                return nil
-            } catch {
-                return error
-            }
-        }
-
         do {
-            try await service.join(invite: invite)
+            let peerTicket = try EndpointTicket.fromAddr(addr: peer.addr()).description
+            let invite = try IrohRoomInvite(
+                roomID: roomID,
+                roomName: nil,
+                endpointTicket: peerTicket,
+                roomSecret: secret
+            )
+            let peerTask = Task { () -> Error? in
+                do {
+                    try await serveDialingServicePeer(peer, invite: invite)
+                    return nil
+                } catch {
+                    return error
+                }
+            }
+            do {
+                try await service.join(invite: invite)
+            } catch {
+                Issue.record("Service join failed: \(error)")
+                peerTask.cancel()
+                try? await peer.close()
+                await service.stop()
+            }
+            if let error = await peerTask.value {
+                Issue.record("Peer RPC failed: \(error)")
+            }
         } catch {
-            Issue.record("Service join failed: \(error)")
+            try? await peer.close()
+            throw error
         }
-        if let error = await peerTask.value {
-            Issue.record("Peer RPC failed: \(error)")
-        }
-        await service.stop()
         try? await peer.close()
+    }
+
+    private func serveDialingServicePeer(_ peer: Endpoint, invite: IrohRoomInvite) async throws {
+        let incoming = try #require(await peer.acceptNext())
+        let connection = try await incoming.accept().connect()
+        defer { try? connection.close(errorCode: 0, reason: Data("peer complete".utf8)) }
+        guard try await authenticateDialingServicePeer(connection, invite: invite) else { return }
+        let clientRequestStream = try await connection.acceptBi()
+        let clientRequest = try await readTestMessage(from: clientRequestStream.recv(), secret: invite.roomSecret)
+        guard case .inventory(let inventoryRequest) = clientRequest else {
+            Issue.record("Expected client inventory request")
+            return
+        }
+        guard try await expectReverseInventory(connection, invite: invite) else { return }
+        try await writeTestMessage(
+            .inventoryResult(IrohInventoryResult(
+                protocolVersion: IrohProtocolV1.version,
+                roomId: invite.roomID,
+                requestId: inventoryRequest.requestId,
+                kind: "inventoryResult",
+                entries: [],
+                next: nil
+            )),
+            to: clientRequestStream.send(),
+            secret: invite.roomSecret
+        )
+        _ = await connection.closed()
+    }
+
+    private func authenticateDialingServicePeer(_ connection: Connection, invite: IrohRoomInvite) async throws -> Bool {
+        let helloStream = try await connection.acceptBi()
+        let hello = try await readTestMessage(from: helloStream.recv(), secret: invite.roomSecret)
+        guard case .hello(let request) = hello else {
+            Issue.record("Expected hello")
+            return false
+        }
+        try await writeTestMessage(
+            .hello(IrohHello(
+                protocolVersion: IrohProtocolV1.version,
+                roomId: invite.roomID,
+                requestId: request.requestId,
+                kind: "hello",
+                deviceId: "device-peer0001",
+                endpointTicket: invite.endpointTicket,
+                platform: "linux",
+                displayName: nil
+            )),
+            to: helloStream.send(),
+            secret: invite.roomSecret
+        )
+        return true
+    }
+
+    private func expectReverseInventory(_ connection: Connection, invite: IrohRoomInvite) async throws -> Bool {
+        let reverseRequestID = try IrohProtocolV1.makeRequestID()
+        let reverseStream = try await connection.openBi()
+        try await writeTestMessage(
+            .inventory(IrohInventoryRequest(
+                protocolVersion: IrohProtocolV1.version,
+                roomId: invite.roomID,
+                requestId: reverseRequestID,
+                kind: "inventory",
+                after: nil,
+                limit: IrohProtocolV1.maxInventoryEntries
+            )),
+            to: reverseStream.send(),
+            secret: invite.roomSecret
+        )
+        let reverseResponse = try await readTestMessage(from: reverseStream.recv(), secret: invite.roomSecret)
+        guard case .inventoryResult(let inventory) = reverseResponse else {
+            Issue.record("Expected reverse inventory response")
+            return false
+        }
+        #expect(inventory.requestId == reverseRequestID)
+        #expect(inventory.entries.contains { $0.domain == .genesis && $0.id == "genesis" })
+        return true
     }
 
     @Test func roomStoreIsIdempotentAndPersistsImmutableConflict() throws {
