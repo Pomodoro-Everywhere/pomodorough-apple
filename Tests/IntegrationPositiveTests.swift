@@ -7,9 +7,10 @@ struct IntegrationPositiveTests {
     @Test @MainActor
     func appModelSignInUsesInjectedGoogleIdentityProvider() async throws {
         let scenario = "apple-api-coverage-model-sign-in"
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
         let store = RecordingTokenStore()
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: store)
+        let session = logoutSession.session
+        defer { logoutSession.invalidateIfDrained() }
         let identity = RecordingGoogleIdentityProvider()
         identity.identityTokenResult = .success("injected-id-token")
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
@@ -25,39 +26,42 @@ struct IntegrationPositiveTests {
             googleIdentityProvider: identity
         )
 
-        model.signIn()
-        for _ in 0..<200 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await logoutSession.run(model: model) {
+            model.signIn()
+            for _ in 0..<200 where model.isWorking {
+                try await Task.sleep(for: .milliseconds(10))
+            }
 
-        #expect(!model.isWorking)
-        #expect(identity.nonces == ["model-nonce"])
-        #expect(model.user == TestFixtures.user)
-        let exchange = try #require(TestFixtures.recordedRequests(for: scenario).first {
-            $0.path == "/api/v1/auth/google/exchange"
-        })
-        let body = try #require(exchange.body)
-        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(object["idToken"] as? String == "injected-id-token")
-        #expect(object["challenge"] as? String == "model-challenge")
+            #expect(!model.isWorking)
+            #expect(identity.nonces == ["model-nonce"])
+            #expect(model.user == TestFixtures.user)
+            let exchange = try #require(TestFixtures.recordedRequests(for: scenario).first {
+                $0.path == "/api/v1/auth/google/exchange"
+            })
+            let body = try #require(exchange.body)
+            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(object["idToken"] as? String == "injected-id-token")
+            #expect(object["challenge"] as? String == "model-challenge")
 
-        let callback = try #require(URL(string: "com.example:/oauth2callback?code=value"))
-        #expect(PomodoroughApp.handleGoogleSignInURL(callback, model: model))
-        #expect(identity.handledURLs == [callback])
-        model.signOut()
-        for _ in 0..<200 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(10))
+            let callback = try #require(URL(string: "com.example:/oauth2callback?code=value"))
+            #expect(PomodoroughApp.handleGoogleSignInURL(callback, model: model))
+            #expect(identity.handledURLs == [callback])
+            model.signOut()
+            for _ in 0..<200 where model.isWorking {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(!model.isWorking)
+            #expect(identity.signOutCount == 1)
         }
-        #expect(!model.isWorking)
-        #expect(identity.signOutCount == 1)
     }
 
     @Test @MainActor
     func localSignOutPublishesDespiteActiveCredentialDeleteFailure() async throws {
         let scenario = "apple-api-coverage-model-local-signout"
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
         let store = RecordingTokenStore(failures: [.delete])
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: store)
+        let session = logoutSession.session
+        defer { logoutSession.invalidateIfDrained() }
         let identity = RecordingGoogleIdentityProvider()
         identity.identityTokenResult = .success("injected-id-token")
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
@@ -73,33 +77,124 @@ struct IntegrationPositiveTests {
             googleIdentityProvider: identity
         )
 
-        model.signIn()
-        for _ in 0..<200 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(model.isSignedIn)
+        try await logoutSession.run(model: model, cleanup: { store.setFailures([]) }) {
+            model.signIn()
+            for _ in 0..<200 where model.isWorking {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.isSignedIn)
 
-        model.signOut()
-        for _ in 0..<200 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-
-        #expect(model.sessionState == .localOnly)
-        #expect(model.user == nil)
-        #expect(model.errorMessage == nil)
-        #expect(identity.signOutCount == 1)
-        let pending: [LogoutRevocationObligation] = try store.load()
-        #expect(!pending.isEmpty)
-        #expect(store.tokens != nil)
-        store.setFailures([])
-        for _ in 0..<600 {
+            model.signOut()
+            for _ in 0..<200 where model.isWorking {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.sessionState == .localOnly)
+            #expect(model.user == nil)
+            #expect(model.errorMessage == nil)
+            #expect(identity.signOutCount == 1)
+            let pending: [LogoutRevocationObligation] = try store.load()
+            #expect(!pending.isEmpty)
+            #expect(store.tokens != nil)
+            store.setFailures([])
+            for _ in 0..<600 {
+                let remaining: [LogoutRevocationObligation] = try store.load()
+                if remaining.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
             let remaining: [LogoutRevocationObligation] = try store.load()
-            if remaining.isEmpty { break }
-            try await Task.sleep(for: .milliseconds(10))
+            #expect(remaining.isEmpty)
+            #expect(store.tokens == nil)
         }
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func logoutFixtureDrainsGatedRevocationBeforeInvalidatingSession(_ throwsBeforeResponse: Bool) async throws {
+        let scenario = "apple-api-coverage-model-logout-gated-\(throwsBeforeResponse)"
+        let store = RecordingTokenStore(tokens: StaticTokenStore().tokens)
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: store)
+        defer { logoutSession.invalidateIfDrained() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: logoutSession.session, keychain: store),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+
+        do {
+            try await logoutSession.run(model: model) {
+                await model.restore()
+                try #require(model.isSignedIn)
+                model.signOut()
+                try await requireHeldLogout(model, store: store, logoutSession: logoutSession)
+                if throwsBeforeResponse { throw LogoutFixtureProbe.beforeResponse }
+            }
+            #expect(!throwsBeforeResponse)
+        } catch LogoutFixtureProbe.beforeResponse {
+            #expect(throwsBeforeResponse)
+        }
+
         let remaining: [LogoutRevocationObligation] = try store.load()
         #expect(remaining.isEmpty)
         #expect(store.tokens == nil)
+        #expect(logoutSession.isInvalidated)
+        #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/auth/logout" } == 1)
+        let events = TestFixtures.lifecycleEvents(for: scenario).filter { $0.hasPrefix("logout ") }
+        #expect(events == ["logout response completed", "logout queue drained", "logout session invalidated"])
+    }
+
+    @Test @MainActor
+    func logoutFixtureJoinsGatedRestoreWhenBodyThrowsBeforeSignOut() async throws {
+        let scenario = "apple-api-coverage-model-restore-gated-throw"
+        let store = RecordingTokenStore(tokens: StaticTokenStore().tokens)
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: store)
+        defer { logoutSession.invalidateIfDrained() }
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            api: APIClient(session: logoutSession.session, keychain: store),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        let restoreTask = Task {
+            await model.restore()
+            #expect(!logoutSession.isInvalidated)
+            StubRequestRecorder.shared.recordLifecycle("logout restoration completed", scenario: scenario)
+        }
+        do {
+            try await logoutSession.run(model: model, joining: restoreTask) {
+                let reachedServer = await TestFixtures.waitForRequest(in: scenario, path: "/api/v1/sync")
+                try #require(reachedServer, "Timed out waiting for gated restore request")
+                #expect(!model.isWorking)
+                #expect(!logoutSession.isInvalidated)
+                let pending: [LogoutRevocationObligation] = try store.load()
+                try #require(pending.isEmpty)
+                #expect(TestFixtures.lifecycleEvents(for: scenario).allSatisfy { !$0.hasPrefix("logout ") })
+                throw LogoutFixtureProbe.beforeSignOut
+            }
+            Issue.record("Expected the body to throw before sign-out")
+        } catch LogoutFixtureProbe.beforeSignOut {
+            #expect(logoutSession.isInvalidated)
+        }
+        let remaining: [LogoutRevocationObligation] = try store.load()
+        #expect(remaining.isEmpty)
+        #expect(store.tokens != nil)
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy { $0.path != "/api/v1/auth/logout" })
+        let events = TestFixtures.lifecycleEvents(for: scenario).filter { $0.hasPrefix("logout ") }
+        #expect(events == [
+            "logout restore response completed", "logout restoration completed", "logout restoration joined",
+            "logout queue drained", "logout session invalidated"
+        ])
     }
 
     @Test @MainActor
@@ -153,8 +248,10 @@ struct IntegrationPositiveTests {
     @Test @MainActor
     func cancellingAccountSwitchKeepsPreviousWorkspaceAndClearsDurablePrompt() async throws {
         let scenario = "apple-api-coverage-model-sign-in"
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
+        let store = RecordingTokenStore()
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: store)
+        let session = logoutSession.session
+        defer { logoutSession.invalidateIfDrained() }
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -166,25 +263,27 @@ struct IntegrationPositiveTests {
         state.knownTasks = [oldTask]
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let model = AppModel(
-            api: APIClient(session: session, keychain: RecordingTokenStore()),
+            api: APIClient(session: session, keychain: store),
             defaults: defaults,
             alarmScheduler: RecordingAlarmScheduler(),
             googleIdentityProvider: RecordingGoogleIdentityProvider()
         )
-        model.signIn()
-        for _ in 0..<200 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(10))
+        try await logoutSession.run(model: model) {
+            model.signIn()
+            for _ in 0..<200 where model.isWorking {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+
+            await model.cancelAccountSwitch()
+
+            #expect(model.sessionState == .localOnly)
+            #expect(model.tasks == [oldTask])
+            #expect(try persistedState(defaults).pendingAccountSwitchUser == nil)
+            let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+            #expect(relaunched.tasks == [oldTask])
+            #expect(relaunched.pendingAccountSwitchUser == nil)
+            #expect(await relaunched.addTask("Local work resumes"))
         }
-
-        await model.cancelAccountSwitch()
-
-        #expect(model.sessionState == .localOnly)
-        #expect(model.tasks == [oldTask])
-        #expect(try persistedState(defaults).pendingAccountSwitchUser == nil)
-        let relaunched = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
-        #expect(relaunched.tasks == [oldTask])
-        #expect(relaunched.pendingAccountSwitchUser == nil)
-        #expect(await relaunched.addTask("Local work resumes"))
     }
 
     @Test @MainActor
@@ -2489,50 +2588,54 @@ struct IntegrationPositiveTests {
         oldState.knownTasks = [oldTask]
         oldState.pendingTaskOperations = [oldOperation]
         defaults.set(try JSONEncoder.api.encode(oldState), forKey: "timer-state-v2")
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
+        let store = StaticTokenStore()
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: store)
+        let session = logoutSession.session
+        defer { logoutSession.invalidateIfDrained() }
         let model = AppModel(
-            api: APIClient(session: session, keychain: StaticTokenStore()),
+            api: APIClient(session: session, keychain: store),
             defaults: defaults,
             alarmScheduler: RecordingAlarmScheduler()
         )
 
         let restoreTask = Task { await model.restore() }
-        let reachedServer = await TestFixtures.waitForRequest(
-            in: scenario,
-            path: "/api/v1/sync"
-        )
-        try #require(reachedServer, "Timed out waiting for stale account response")
-        model.signOut()
-        for _ in 0..<200 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(10))
+        try await logoutSession.run(model: model, joining: restoreTask) {
+            let reachedServer = await TestFixtures.waitForRequest(
+                in: scenario,
+                path: "/api/v1/sync"
+            )
+            try #require(reachedServer, "Timed out waiting for stale account response")
+            model.signOut()
+            for _ in 0..<200 where model.isWorking {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(!model.isWorking)
+
+            let newUser = User(id: "user-b", email: "b@example.com", name: "B", avatarUrl: "")
+            let newTask = try #require(FocusTask(title: "New account task"))
+            let newOperation = TaskOperation(
+                id: "task-operation-new-account",
+                taskId: newTask.id.uuidString.lowercased(),
+                type: .upsert,
+                title: newTask.title,
+                occurredAt: TestFixtures.anchor,
+                hlcWallMs: 2_000_001,
+                hlcCounter: 0
+            )
+            var newState = PersistedTimerState.fresh()
+            newState.cachedUser = newUser
+            newState.knownTasks = [newTask]
+            newState.pendingTaskOperations = [newOperation]
+            defaults.set(try JSONEncoder.api.encode(newState), forKey: "timer-state-v2")
+
+            TestFixtures.releaseScenario(scenario)
+            await restoreTask.value
+
+            #expect(try persistedState(defaults) == newState)
+            let reopened = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+            #expect(reopened.tasks == [newTask])
+            #expect(reopened.pendingChangeCount == 1)
         }
-        #expect(!model.isWorking)
-
-        let newUser = User(id: "user-b", email: "b@example.com", name: "B", avatarUrl: "")
-        let newTask = try #require(FocusTask(title: "New account task"))
-        let newOperation = TaskOperation(
-            id: "task-operation-new-account",
-            taskId: newTask.id.uuidString.lowercased(),
-            type: .upsert,
-            title: newTask.title,
-            occurredAt: TestFixtures.anchor,
-            hlcWallMs: 2_000_001,
-            hlcCounter: 0
-        )
-        var newState = PersistedTimerState.fresh()
-        newState.cachedUser = newUser
-        newState.knownTasks = [newTask]
-        newState.pendingTaskOperations = [newOperation]
-        defaults.set(try JSONEncoder.api.encode(newState), forKey: "timer-state-v2")
-
-        TestFixtures.releaseScenario(scenario)
-        await restoreTask.value
-
-        #expect(try persistedState(defaults) == newState)
-        let reopened = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
-        #expect(reopened.tasks == [newTask])
-        #expect(reopened.pendingChangeCount == 1)
     }
 
     @Test @MainActor
@@ -4416,6 +4519,36 @@ struct IntegrationPositiveTests {
         #expect(try persistedState(defaults).pendingAutoStartOperations.isEmpty)
         #expect(model.errorMessage == nil)
         #expect(model.conflictMessage == (outcome == "rejected" ? "lost race" : nil))
+    }
+
+    private enum LogoutFixtureProbe: Error {
+        case beforeResponse
+        case beforeSignOut
+    }
+
+    @MainActor
+    private func requireHeldLogout(
+        _ model: AppModel,
+        store: RecordingTokenStore,
+        logoutSession: LogoutRevocationTestSession
+    ) async throws {
+        let reachedServer = await TestFixtures.waitForRequest(
+            in: logoutSession.scenario, path: "/api/v1/auth/logout"
+        )
+        try #require(reachedServer, "Timed out waiting for gated logout request")
+        for _ in 0..<200 where model.isWorking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!model.isWorking)
+        #expect(model.sessionState == .localOnly)
+        #expect(model.user == nil)
+        #expect(!logoutSession.isInvalidated)
+        let pending: [LogoutRevocationObligation] = try store.load()
+        try #require(pending.count == 1)
+        #expect(!pending[0].remoteRevocationCompleted)
+        #expect(TestFixtures.lifecycleEvents(for: logoutSession.scenario).allSatisfy {
+            $0 != "logout response completed"
+        })
     }
 
     private func bootstrapState(hasLocalHistory: Bool) throws -> PersistedTimerState {

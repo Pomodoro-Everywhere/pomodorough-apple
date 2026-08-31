@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Security
+import Testing
 @testable import Pomodorough
 
 enum TestFixtures {
@@ -245,6 +246,68 @@ enum TestFixtures {
 
     static func releaseScenario(_ scenario: String) {
         StubScenarioGate.shared.release(scenario: scenario)
+    }
+}
+
+@MainActor
+final class LogoutRevocationTestSession {
+    let scenario: String
+    let session: URLSession
+    private let store: any LogoutRevocationStoring
+    private var needsDrain = false
+    private(set) var isInvalidated = false
+
+    init(scenario: String, store: any LogoutRevocationStoring) {
+        self.scenario = scenario
+        self.store = store
+        session = TestFixtures.session(for: scenario)
+    }
+
+    func run(
+        model: AppModel,
+        joining restoreTask: Task<Void, Never>? = nil,
+        cleanup: () -> Void = {},
+        operation: () async throws -> Void
+    ) async throws {
+        needsDrain = true
+        var operationError: (any Error)?
+        do {
+            try await operation()
+        } catch {
+            operationError = error
+        }
+        TestFixtures.releaseScenario(scenario)
+        if let restoreTask {
+            await restoreTask.value
+            StubRequestRecorder.shared.recordLifecycle("logout restoration joined", scenario: scenario)
+        }
+        cleanup()
+        do {
+            try await Task { @MainActor in try await self.drain(model) }.value
+            needsDrain = false
+            StubRequestRecorder.shared.recordLifecycle("logout queue drained", scenario: scenario)
+            invalidateIfDrained()
+        } catch {
+            Issue.record(error)
+        }
+        if let operationError { throw operationError }
+    }
+
+    func invalidateIfDrained() {
+        guard !needsDrain, !isInvalidated else { return }
+        session.invalidateAndCancel()
+        isInvalidated = true
+        StubRequestRecorder.shared.recordLifecycle("logout session invalidated", scenario: scenario)
+    }
+
+    private func drain(_ model: AppModel) async throws {
+        for _ in 0..<600 {
+            let remaining = try store.load()
+            if !model.isWorking, remaining.isEmpty { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let remaining = try store.load()
+        try #require(!model.isWorking && remaining.isEmpty, "Logout fixture did not drain before teardown")
     }
 }
 
@@ -1092,6 +1155,18 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         let body: Data
         let path = request.url?.path
 
+        if let scenario, scenario.hasPrefix("apple-api-coverage-model-logout-gated-"),
+           request.httpMethod == "POST", path == "/api/v1/auth/logout" {
+            DispatchQueue.global().async { self.loadGatedLogout(scenario: scenario) }
+            return
+        }
+
+        if let scenario, scenario.hasPrefix("apple-api-coverage-model-restore-gated-"),
+           request.httpMethod == "POST", path == "/api/v1/sync" {
+            DispatchQueue.global().async { self.loadGatedRestore(scenario: scenario) }
+            return
+        }
+
         if scenario == "sync-account-deletion-stale",
            request.httpMethod == "POST", path == "/api/v1/sync" {
             DispatchQueue.global().async { self.loadGatedAccountDeletionSync() }
@@ -1401,6 +1476,38 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         StubScenarioGate.shared.wakeWaiters()
     }
 
+    private func loadGatedLogout(scenario: String) {
+        guard StubScenarioGate.shared.wait(
+            scenario: scenario,
+            isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+        ) else { return }
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil
+        )!
+        _ = deliverIfLoading {
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            StubRequestRecorder.shared.recordLifecycle("logout response completed", scenario: scenario)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    private func loadGatedRestore(scenario: String) {
+        guard StubScenarioGate.shared.wait(
+            scenario: scenario,
+            isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+        ) else { return }
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        _ = deliverIfLoading {
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Self.syncResponse(revision: 0, history: []))
+            StubRequestRecorder.shared.recordLifecycle("logout restore response completed", scenario: scenario)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
     private func loadGatedAccountDeletionSync() {
         let scenario = "sync-account-deletion-stale"
         guard StubScenarioGate.shared.wait(
@@ -1443,6 +1550,15 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         var contentType = "application/json"
 
         switch (scenario, path) {
+        case let (scenario, "/api/v1/me") where scenario.hasPrefix("apple-api-coverage-model-restore-gated-"):
+            statusCode = 200
+            body = Self.meBody
+        case let (scenario, "/api/v1/me") where scenario.hasPrefix("apple-api-coverage-model-logout-gated-"):
+            statusCode = 200
+            body = Self.meBody
+        case let (scenario, "/api/v1/sync") where scenario.hasPrefix("apple-api-coverage-model-logout-gated-"):
+            statusCode = 200
+            body = Self.syncResponse(revision: 0, history: [])
         case ("apple-api-coverage-stream-unauthorized", "/api/v1/stream"):
             statusCode = 401
             contentType = "text/event-stream"
