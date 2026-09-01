@@ -28,25 +28,25 @@ struct SharedCoreWASMTests {
         let counter: Int64
     }
 
-    @Test func coreVersionDispatchesThroughBundledWebAssembly() async throws {
+    @Test func coreVersionDispatchesThroughBundledWebAssembly() throws {
         let core = try SharedCore.bundled()
 
-        let version = try await core.dispatch(
+        let version = try core.dispatch(
             "core.version",
             inputJSON: Data("{}".utf8),
             as: CoreVersion.self
         )
 
-        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.9.0"))
+        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.10.0"))
     }
 
-    @Test func hlcHeadDispatchesThroughBundledWebAssembly() async throws {
+    @Test func hlcHeadDispatchesThroughBundledWebAssembly() throws {
         let core = try SharedCore.bundled()
         let input = Data(
             #"{"physicalNowMs":100,"observed":[{"wallMs":101,"counter":2},{"wallMs":101,"counter":7},{"wallMs":99,"counter":99}]}"#.utf8
         )
 
-        let head = try await core.dispatch(
+        let head = try core.dispatch(
             "hlc.head.v1",
             inputJSON: input,
             as: HLCHead.self
@@ -105,20 +105,20 @@ struct SharedCoreWASMTests {
         #expect(try freeStatus(free, pointer: 0, length: 8) == 0)
     }
 
-    @Test func selectedTaskClassifyPreservesOmissionNullAndValue() async throws {
+    @Test func selectedTaskClassifyPreservesOmissionNullAndValue() throws {
         let core = try SharedCore.bundled()
 
-        let omitted = try await core.dispatch(
+        let omitted = try core.dispatch(
             "selectedTask.classify",
             inputJSON: Data(#"{}"#.utf8),
             as: String.self
         )
-        let deselected = try await core.dispatch(
+        let deselected = try core.dispatch(
             "selectedTask.classify",
             inputJSON: Data(#"{"selectedTaskId":null}"#.utf8),
             as: String.self
         )
-        let selected = try await core.dispatch(
+        let selected = try core.dispatch(
             "selectedTask.classify",
             inputJSON: Data(#"{"selectedTaskId":"33f9d32c-a7ee-8aa9-897a-13e19bc4e5d4"}"#.utf8),
             as: String.self
@@ -129,18 +129,18 @@ struct SharedCoreWASMTests {
         #expect(selected == "selected:33f9d32c-a7ee-8aa9-897a-13e19bc4e5d4")
     }
 
-    @Test func rejectsEmptyOperationAndInputBeforeEnteringTheABI() async throws {
+    @Test func rejectsEmptyOperationAndInputBeforeEnteringTheABI() throws {
         let core = try SharedCore.bundled()
 
-        await #expect(throws: SharedCoreError.self) {
-            let _: CoreVersion = try await core.dispatch(
+        #expect(throws: SharedCoreError.self) {
+            let _: CoreVersion = try core.dispatch(
                 "",
                 inputJSON: Data("{}".utf8),
                 as: CoreVersion.self
             )
         }
-        await #expect(throws: SharedCoreError.self) {
-            let _: CoreVersion = try await core.dispatch(
+        #expect(throws: SharedCoreError.self) {
+            let _: CoreVersion = try core.dispatch(
                 "core.version",
                 inputJSON: Data(),
                 as: CoreVersion.self
@@ -148,7 +148,7 @@ struct SharedCoreWASMTests {
         }
     }
 
-    @Test func rejectsModuleWhoseDigestDoesNotMatchThePinnedArtifact() async throws {
+    @Test func rejectsModuleWhoseDigestDoesNotMatchThePinnedArtifact() throws {
         let source = try SharedCore.bundledModuleURL()
         var bytes = try Data(contentsOf: source)
         bytes[bytes.index(before: bytes.endIndex)] ^= 1
@@ -159,8 +159,8 @@ struct SharedCoreWASMTests {
         defer { try? FileManager.default.removeItem(at: target) }
 
         let core = SharedCore(moduleURL: target)
-        await #expect(throws: SharedCoreError.self) {
-            let _: CoreVersion = try await core.dispatch(
+        #expect(throws: SharedCoreError.self) {
+            let _: CoreVersion = try core.dispatch(
                 "core.version",
                 inputJSON: Data("{}".utf8),
                 as: CoreVersion.self

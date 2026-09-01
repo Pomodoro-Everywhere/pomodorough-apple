@@ -17,17 +17,20 @@ final class IrohRoomStore: @unchecked Sendable {
     private let fileURL: URL
     private let secretStore: any IrohRoomSecretStoring
     private let now: () -> Date
+    private let durableStore: AtomicDurableFileStore
     private var state: IrohReplicationState
     private var loadError: String?
 
     init(
         fileURL: URL = IrohRoomStore.defaultFileURL(),
         secretStore: any IrohRoomSecretStoring = IrohRoomSecretKeychainStore(),
-        now: @escaping () -> Date = { .now }
+        now: @escaping () -> Date = { .now },
+        durableStore: AtomicDurableFileStore? = nil
     ) {
         self.fileURL = fileURL
         self.secretStore = secretStore
         self.now = now
+        self.durableStore = durableStore ?? AtomicDurableFileStore(fileURL: fileURL)
         state = .empty
         do {
             if FileManager.default.fileExists(atPath: fileURL.path) {
@@ -57,13 +60,13 @@ final class IrohRoomStore: @unchecked Sendable {
                     }
                     state.rooms[index].roomSecret = secret
                 }
-                if migratedLegacySecret { try persistLocked() }
+                if migratedLegacySecret { try persistLocked(state) }
             } else {
                 state = .empty
             }
         } catch {
             state = .empty
-            loadError = "Saved Iroh room data could not be decoded. Original file was left unchanged."
+            loadError = Self.loadFailureMessage(error)
         }
     }
 
@@ -161,7 +164,7 @@ final class IrohRoomStore: @unchecked Sendable {
             do {
                 try committingLocked { state = .empty }
             } catch {
-                loadError = priorLoadError
+                if loadError == nil { loadError = priorLoadError }
                 throw error
             }
         }
@@ -213,7 +216,7 @@ final class IrohRoomStore: @unchecked Sendable {
                     return workspace.roomState
                 }
             } catch {
-                if installedSecret { try? secretStore.delete(roomID: roomID) }
+                if installedSecret, loadError == nil { try? secretStore.delete(roomID: roomID) }
                 throw error
             }
         }
@@ -310,7 +313,9 @@ final class IrohRoomStore: @unchecked Sendable {
                     }
                 }
             } catch {
-                if installedSecret { throw compensatingJoinSecretLocked(roomID: roomID, after: error) }
+                if installedSecret, loadError == nil {
+                    throw compensatingJoinSecretLocked(roomID: roomID, after: error)
+                }
                 throw error
             }
             return JoinPreparation(roomID: roomID, original: original,
@@ -859,26 +864,43 @@ final class IrohRoomStore: @unchecked Sendable {
         }
     }
 
-    private func persistLocked() throws {
-        let directory = fileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let data = try JSONEncoder.api.encode(state)
-        #if os(iOS)
-        try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-        #else
-        try data.write(to: fileURL, options: .atomic)
-        #endif
+    private func persistLocked(_ proposed: IrohReplicationState) throws {
+        try durableStore.write(JSONEncoder.api.encode(proposed))
+    }
+
+    private static let durabilityFailureMessage = String(
+        localized: "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room."
+    )
+
+    private static func loadFailureMessage(_ error: Error) -> String {
+        guard error is AtomicDurableFileStore.ReplacementFailure else {
+            return String(localized: "Saved Iroh room data could not be decoded. Original file was left unchanged.")
+        }
+        return durabilityFailureMessage
     }
 
     private func committingLocked<Value>(_ mutation: () throws -> Value) throws -> Value {
         let original = state
+        let value: Value
         do {
-            let value = try mutation()
-            try persistLocked()
-            return value
+            value = try mutation()
         } catch {
             state = original
             throw error
+        }
+        let proposed = state
+        state = original
+        do {
+            try persistLocked(proposed)
+            state = proposed
+            return value
+        } catch is AtomicDurableFileStore.ReplacementFailure {
+            loadError = Self.durabilityFailureMessage
+            throw IrohProtocolError.unavailable(Self.durabilityFailureMessage)
+        } catch {
+            throw IrohProtocolError.unavailable(
+                String(localized: "Iroh room change was not saved: \(error.localizedDescription)")
+            )
         }
     }
 

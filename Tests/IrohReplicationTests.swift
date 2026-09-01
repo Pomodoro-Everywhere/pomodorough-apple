@@ -626,7 +626,7 @@ struct IrohReplicationTests {
             "now": "1970-01-01T00:16:43Z",
         ])
         let core = try SharedCore.bundled()
-        let coreProjection = try await core.dispatch(
+        let coreProjection = try core.dispatch(
             "timer.reduce.v1",
             inputJSON: input,
             as: CoreTimerProjection.self
@@ -2438,9 +2438,10 @@ struct IrohReplicationTests {
             .appendingPathComponent("PomodoroughIrohParent-\(UUID().uuidString)")
         try Data("not a directory".utf8).write(to: parentFile)
         defer { try? FileManager.default.removeItem(at: parentFile) }
+        let secretStore = MemoryIrohRoomSecretStore()
         let store = IrohRoomStore(
             fileURL: parentFile.appendingPathComponent("rooms.json"),
-            secretStore: MemoryIrohRoomSecretStore()
+            secretStore: secretStore
         )
         let secret = Data(0...31)
         let roomID = try IrohProtocolV1.roomID(for: secret)
@@ -2456,6 +2457,68 @@ struct IrohReplicationTests {
         }
         #expect(store.activeRoomID == nil)
         #expect(store.roomSnapshot(roomID: roomID) == nil)
+        #expect(!secretStore.contains(roomID: roomID))
+        try FileManager.default.removeItem(at: parentFile)
+        try FileManager.default.createDirectory(at: parentFile, withIntermediateDirectories: false)
+        _ = try store.createRoom(
+            roomID: roomID, roomSecret: secret, name: nil,
+            returnState: .fresh(), genesis: emptyGenesis()
+        )
+        #expect(store.activeRoomID == roomID)
+    }
+
+    @Test func roomMutationPublishesOnlyAfterDurableSynchronization() throws {
+        let fixture = try DurableIrohRoomFixture()
+        defer { fixture.cleanup() }
+        let storeBox = WeakIrohRoomStore()
+        let synchronizationObserved = LockedTestValue(false)
+        let stateDuringSynchronization = LockedTestValue<IrohReplicationState?>(nil)
+        let durableStore = AtomicDurableFileStore(
+            fileURL: fixture.fileURL,
+            beforeSynchronization: {
+                synchronizationObserved.value = true
+                stateDuringSynchronization.value = storeBox.unsynchronizedState
+            },
+            afterReplacement: {}
+        )
+        let store = fixture.store(durableStore: durableStore)
+        storeBox.value = store
+
+        try fixture.createRoom(in: store)
+
+        #expect(synchronizationObserved.value)
+        #expect(stateDuringSynchronization.value != nil)
+        #expect(stateDuringSynchronization.value?.activeRoomID == nil)
+        #expect(store.activeRoomID == fixture.roomID)
+        #expect(fixture.store().activeRoomID == fixture.roomID)
+    }
+
+    @Test func postRenameSynchronizationFailureQuarantinesUntilRestartRecovery() throws {
+        let fixture = try DurableIrohRoomFixture()
+        defer { fixture.cleanup() }
+        let durableStore = AtomicDurableFileStore(
+            fileURL: fixture.fileURL,
+            beforeSynchronization: { throw POSIXError(.EIO) },
+            afterReplacement: {}
+        )
+        let store = fixture.store(durableStore: durableStore)
+
+        let reason = unavailableReason { try fixture.createRoom(in: store) }
+
+        #expect(reason?.contains("durability could not be confirmed") == true)
+        #expect(store.activeRoomID == nil)
+        #expect(store.roomSnapshot(roomID: fixture.roomID) == nil)
+        #expect(fixture.secretStore.contains(roomID: fixture.roomID))
+        let blockedReason = unavailableReason {
+            try store.replaceActiveReturnState(.fresh())
+        }
+        #expect(blockedReason == reason)
+        let recovered = fixture.store()
+        #expect(recovered.activeRoomID == fixture.roomID)
+        var revisedReturnState = PersistedTimerState.fresh()
+        revisedReturnState.nextSequence = 7
+        try recovered.replaceActiveReturnState(revisedReturnState)
+        #expect(fixture.store().activeReturnState?.nextSequence == 7)
     }
 
     @Test func roomSecretPersistsOnlyInKeychainAndLegacyJSONMigrates() throws {
@@ -2545,6 +2608,65 @@ struct IrohReplicationTests {
         let model: AppModel
         let defaults: UserDefaults
         let suiteName: String
+    }
+
+    private struct DurableIrohRoomFixture {
+        let directory: URL
+        let fileURL: URL
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID: String
+
+        init() throws {
+            directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("IrohRoomDurability-\(UUID().uuidString)", isDirectory: true)
+            fileURL = directory.appendingPathComponent("rooms.json")
+            roomID = try IrohProtocolV1.roomID(for: secret)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+
+        func store(durableStore: AtomicDurableFileStore? = nil) -> IrohRoomStore {
+            IrohRoomStore(
+                fileURL: fileURL,
+                secretStore: secretStore,
+                durableStore: durableStore
+            )
+        }
+
+        func createRoom(in store: IrohRoomStore) throws {
+            _ = try store.createRoom(
+                roomID: roomID, roomSecret: secret, name: "Durable room",
+                returnState: .fresh(),
+                genesis: IrohGenesis(
+                    canonicalTimer: nil, history: [], tasks: [], durationsMs: .defaults,
+                    autoStartBreaks: false, hlcWallMs: 0, hlcCounter: 0
+                )
+            )
+        }
+
+        func cleanup() {
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    private final class WeakIrohRoomStore: @unchecked Sendable {
+        weak var value: IrohRoomStore?
+
+        var unsynchronizedState: IrohReplicationState? {
+            guard let value else { return nil }
+            return Mirror(reflecting: value).descendant("state") as? IrohReplicationState
+        }
+    }
+
+    private func unavailableReason(_ operation: () throws -> Void) -> String? {
+        do {
+            try operation()
+            return nil
+        } catch IrohProtocolError.unavailable(let reason) {
+            return reason
+        } catch {
+            return nil
+        }
     }
 
     @MainActor

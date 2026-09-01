@@ -1255,6 +1255,26 @@
         }
       }
     },
+    "Iroh room change was not saved: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Iroh room change was not saved: %@"
+          }
+        }
+      }
+    },
+    "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room."
+          }
+        }
+      }
+    },
     "Join an Iroh room": {
       "localizations": {
         "en": {
@@ -2151,6 +2171,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "SYNCHRONIZED STATE"
+          }
+        }
+      }
+    },
+    "Saved Iroh room data could not be decoded. Original file was left unchanged.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved Iroh room data could not be decoded. Original file was left unchanged."
           }
         }
       }

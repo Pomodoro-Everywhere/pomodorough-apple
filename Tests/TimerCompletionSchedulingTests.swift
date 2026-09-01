@@ -243,7 +243,7 @@ struct TimerCompletionSchedulingTests {
         let fixture = try CompletionModelFixture()
         defer { fixture.cleanUp() }
         var model: AppModel? = fixture.makeModel()
-        weak var observedModel = model
+        weak let observedModel = model
         model?.start()
         try await completionEventually { fixture.sleeper.count == 1 }
         await model?.waitForAlarmOperations()

@@ -1100,6 +1100,18 @@
         "value": "‏⟦Iroh room⟧"
       }
     },
+    "Iroh room change was not saved: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Iroh room change was not saved: %@⟧"
+      }
+    },
+    "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room.⟧"
+      }
+    },
     "Join an Iroh room": {
       "stringUnit": {
         "state": "translated",
@@ -1638,6 +1650,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦SYNCHRONIZED STATE⟧"
+      }
+    },
+    "Saved Iroh room data could not be decoded. Original file was left unchanged.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Saved Iroh room data could not be decoded. Original file was left unchanged.⟧"
       }
     },
     "Saved sequence or trusted-time state is invalid. No local change was saved.": {

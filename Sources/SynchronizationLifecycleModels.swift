@@ -1,5 +1,62 @@
 import Foundation
 
+enum SSERevisionStreamError: Error, Equatable {
+    case lineLimitExceeded
+    case eventLimitExceeded
+}
+
+struct SSERevisionStreamDecoder: Sendable {
+    // Limits count raw stream bytes, excluding CRLF framing; events include every nonblank field line.
+    static let maximumLineBytes = 64 * 1_024
+    static let maximumEventBytes = 256 * 1_024
+
+    private let lineLimit: Int
+    private let eventLimit: Int
+    private var lineBytes = Data()
+    private var hasPendingCarriageReturn = false
+    private var eventBytes = 0
+    private var parser = SSERevisionParser()
+
+    init(
+        lineLimit: Int = Self.maximumLineBytes,
+        eventLimit: Int = Self.maximumEventBytes
+    ) {
+        precondition(lineLimit > 0 && eventLimit > 0)
+        self.lineLimit = lineLimit
+        self.eventLimit = eventLimit
+    }
+
+    mutating func consume(byte: UInt8) throws -> Int64? {
+        if byte != 0x0A {
+            if hasPendingCarriageReturn { try appendLineByte(0x0D) }
+            hasPendingCarriageReturn = byte == 0x0D
+            if !hasPendingCarriageReturn { try appendLineByte(byte) }
+            return nil
+        }
+        hasPendingCarriageReturn = false
+        let byteCount = lineBytes.count
+        let isEventBoundary = lineBytes.isEmpty
+        if !isEventBoundary {
+            eventBytes += byteCount
+        }
+        let line = String(decoding: lineBytes, as: UTF8.self)
+        lineBytes.removeAll(keepingCapacity: true)
+        let revision = parser.consume(line: line)
+        if isEventBoundary { eventBytes = 0 }
+        return revision
+    }
+
+    private mutating func appendLineByte(_ byte: UInt8) throws {
+        guard lineBytes.count < lineLimit else {
+            throw SSERevisionStreamError.lineLimitExceeded
+        }
+        guard lineBytes.count < eventLimit - eventBytes else {
+            throw SSERevisionStreamError.eventLimitExceeded
+        }
+        lineBytes.append(byte)
+    }
+}
+
 struct SSERevisionParser: Sendable {
     private var eventName: String?
     private var dataLines: [String] = []

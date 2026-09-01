@@ -150,20 +150,10 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
                         throw AppError.server("Invalid revision stream response (\(http.statusCode)).")
                     }
 
-                    var parser = SSERevisionParser()
-                    var lineBytes = Data()
+                    var decoder = SSERevisionStreamDecoder()
                     for try await byte in bytes {
                         try Task.checkCancellation()
-                        guard byte == 0x0A else {
-                            lineBytes.append(byte)
-                            continue
-                        }
-                        if lineBytes.last == 0x0D {
-                            lineBytes.removeLast()
-                        }
-                        let line = String(decoding: lineBytes, as: UTF8.self)
-                        lineBytes.removeAll(keepingCapacity: true)
-                        if let revision = parser.consume(line: line) {
+                        if let revision = try decoder.consume(byte: byte) {
                             continuation.yield(revision)
                         }
                     }
