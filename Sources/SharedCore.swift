@@ -3,8 +3,8 @@ import Foundation
 import WasmKit
 
 final class SharedCore: @unchecked Sendable {
-    static let coreCommit = "ca552f64308de254b6c4f70ce5efa1e1f1f4271a"
-    static let coreSHA256 = "e7b05b66569ba4e3735b8d935aa0cbdf24f71d17f1c221b84e612e8155f778a8"
+    static let coreCommit = "44ff36e125cf653c1761dfb5951f6e77e41a2c82"
+    static let coreSHA256 = "f34fe57b5e080dd69afa5c7f28b60bc77851c7f874db99744eab72b4e1858877"
     private static let maxTransferBytes = 16 * 1024 * 1024
 
     private struct Runtime {
