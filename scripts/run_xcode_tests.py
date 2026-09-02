@@ -20,7 +20,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Callable, TextIO, TypeVar, cast
+from typing import BinaryIO, Callable, TextIO, TypeVar, cast
 
 
 FINAL_TEST_MARKERS = (
@@ -58,7 +58,9 @@ CONTAINED_CHILD_ARGUMENT = "--contained-child"
 EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
+LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 0.05
 LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
+PROCESS_PATH_BUFFER_BYTES = 4096
 PROC_PIDTBSDINFO = 3
 PROC_PIDUNIQIDENTIFIERINFO = 17
 PROC_PIDCOALITIONINFO = 20
@@ -131,6 +133,8 @@ if LIBPROC is not None:
     LIBPROC.proc_signal_with_audittoken.restype = ctypes.c_int
     LIBPROC.proc_listallpids.argtypes = [ctypes.c_void_p, ctypes.c_int]
     LIBPROC.proc_listallpids.restype = ctypes.c_int
+    LIBPROC.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    LIBPROC.proc_pidpath.restype = ctypes.c_int
 
 if LIBSANDBOX is not None:
     LIBSANDBOX.sandbox_init.argtypes = [
@@ -283,7 +287,9 @@ def unique_process_identity(pid: int, info: ProcUniqueIdentifierInfo) -> Process
     return ProcessIdentity(pid, (info.p_uniqueid, info.p_idversion), tuple(values))
 
 
-def darwin_process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
+def stable_darwin_process_info(
+    pid: int,
+) -> tuple[ProcessIdentity, ProcBSDInfo] | None:
     first = unique_identifier_info(pid)
     info = ProcBSDInfo()
     size = LIBPROC.proc_pidinfo(
@@ -299,7 +305,58 @@ def darwin_process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
     ):
         return None
     identity = unique_process_identity(pid, first)
+    return identity, info
+
+
+def darwin_process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
+    record = stable_darwin_process_info(pid)
+    if record is None:
+        return None
+    identity, info = record
     return identity, info.pbi_ppid
+
+
+def darwin_process_path(pid: int) -> str:
+    assert LIBPROC is not None
+    buffer = ctypes.create_string_buffer(PROCESS_PATH_BUFFER_BYTES)
+    size = LIBPROC.proc_pidpath(pid, buffer, len(buffer))
+    if size <= 0:
+        return ""
+    return buffer.value.decode("utf-8", errors="replace")
+
+
+def darwin_process_snapshot(pid: int) -> dict[str, object] | None:
+    record = stable_darwin_process_info(pid)
+    if record is None:
+        return None
+    identity, info = record
+    path = darwin_process_path(pid)
+    current = unique_identifier_info(pid)
+    if current is None or (
+        current.p_uniqueid,
+        current.p_idversion,
+    ) != identity.started_at:
+        return None
+    raw_name = bytes(info.pbi_name).split(b"\0", 1)[0]
+    return {
+        "identity": list(identity.started_at),
+        "name": raw_name.decode("utf-8", errors="replace"),
+        "path": path,
+        "pid": pid,
+        "ppid": info.pbi_ppid,
+        "started_at": [info.pbi_start_tvsec, info.pbi_start_tvusec],
+        "status": info.pbi_status,
+    }
+
+
+def host_process_census(deadline: float) -> str:
+    lines = ["source=Darwin libproc stable process census"]
+    for pid in all_process_ids(deadline):
+        require_census_budget(deadline)
+        snapshot = darwin_process_snapshot(pid)
+        if snapshot is not None:
+            lines.append(json.dumps(snapshot, sort_keys=True))
+    return "\n".join(lines) + "\n"
 
 
 def process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
@@ -540,22 +597,71 @@ def launchd_domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def captured_process_output(stream: BinaryIO) -> str:
+    stream.flush()
+    stream.seek(0)
+    return stream.read().decode("utf-8", errors="replace")
+
+
+def terminate_launchctl_process(
+    process: subprocess.Popen[bytes],
+    deadline: float,
+) -> None:
+    if process.poll() is not None:
+        return
+    identity = process_identity(process.pid)
+    if identity is None:
+        if process.poll() is not None:
+            return
+        raise SimulatorLifecycleError("launchctl process identity unavailable")
+    # Unreaped direct child retains its PID, so this identity cannot be PID reuse.
+    if not signal_identity(identity, signal.SIGKILL):
+        if process.poll() is not None:
+            return
+        if process_identity(process.pid) == identity:
+            raise SimulatorLifecycleError("identity-bound launchctl termination failed")
+        raise SimulatorLifecycleError("launchctl process identity changed")
+    timeout = bounded_wait(deadline, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise SimulatorLifecycleError("launchctl process cleanup timed out") from error
+
+
 def launchctl_run(
     arguments: list[str], deadline: float | None, maximum: float = 2.0
 ) -> subprocess.CompletedProcess[str]:
+    command = [LAUNCHCTL, *arguments]
     timeout = bounded_wait(deadline, maximum)
     if timeout <= 0:
         raise SimulatorLifecycleError("launchd containment deadline expired")
-    try:
-        return subprocess.run(
-            [LAUNCHCTL, *arguments],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=timeout,
+    cleanup_reserve = min(LAUNCHCTL_PROCESS_CLEANUP_SECONDS, timeout / 2)
+    finish_by = time.monotonic() + timeout
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        try:
+            process = subprocess.Popen(
+                command, stdout=stdout, stderr=stderr, start_new_session=True
+            )
+        except OSError as error:
+            raise SimulatorLifecycleError(f"launchctl failed to start: {error}") from error
+        try:
+            returncode = process.wait(
+                timeout=bounded_wait(finish_by - cleanup_reserve, timeout)
+            )
+        except subprocess.TimeoutExpired as error:
+            try:
+                terminate_launchctl_process(process, finish_by)
+            except SimulatorLifecycleError as cleanup_error:
+                raise SimulatorLifecycleError(
+                    f"launchctl timeout cleanup failed: {cleanup_error}"
+                ) from cleanup_error
+            raise SimulatorLifecycleError("launchctl timed out") from error
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            captured_process_output(stdout),
+            captured_process_output(stderr),
         )
-    except subprocess.TimeoutExpired as error:
-        raise SimulatorLifecycleError("launchctl timed out") from error
 
 
 def launchctl_retry(
@@ -919,7 +1025,8 @@ def drain_coalition(coalition_id: int, deadline: float) -> None:
 
 
 def cleanup_deadline(deadline: float | None) -> float:
-    return deadline or time.monotonic() + CLEANUP_RESERVE_SECONDS
+    cleanup_by = time.monotonic() + CLEANUP_RESERVE_SECONDS
+    return cleanup_by if deadline is None else min(deadline, cleanup_by)
 
 
 def abort_containment_handshake(
@@ -1237,16 +1344,26 @@ def lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
     job = spawn_contained_job(command, False, deadline)
+    cleanup_attempted = False
     try:
         returncode = wait_for_job_status(job, timeout, deadline)
-        cleanup_contained_job(job, deadline, returncode is None)
+        cleanup_attempted = True
+        cleanup_error: SimulatorLifecycleError | None = None
+        try:
+            cleanup_contained_job(job, deadline, returncode is None)
+        except SimulatorLifecycleError as error:
+            cleanup_error = error
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
         if returncode is None:
+            if cleanup_error is not None:
+                stderr += f"\ncontainment cleanup error: {cleanup_error}\n"
             raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+        if cleanup_error is not None:
+            raise cleanup_error
         return LifecycleOutcome(command, returncode, stdout, stderr, job)
     except Exception:
-        if job.root.exists():
+        if not cleanup_attempted and job.root.exists():
             try:
                 cleanup_contained_job(job, deadline, True)
             except SimulatorLifecycleError:
@@ -1286,6 +1403,22 @@ def diagnostic_command(
     timeout = min(getattr(args, "simulator_timeout", 120.0), 20.0)
     try:
         lifecycle_command(args, label, command, check=False, timeout=timeout)
+    except SimulatorLifecycleError as error:
+        print(f"classification=simulator-diagnostic-failure; {error}", file=sys.stderr)
+
+
+def capture_host_process_diagnostic(args: argparse.Namespace, label: str) -> None:
+    timeout = min(getattr(args, "simulator_timeout", 120.0), 20.0)
+    try:
+        deadline = time.monotonic() + lifecycle_timeout(args, label, timeout)
+        output = deadline_call(
+            lambda: host_process_census(deadline),
+            deadline,
+            "host process census deadline expired",
+        )
+        append_lifecycle_evidence(
+            args, label, ["libproc", "stable-process-census"], 0, output, ""
+        )
     except SimulatorLifecycleError as error:
         print(f"classification=simulator-diagnostic-failure; {error}", file=sys.stderr)
 
@@ -1452,11 +1585,7 @@ def capture_simulator_diagnostics(
                 "system/com.apple.SpringBoard",
             ],
         )
-    diagnostic_command(
-        args,
-        f"{label}-host-processes",
-        ["ps", "-axo", "pid=,ppid=,etime=,state=,command="],
-    )
+    capture_host_process_diagnostic(args, f"{label}-host-processes")
 
 
 def recover_simulator(args: argparse.Namespace, udid: str | None, label: str) -> str:
