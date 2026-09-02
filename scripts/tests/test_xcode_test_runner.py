@@ -2064,7 +2064,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 ):
                     run_xcode_tests.contained_lifecycle_process(["target"], 1, None)
         contained.assert_called_once_with(
-            ["target"], False, None, run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
+            ["target"],
+            False,
+            None,
+            bootstrap_maximum=run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS,
+            cleanup_reserve=run_xcode_tests.LIFECYCLE_CLEANUP_SECONDS,
         )
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
@@ -2113,25 +2117,24 @@ class XcodeTestRunnerTests(unittest.TestCase):
             direct.assert_not_called()
             self.assertFalse((args.diagnostics_dir / "simulator-lifecycle.log").exists())
 
-    def test_post_drain_teardown_warning_preserves_successful_lifecycle(self) -> None:
+    def test_successful_lifecycle_requires_launchd_absence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory) / "job")
             job.root.mkdir()
             job.stdout_path.write_text("contained\n", encoding="utf-8")
-            warning = "bootout warning: permission denied"
+            cleanup_error = "bootout failed: permission denied"
             with mock.patch.object(
                 run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
                 run_xcode_tests, "wait_for_job_status", return_value=0
             ), mock.patch.object(
-                run_xcode_tests, "lifecycle_cleanup_error", return_value=warning
+                run_xcode_tests, "lifecycle_cleanup_error", return_value=cleanup_error
             ) as cleanup:
-                result = run_xcode_tests.contained_lifecycle_process(
-                    ["target"], 1, None
-                )
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "contained\n")
-        self.assertIn(f"launchd teardown warning: {warning}", result.stderr)
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "bootout failed: permission denied",
+                ):
+                    run_xcode_tests.contained_lifecycle_process(["target"], 1, None)
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
@@ -2159,15 +2162,16 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "confirm_job_absent", side_effect=confirm_absence
             ):
-                warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
-        self.assertEqual(warning, "bootout warning: launchctl timed out")
-        self.assertEqual(events, ["drain", "bootout", "confirm"])
+                cleanup_error = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+        self.assertEqual(cleanup_error, "bootout failed: launchctl timed out")
+        self.assertEqual(events, ["bootout", "drain", "confirm"])
 
-    def test_lifecycle_cleanup_warns_for_all_post_drain_teardown_errors(self) -> None:
+    def test_lifecycle_cleanup_reports_all_teardown_errors(self) -> None:
         events: list[str] = []
         bootout_failure = run_xcode_tests.SimulatorLifecycleError(
             "bootout permission denied"
         )
+        drain_failure = run_xcode_tests.SimulatorLifecycleError("descendants remained")
         absence_failure = run_xcode_tests.SimulatorLifecycleError(
             "absence permission denied"
         )
@@ -2180,6 +2184,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
             events.append("confirm")
             raise absence_failure
 
+        def fail_drain(*_args: object) -> None:
+            events.append("drain")
+            raise drain_failure
+
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
             with mock.patch.object(
@@ -2187,19 +2195,54 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
                 run_xcode_tests,
                 "drain_coalition",
-                side_effect=lambda *_args: events.append("drain"),
+                side_effect=fail_drain,
             ), mock.patch.object(
                 run_xcode_tests, "bootout_job", side_effect=fail_bootout
             ), mock.patch.object(
                 run_xcode_tests, "confirm_job_absent", side_effect=fail_absence
             ):
-                warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+                cleanup_error = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
         self.assertEqual(
-            warning,
-            "bootout warning: bootout permission denied; "
-            "absence warning: absence permission denied",
+            cleanup_error,
+            "bootout failed: bootout permission denied; "
+            "coalition drain failed: descendants remained; "
+            "absence confirmation failed: absence permission denied",
         )
-        self.assertEqual(events, ["drain", "bootout", "confirm"])
+        self.assertEqual(events, ["bootout", "drain", "confirm"])
+
+    def test_lifecycle_cleanup_reserves_absence_confirmation_budget(self) -> None:
+        deadlines: dict[str, float] = {}
+
+        def capture(name: str) -> object:
+            return lambda _value, deadline: deadlines.__setitem__(name, deadline)
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests.time, "monotonic", return_value=10.0
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_coalition_id", return_value=77
+            ) as coalition, mock.patch.object(
+                run_xcode_tests, "signal_coalition_members"
+            ), mock.patch.object(
+                run_xcode_tests, "pause_before_cleanup"
+            ), mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=capture("bootout")
+            ), mock.patch.object(
+                run_xcode_tests, "drain_coalition", side_effect=capture("drain")
+            ), mock.patch.object(
+                run_xcode_tests, "confirm_job_absent", side_effect=capture("confirm")
+            ):
+                self.assertIsNone(
+                    run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+                )
+        cleanup_by = 10.0 + run_xcode_tests.LIFECYCLE_CLEANUP_SECONDS
+        teardown_by = cleanup_by - run_xcode_tests.CLEANUP_RESERVE_SECONDS
+        coalition.assert_called_once_with(job, teardown_by)
+        self.assertEqual(
+            deadlines,
+            {"bootout": teardown_by, "drain": teardown_by, "confirm": cleanup_by},
+        )
 
     def test_bootstrap_timeout_always_aborts_possible_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2225,7 +2268,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
             deadline - run_xcode_tests.CLEANUP_RESERVE_SECONDS,
         )
         self.assertEqual(launchctl.call_args.args[2], 2.0)
-        abort.assert_called_once_with(job, None, deadline)
+        abort.assert_called_once_with(
+            job, None, deadline, run_xcode_tests.CLEANUP_RESERVE_SECONDS
+        )
 
     def test_handshake_deadline_leaves_abort_reserve(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2263,7 +2308,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
             launchctl.call_args.args[2], run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
         )
         handshake.assert_called_once_with(job, setup_deadline)
-        abort.assert_called_once_with(job, None, deadline)
+        abort.assert_called_once_with(
+            job, None, deadline, run_xcode_tests.CLEANUP_RESERVE_SECONDS
+        )
 
     def test_launchd_setup_preserves_primary_and_all_cleanup_failures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2290,7 +2337,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 ) as raised:
                     run_xcode_tests.spawn_contained_job(["target"], False, deadline)
         self.assertIs(raised.exception, primary)
-        abort.assert_called_once_with(job, None, deadline)
+        abort.assert_called_once_with(
+            job, None, deadline, run_xcode_tests.CLEANUP_RESERVE_SECONDS
+        )
         remove.assert_called_once_with(job.root)
 
     def test_attempt_observation_reserves_evidence_and_cleanup_time(self) -> None:
@@ -3077,7 +3126,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 ):
                     run_xcode_tests.bootout_job(job, None)
 
-    def test_lifecycle_cleanup_does_not_warn_for_macos_idempotent_absence(self) -> None:
+    def test_lifecycle_cleanup_accepts_macos_idempotent_absence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
             with mock.patch.object(
@@ -3087,8 +3136,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "bootout_job", return_value=None
             ), mock.patch.object(run_xcode_tests, "confirm_job_absent"):
-                warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
-        self.assertIsNone(warning)
+                cleanup_error = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+        self.assertIsNone(cleanup_error)
 
     def test_confirm_absence_accepts_macos_idempotent_bootout_result(self) -> None:
         result = subprocess.CompletedProcess([], 3, "", "No such process")

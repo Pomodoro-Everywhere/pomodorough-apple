@@ -58,6 +58,7 @@ DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 2.0
 LIFECYCLE_BOOTSTRAP_SECONDS = 10.0
+LIFECYCLE_CLEANUP_SECONDS = 6.0
 DIRECT_CHANNEL_KEY_BYTES = 32
 DIRECT_CHANNEL_LIMIT_BYTES = 64 * 1024
 DIRECT_CHANNEL_WORK_PER_PUMP = 128
@@ -1417,14 +1418,37 @@ def write_containment_acknowledgement(
     )
 
 
+def containment_setup_cleanup_errors(
+    job: LaunchdJob,
+    bootstrap_attempted: bool,
+    coalition_id: int | None,
+    deadline: float | None,
+    cleanup_reserve: float,
+) -> list[str]:
+    errors: list[str] = []
+    if bootstrap_attempted:
+        record_cleanup_failure(
+            errors,
+            "containment abort failed",
+            lambda: abort_containment_handshake(
+                job, coalition_id, deadline, cleanup_reserve
+            ),
+        )
+    record_cleanup_failure(
+        errors, "setup root removal failed", lambda: remove_job_root(job.root)
+    )
+    return errors
+
+
 def spawn_contained_job(
     command: list[str],
     combine_stderr: bool,
     deadline: float | None,
     bootstrap_maximum: float = 2.0,
+    cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
 ) -> LaunchdJob:
     acknowledgement_token = secrets.token_hex(32)
-    setup_deadline = reserved_deadline(deadline, CLEANUP_RESERVE_SECONDS)
+    setup_deadline = reserved_deadline(deadline, cleanup_reserve)
     job = create_launchd_job()
     plist_path = job.root / "job.plist"
     bootstrap_attempted = False
@@ -1455,15 +1479,8 @@ def spawn_contained_job(
         write_containment_acknowledgement(job, acknowledgement_token, coalition_id)
         return bound_job
     except Exception as error:
-        cleanup_errors: list[str] = []
-        if bootstrap_attempted:
-            record_cleanup_failure(
-                cleanup_errors,
-                "containment abort failed",
-                lambda: abort_containment_handshake(job, coalition_id, deadline),
-            )
-        record_cleanup_failure(
-            cleanup_errors, "setup root removal failed", lambda: remove_job_root(job.root)
+        cleanup_errors = containment_setup_cleanup_errors(
+            job, bootstrap_attempted, coalition_id, deadline, cleanup_reserve
         )
         append_cleanup_errors(error, "launchd setup cleanup error", cleanup_errors)
         raise
@@ -2073,15 +2090,20 @@ def drain_coalition(coalition_id: int, deadline: float) -> None:
     raise SimulatorLifecycleError("coalition cleanup incomplete")
 
 
-def cleanup_deadline(deadline: float | None) -> float:
-    cleanup_by = time.monotonic() + CLEANUP_RESERVE_SECONDS
+def cleanup_deadline(
+    deadline: float | None, maximum: float = CLEANUP_RESERVE_SECONDS
+) -> float:
+    cleanup_by = time.monotonic() + maximum
     return cleanup_by if deadline is None else min(deadline, cleanup_by)
 
 
 def abort_containment_handshake(
-    job: LaunchdJob, coalition_id: int | None, deadline: float | None
+    job: LaunchdJob,
+    coalition_id: int | None,
+    deadline: float | None,
+    cleanup_maximum: float = CLEANUP_RESERVE_SECONDS,
 ) -> None:
-    cleanup_by = cleanup_deadline(deadline)
+    cleanup_by = cleanup_deadline(deadline, cleanup_maximum)
     bootout_job(job, cleanup_by)
     if coalition_id is not None:
         drain_coalition(coalition_id, cleanup_by)
@@ -2116,28 +2138,45 @@ def cleanup_contained_job(
 def lifecycle_cleanup_error(
     job: LaunchdJob, deadline: float | None, _signal_root: bool
 ) -> str | None:
-    cleanup_by = cleanup_deadline(deadline)
-    coalition_id = cleanup_coalition_id(job, cleanup_by)
+    cleanup_by = cleanup_deadline(deadline, LIFECYCLE_CLEANUP_SECONDS)
+    teardown_by = reserved_deadline(cleanup_by, CLEANUP_RESERVE_SECONDS)
+    assert teardown_by is not None
+    coalition_id = cleanup_coalition_id(job, teardown_by)
+    errors: list[str] = []
     phases = [(signal.SIGINT, 0.05), (signal.SIGTERM, 0.1)]
     if hasattr(signal, "SIGINFO"):
         phases.insert(0, (signal.SIGINFO, 0.02))
     for requested, pause in phases:
-        signal_coalition_members(coalition_id, requested, cleanup_by)
-        pause_before_cleanup(cleanup_by, pause)
-    drain_coalition(coalition_id, cleanup_by)
-    warnings: list[str] = []
+        record_cleanup_failure(
+            errors,
+            f"{requested.name} signal failed",
+            lambda requested=requested: signal_coalition_members(
+                coalition_id, requested, teardown_by
+            ),
+        )
+        pause_before_cleanup(teardown_by, pause)
+    record_cleanup_failure(
+        errors, "bootout failed", lambda: bootout_job(job, teardown_by)
+    )
+    record_cleanup_failure(
+        errors, "coalition drain failed", lambda: drain_coalition(coalition_id, teardown_by)
+    )
+    record_cleanup_failure(
+        errors, "absence confirmation failed", lambda: confirm_job_absent(job, cleanup_by)
+    )
+    return cleanup_error_text(errors)
+
+
+def record_lifecycle_cleanup(
+    errors: list[str], job: LaunchdJob, deadline: float | None, signal_root: bool
+) -> None:
     try:
-        warning = bootout_job(job, cleanup_by)
-    except SimulatorLifecycleError as error:
-        warnings.append(f"bootout warning: {error}")
+        detail = lifecycle_cleanup_error(job, deadline, signal_root)
+    except Exception as error:
+        errors.append(str(error))
     else:
-        if warning is not None:
-            warnings.append(f"bootout warning: {warning}")
-    try:
-        confirm_job_absent(job, cleanup_by)
-    except SimulatorLifecycleError as error:
-        warnings.append(f"absence warning: {error}")
-    return cleanup_error_text(warnings)
+        if detail is not None:
+            errors.append(detail)
 
 
 def job_output(path: Path) -> str:
@@ -2150,10 +2189,13 @@ def job_output(path: Path) -> str:
 
 
 def wait_for_job_status(
-    job: LaunchdJob, timeout: float, wall_deadline: float | None = None
+    job: LaunchdJob,
+    timeout: float,
+    wall_deadline: float | None = None,
+    cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
 ) -> int | None:
     deadline = time.monotonic() + timeout
-    observation_deadline = reserved_deadline(wall_deadline, CLEANUP_RESERVE_SECONDS)
+    observation_deadline = reserved_deadline(wall_deadline, cleanup_reserve)
     if observation_deadline is not None:
         deadline = min(deadline, observation_deadline)
     while time.monotonic() < deadline:
@@ -2631,7 +2673,10 @@ def lifecycle_timeout(
 ) -> float:
     configured = requested or getattr(args, "simulator_timeout", 120.0)
     remaining = remaining_wall_budget(args)
-    available = None if remaining is None else remaining - CLEANUP_RESERVE_SECONDS
+    cleanup_reserve = (
+        LIFECYCLE_CLEANUP_SECONDS if sys.platform == "darwin" else CLEANUP_RESERVE_SECONDS
+    )
+    available = None if remaining is None else remaining - cleanup_reserve
     if available is not None and available <= 0:
         raise SimulatorLifecycleError(f"wall timeout exhausted before {label}")
     return configured if available is None else min(configured, available)
@@ -2679,27 +2724,25 @@ def contained_lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
     job = spawn_contained_job(
-        command, False, deadline, LIFECYCLE_BOOTSTRAP_SECONDS
+        command,
+        False,
+        deadline,
+        bootstrap_maximum=LIFECYCLE_BOOTSTRAP_SECONDS,
+        cleanup_reserve=LIFECYCLE_CLEANUP_SECONDS,
     )
     cleanup_attempted = False
     cleanup_errors: list[str] = []
-    teardown_warning: str | None = None
     try:
-        returncode = wait_for_job_status(job, timeout, deadline)
+        returncode = wait_for_job_status(
+            job, timeout, deadline, LIFECYCLE_CLEANUP_SECONDS
+        )
         cleanup_attempted = True
-        try:
-            teardown_warning = lifecycle_cleanup_error(
-                job, deadline, returncode is None
-            )
-        except SimulatorLifecycleError as error:
-            cleanup_errors.append(str(error))
+        record_lifecycle_cleanup(cleanup_errors, job, deadline, returncode is None)
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
     except Exception as error:
         if not cleanup_attempted and job.root.exists():
-            record_cleanup_failure(
-                cleanup_errors, "", lambda: cleanup_contained_job(job, deadline, True)
-            )
+            record_lifecycle_cleanup(cleanup_errors, job, deadline, True)
         record_cleanup_failure(
             cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
         )
@@ -2709,8 +2752,6 @@ def contained_lifecycle_process(
         cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
     )
     cleanup_error = cleanup_error_text(cleanup_errors)
-    if teardown_warning is not None:
-        stderr += f"\nlaunchd teardown warning: {teardown_warning}\n"
     if cleanup_error is not None:
         stderr += f"\ncoalition cleanup error: {cleanup_error}\n"
         if returncode == 0:
