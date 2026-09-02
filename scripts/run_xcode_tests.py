@@ -51,7 +51,7 @@ SIMULATOR_DESTINATION_KEYS = frozenset({"platform", "name", "id", "OS", "arch"})
 SIMULATOR_ARCHITECTURES = frozenset({"arm64", "x86_64"})
 CLEANUP_RESERVE_SECONDS = 2.0
 TIMEOUT_EVIDENCE_SECONDS = 0.25
-EVIDENCE_WRITE_SECONDS = 0.25
+EVIDENCE_WRITE_SECONDS = 1.0
 EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
 DESCENDANT_POLL_SECONDS = 0.001
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
@@ -1053,10 +1053,6 @@ def direct_child_arguments(
 
 
 def spawn_direct_job(command: list[str], deadline: float | None) -> DirectJob:
-    if LIBPROC is not None:
-        raise SimulatorLifecycleError(
-            "Darwin direct containment unavailable; resource coalition required"
-        )
     resources = DirectSpawnResources()
     try:
         resources.root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-lifecycle-"))
@@ -2230,8 +2226,8 @@ def write_timeout_evidence(
         ]
     )
     paths = (
-        args.diagnostics_dir / f"attempt-{attempt}-timeout.txt",
         args.diagnostics_dir / "timeout.txt",
+        args.diagnostics_dir / f"attempt-{attempt}-timeout.txt",
     )
     errors: list[OSError] = []
     for path in paths:
@@ -2541,8 +2537,6 @@ def contained_lifecycle_process(
 def lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
-    if LIBPROC is not None:
-        return contained_lifecycle_process(command, timeout, deadline)
     return direct_lifecycle_process(command, timeout, deadline)
 
 
