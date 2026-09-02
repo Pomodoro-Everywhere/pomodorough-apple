@@ -6,13 +6,16 @@ from __future__ import annotations
 import argparse
 import codecs
 import ctypes
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+import hashlib
+import hmac
 import json
 from pathlib import Path
 import os
 import plistlib
 import re
 import secrets
+import select
 import shutil
 import signal
 import subprocess
@@ -20,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import BinaryIO, Callable, TextIO, TypeVar, cast
+from typing import BinaryIO, Callable, Iterable, TextIO, TypeVar, cast
 
 
 FINAL_TEST_MARKERS = (
@@ -54,7 +57,13 @@ DESCENDANT_POLL_SECONDS = 0.001
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 2.0
+DIRECT_CHANNEL_KEY_BYTES = 32
+DIRECT_CHANNEL_LIMIT_BYTES = 64 * 1024
+DIRECT_CHANNEL_WORK_PER_PUMP = 128
+DIRECT_WRAPPER_REAP_SECONDS = 0.5
 CONTAINED_CHILD_ARGUMENT = "--contained-child"
+DIRECT_CHILD_ARGUMENT = "--direct-child"
+DIRECT_TARGET_ARGUMENT = "--direct-target"
 EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
@@ -133,6 +142,8 @@ if LIBPROC is not None:
     LIBPROC.proc_signal_with_audittoken.restype = ctypes.c_int
     LIBPROC.proc_listallpids.argtypes = [ctypes.c_void_p, ctypes.c_int]
     LIBPROC.proc_listallpids.restype = ctypes.c_int
+    LIBPROC.proc_listchildpids.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    LIBPROC.proc_listchildpids.restype = ctypes.c_int
     LIBPROC.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     LIBPROC.proc_pidpath.restype = ctypes.c_int
 
@@ -188,13 +199,52 @@ class ProcessIdentity:
     audit_token: tuple[int, ...] | None = None
 
 
+@dataclass
+class DirectChannel:
+    descriptor: int
+    key: bytes
+    buffer: bytes = b""
+    sequence: int = 0
+    wrapper: ProcessIdentity | None = None
+    target: ProcessIdentity | None = None
+    descendants: set[ProcessIdentity] = field(default_factory=set)
+    returncode: int | None = None
+    failure: str | None = None
+    closed: bool = False
+
+
+@dataclass
+class DirectReporter:
+    descriptor: int
+    key: bytes
+    sequence: int = 0
+    status_sent: bool = False
+    failure_sent: bool = False
+
+
+@dataclass(frozen=True)
+class DirectJob:
+    root: Path
+    stdout_path: Path
+    stderr_path: Path
+    process: subprocess.Popen[bytes]
+    identity: ProcessIdentity
+    channel: DirectChannel
+
+
+@dataclass
+class DirectSpawnResources:
+    root: Path | None = None
+    descriptors: set[int] = field(default_factory=set)
+    process: subprocess.Popen[bytes] | None = None
+
+
 @dataclass(frozen=True)
 class LifecycleOutcome:
     args: list[str]
     returncode: int
     stdout: str
     stderr: str
-    job: LaunchdJob
 
 
 @dataclass(frozen=True)
@@ -300,6 +350,7 @@ def stable_darwin_process_info(
     if (
         first is None
         or second is None
+        or first.p_uniqueid != second.p_uniqueid
         or first.p_idversion != second.p_idversion
         or size != ctypes.sizeof(info)
         or info.pbi_pid != pid
@@ -373,6 +424,33 @@ def process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
 def process_identity(pid: int) -> ProcessIdentity | None:
     record = process_record(pid)
     return None if record is None else record[0]
+
+
+def direct_identity(identity: ProcessIdentity) -> ProcessIdentity:
+    if LIBPROC is None:
+        return identity
+    return replace(identity, started_at=(identity.started_at[0], 0))
+
+
+def direct_process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
+    record = process_record(pid)
+    if record is None:
+        return None
+    identity, parent_pid = record
+    return direct_identity(identity), parent_pid
+
+
+def direct_process_identity(pid: int) -> ProcessIdentity | None:
+    record = direct_process_record(pid)
+    return None if record is None else record[0]
+
+
+def direct_identity_key(identity: ProcessIdentity) -> tuple[int, tuple[int, int]]:
+    return identity.pid, identity.started_at
+
+
+def same_direct_process(first: ProcessIdentity, second: ProcessIdentity) -> bool:
+    return direct_identity_key(first) == direct_identity_key(second)
 
 
 def resource_coalition_id(pid: int) -> int | None:
@@ -592,6 +670,430 @@ def contained_child(
         return PRETEST_INFRASTRUCTURE_FAILURE
 
 
+def direct_child_process_ids(parent_pid: int) -> list[int]:
+    if LIBPROC is None:
+        records = (process_record(int(path.name)) for path in Path("/proc").glob("[0-9]*"))
+        return [record[0].pid for record in records if record is not None and record[1] == parent_pid]
+    capacity = 16
+    while True:
+        values = (ctypes.c_int * capacity)()
+        count = LIBPROC.proc_listchildpids(parent_pid, values, ctypes.sizeof(values))
+        if count < 0:
+            raise SimulatorLifecycleError("direct child process census failed")
+        if count < capacity:
+            return [pid for pid in values[:count] if pid > 0]
+        capacity *= 2
+
+
+def direct_message_bytes(sequence: int, payload: dict[str, object]) -> bytes:
+    return json.dumps(
+        {"payload": payload, "sequence": sequence},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def write_direct_message(
+    descriptor: int, key: bytes, sequence: int, payload: dict[str, object]
+) -> None:
+    authenticated = direct_message_bytes(sequence, payload)
+    message = {
+        "mac": hmac.new(key, authenticated, hashlib.sha256).hexdigest(),
+        "payload": payload,
+        "sequence": sequence,
+    }
+    content = json.dumps(message, separators=(",", ":"), sort_keys=True).encode()
+    os.write(descriptor, content + b"\n")
+
+
+def report_direct_event(
+    reporter: DirectReporter, payload: dict[str, object]
+) -> None:
+    event = payload.get("event")
+    if reporter.failure_sent or (reporter.status_sent and event != "descendant"):
+        raise SimulatorLifecycleError("direct channel event follows terminal event")
+    reporter.sequence += 1
+    write_direct_message(reporter.descriptor, reporter.key, reporter.sequence, payload)
+    reporter.status_sent = event == "status" or reporter.status_sent
+    reporter.failure_sent = event == "error" or reporter.failure_sent
+
+
+def read_direct_key(descriptor: int) -> bytes:
+    content = bytearray()
+    while len(content) < DIRECT_CHANNEL_KEY_BYTES:
+        chunk = os.read(descriptor, DIRECT_CHANNEL_KEY_BYTES - len(content))
+        if not chunk:
+            break
+        content.extend(chunk)
+    if len(content) != DIRECT_CHANNEL_KEY_BYTES:
+        raise SimulatorLifecycleError("direct channel key unavailable")
+    return bytes(content)
+
+
+def configure_direct_subreaper() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    library = ctypes.CDLL(None, use_errno=True)
+    if library.prctl(36, 1, 0, 0, 0) != 0:
+        detail = os.strerror(ctypes.get_errno())
+        raise SimulatorLifecycleError(f"direct subreaper unavailable: {detail}")
+
+
+def direct_child_identity(
+    parent: ProcessIdentity, pid: int
+) -> ProcessIdentity | None:
+    first = direct_process_record(pid)
+    if first is None or first[1] != parent.pid:
+        return None
+    second = direct_process_record(pid)
+    if second is None or second[1] != parent.pid:
+        return None
+    return second[0] if same_direct_process(first[0], second[0]) else None
+
+
+def observed_direct_children(parent: ProcessIdentity) -> set[ProcessIdentity]:
+    current = direct_process_identity(parent.pid)
+    if current is None or not same_direct_process(current, parent):
+        return set()
+    process_ids = direct_child_process_ids(parent.pid)
+    current = direct_process_identity(parent.pid)
+    if current is None or not same_direct_process(current, parent):
+        return set()
+    children = {
+        identity
+        for pid in process_ids
+        if (identity := direct_child_identity(parent, pid)) is not None
+    }
+    current = direct_process_identity(parent.pid)
+    return children if current is not None and same_direct_process(current, parent) else set()
+
+
+def direct_target_identity(
+    process: subprocess.Popen[bytes], wrapper: ProcessIdentity
+) -> ProcessIdentity:
+    current = direct_process_identity(wrapper.pid)
+    if current is None or not same_direct_process(current, wrapper):
+        raise SimulatorLifecycleError("direct wrapper identity changed")
+    record = direct_process_record(process.pid)
+    if record is None or record[1] != wrapper.pid:
+        raise SimulatorLifecycleError("direct target ancestry unavailable")
+    identity = record[0]
+    current = direct_process_identity(wrapper.pid)
+    if current is None or not same_direct_process(current, wrapper):
+        raise SimulatorLifecycleError("direct wrapper identity changed")
+    return identity
+
+
+def observe_direct_descendants(
+    identities: set[ProcessIdentity],
+) -> set[ProcessIdentity]:
+    observed = set(identities)
+    pending = list(identities)
+    while pending:
+        parent = pending.pop()
+        for identity in observed_direct_children(parent):
+            if identity not in observed:
+                observed.add(identity)
+                pending.append(identity)
+    return observed
+
+
+def reap_direct_orphans(target_pid: int) -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid <= 0:
+            return
+        if pid == target_pid:
+            raise SimulatorLifecycleError("direct target reaped outside Popen")
+
+
+def spawn_gated_direct_target(
+    command: list[str], wrapper: ProcessIdentity, reporter: DirectReporter
+) -> subprocess.Popen[bytes]:
+    gate_read, gate_write = os.pipe()
+    arguments = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        DIRECT_TARGET_ARGUMENT,
+        str(gate_read),
+        "--",
+        *command,
+    ]
+    try:
+        process = subprocess.Popen(arguments, pass_fds=(gate_read,), start_new_session=True)
+        os.close(gate_read)
+        gate_read = -1
+        identity = direct_target_identity(process, wrapper)
+        report_direct_event(
+            reporter, {"event": "target", "identity": identity_payload(identity)}
+        )
+        os.write(gate_write, b"1")
+        return process
+    finally:
+        for descriptor in (gate_read, gate_write):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def monitor_direct_command(
+    process: subprocess.Popen[bytes], wrapper: ProcessIdentity, reporter: DirectReporter
+) -> None:
+    identity = direct_target_identity(process, wrapper)
+    observed = {wrapper, identity}
+    status_sent = False
+    while True:
+        updated = observe_direct_descendants(observed)
+        for descendant in sorted(updated - observed, key=lambda item: item.pid):
+            report_direct_event(
+                reporter,
+                {"event": "descendant", "identity": identity_payload(descendant)},
+            )
+        observed = updated
+        returncode = process.poll()
+        if returncode is not None and not status_sent:
+            report_direct_event(
+                reporter, {"event": "status", "returncode": returncode}
+            )
+            status_sent = True
+        if status_sent:
+            reap_direct_orphans(process.pid)
+        time.sleep(DESCENDANT_POLL_SECONDS)
+
+
+def direct_child(
+    event_descriptor: int,
+    key_descriptor: int,
+    acknowledgement_descriptor: int,
+    command: list[str],
+) -> int:
+    key = b""
+    reporter: DirectReporter | None = None
+    try:
+        key = read_direct_key(key_descriptor)
+        os.close(key_descriptor)
+        configure_direct_subreaper()
+        identity = direct_process_identity(os.getpid())
+        if identity is None:
+            raise SimulatorLifecycleError("direct wrapper identity unavailable")
+        reporter = DirectReporter(event_descriptor, key)
+        report_direct_event(
+            reporter,
+            {"event": "wrapper", "identity": identity_payload(identity)},
+        )
+        ready, _, _ = select.select(
+            [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
+        )
+        if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
+            raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
+        os.close(acknowledgement_descriptor)
+        process = spawn_gated_direct_target(command, identity, reporter)
+        for requested in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(requested, signal.SIG_IGN)
+        if hasattr(signal, "SIGINFO"):
+            signal.signal(signal.SIGINFO, signal.SIG_IGN)
+        monitor_direct_command(process, identity, reporter)
+    except (OSError, SimulatorLifecycleError) as error:
+        if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
+            try:
+                report_direct_event(
+                    reporter, {"event": "error", "message": str(error)}
+                )
+            except OSError:
+                return PRETEST_INFRASTRUCTURE_FAILURE
+        while True:
+            signal.pause()
+
+
+def direct_target(gate_descriptor: int, command: list[str]) -> int:
+    try:
+        ready, _, _ = select.select(
+            [gate_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
+        )
+        if not ready or os.read(gate_descriptor, 1) != b"1":
+            raise SimulatorLifecycleError("direct target acknowledgement unavailable")
+        os.close(gate_descriptor)
+        os.execvp(command[0], command)
+    except (OSError, SimulatorLifecycleError) as error:
+        print(error, file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+
+
+def abort_direct_spawn(process: subprocess.Popen[bytes], deadline: float | None) -> None:
+    if process.poll() is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    cleanup_by = cleanup_deadline(deadline)
+    reap_process_with_grace(
+        process,
+        cleanup_by,
+        DIRECT_WRAPPER_REAP_SECONDS,
+        "direct wrapper setup cleanup deadline expired",
+        "direct wrapper setup cleanup timed out",
+    )
+
+
+def reap_process_with_grace(
+    process: subprocess.Popen[bytes],
+    deadline: float,
+    maximum: float,
+    expired_message: str,
+    timeout_message: str,
+) -> None:
+    timeout = bounded_wait(deadline, maximum)
+    budget_expired = timeout <= 0
+    if budget_expired:
+        timeout = maximum
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        if process.poll() is None:
+            message = expired_message if budget_expired else timeout_message
+            raise SimulatorLifecycleError(message) from error
+    if budget_expired:
+        raise SimulatorLifecycleError(expired_message)
+
+
+def close_direct_descriptor(descriptors: set[int], descriptor: int) -> None:
+    if descriptor not in descriptors:
+        return
+    descriptors.remove(descriptor)
+    os.close(descriptor)
+
+
+def acquire_direct_pipe(resources: DirectSpawnResources) -> tuple[int, int]:
+    descriptors = os.pipe()
+    resources.descriptors.update(descriptors)
+    return descriptors
+
+
+def cleanup_direct_spawn(
+    resources: DirectSpawnResources, deadline: float | None
+) -> list[str]:
+    errors: list[str] = []
+    for descriptor in list(resources.descriptors):
+        record_direct_cleanup(
+            errors,
+            lambda descriptor=descriptor: close_direct_descriptor(
+                resources.descriptors, descriptor
+            ),
+        )
+    if resources.process is not None:
+        record_direct_cleanup(
+            errors, lambda: abort_direct_spawn(resources.process, deadline)
+        )
+    if resources.root is not None:
+        record_direct_cleanup(errors, lambda: shutil.rmtree(resources.root))
+    return list(dict.fromkeys(errors))
+
+
+def append_error_detail(error: Exception, detail: str) -> None:
+    if isinstance(error, OSError) and error.strerror is not None:
+        error.strerror = f"{error.strerror}; {detail}"
+    elif len(error.args) == 1 and isinstance(error.args[0], str):
+        error.args = (f"{error.args[0]}; {detail}",)
+    else:
+        error.add_note(detail)
+
+
+def append_cleanup_errors(error: Exception, label: str, errors: list[str]) -> None:
+    details = list(dict.fromkeys(errors))
+    if details:
+        append_error_detail(error, f"{label}: {'; '.join(details)}")
+
+
+def record_cleanup_failure(
+    errors: list[str], label: str, operation: Callable[[], object]
+) -> None:
+    try:
+        operation()
+    except Exception as error:
+        detail = str(error)
+        errors.append(f"{label}: {detail}" if label else detail)
+
+
+def remove_job_root(root: Path) -> None:
+    try:
+        shutil.rmtree(root)
+    except FileNotFoundError:
+        pass
+
+
+def cleanup_error_text(errors: list[str]) -> str | None:
+    details = list(dict.fromkeys(errors))
+    return "; ".join(details) if details else None
+
+
+def append_direct_spawn_cleanup(error: Exception, cleanup_errors: list[str]) -> None:
+    append_cleanup_errors(error, "direct setup cleanup error", cleanup_errors)
+
+
+def direct_child_arguments(
+    command: list[str],
+    event_descriptor: int,
+    key_descriptor: int,
+    acknowledgement_descriptor: int,
+) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        DIRECT_CHILD_ARGUMENT,
+        str(event_descriptor),
+        str(key_descriptor),
+        str(acknowledgement_descriptor),
+        "--",
+        *command,
+    ]
+
+
+def spawn_direct_job(command: list[str], deadline: float | None) -> DirectJob:
+    if LIBPROC is not None:
+        raise SimulatorLifecycleError(
+            "Darwin direct containment unavailable; resource coalition required"
+        )
+    resources = DirectSpawnResources()
+    try:
+        resources.root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-lifecycle-"))
+        root = resources.root
+        stdout_path, stderr_path = root / "stdout.log", root / "stderr.log"
+        event_read, event_write = acquire_direct_pipe(resources)
+        key_read, key_write = acquire_direct_pipe(resources)
+        acknowledgement_read, acknowledgement_write = acquire_direct_pipe(resources)
+        key = secrets.token_bytes(DIRECT_CHANNEL_KEY_BYTES)
+        arguments = direct_child_arguments(
+            command, event_write, key_read, acknowledgement_read
+        )
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = subprocess.Popen(
+                arguments,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+                pass_fds=(event_write, key_read, acknowledgement_read),
+            )
+            resources.process = process
+        for descriptor in (event_write, key_read, acknowledgement_read):
+            close_direct_descriptor(resources.descriptors, descriptor)
+        os.write(key_write, key)
+        close_direct_descriptor(resources.descriptors, key_write)
+        os.set_blocking(event_read, False)
+        channel = DirectChannel(event_read, key)
+        identity = await_direct_identity(channel, process, deadline)
+        os.write(acknowledgement_write, b"1")
+        close_direct_descriptor(resources.descriptors, acknowledgement_write)
+        resources.descriptors.remove(event_read)
+        return DirectJob(root, stdout_path, stderr_path, process, identity, channel)
+    except Exception as error:
+        append_direct_spawn_cleanup(error, cleanup_direct_spawn(resources, deadline))
+        raise
+
+
 def launchd_domain() -> str:
     if sys.platform != "darwin" or not Path(LAUNCHCTL).is_file():
         raise SimulatorLifecycleError("Darwin launchd containment is unavailable")
@@ -736,11 +1238,12 @@ def launchd_plist(
 
 
 def create_launchd_job() -> LaunchdJob:
-    root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-tests-"))
     label = f"com.pomodorough.xcode-tests.{secrets.token_hex(16)}"
+    service = f"{launchd_domain()}/{label}"
+    root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-tests-"))
     return LaunchdJob(
         label,
-        f"{launchd_domain()}/{label}",
+        service,
         root,
         root / "stdout.log",
         root / "stderr.log",
@@ -762,13 +1265,22 @@ def await_containment_handshake(
     return payload, coalition_id, wrapper_identity
 
 
+def write_containment_acknowledgement(
+    job: LaunchdJob, acknowledgement_token: str, coalition_id: int
+) -> None:
+    write_atomic_json(
+        job.acknowledgement_path,
+        {"token": acknowledgement_token, "resource_coalition_id": coalition_id},
+    )
+
+
 def spawn_contained_job(
     command: list[str], combine_stderr: bool, deadline: float | None
 ) -> LaunchdJob:
-    job = create_launchd_job()
-    plist_path = job.root / "job.plist"
     acknowledgement_token = secrets.token_hex(32)
     setup_deadline = reserved_deadline(deadline, CLEANUP_RESERVE_SECONDS)
+    job = create_launchd_job()
+    plist_path = job.root / "job.plist"
     bootstrap_attempted = False
     coalition_id: int | None = None
     try:
@@ -792,24 +1304,20 @@ def spawn_contained_job(
         validate_containment_sidecar(
             bound_job, wrapper_identity, containment_payload
         )
-        write_atomic_json(
-            job.acknowledgement_path,
-            {
-                "token": acknowledgement_token,
-                "resource_coalition_id": coalition_id,
-            },
-        )
+        write_containment_acknowledgement(job, acknowledgement_token, coalition_id)
         return bound_job
     except Exception as error:
-        cleanup_error: SimulatorLifecycleError | None = None
+        cleanup_errors: list[str] = []
         if bootstrap_attempted:
-            try:
-                abort_containment_handshake(job, coalition_id, deadline)
-            except SimulatorLifecycleError as caught:
-                cleanup_error = caught
-        shutil.rmtree(job.root, ignore_errors=True)
-        if cleanup_error is not None:
-            raise cleanup_error from error
+            record_cleanup_failure(
+                cleanup_errors,
+                "containment abort failed",
+                lambda: abort_containment_handshake(job, coalition_id, deadline),
+            )
+        record_cleanup_failure(
+            cleanup_errors, "setup root removal failed", lambda: remove_job_root(job.root)
+        )
+        append_cleanup_errors(error, "launchd setup cleanup error", cleanup_errors)
         raise
 
 
@@ -830,17 +1338,333 @@ def process_identity_from_payload(payload: object, label: str) -> ProcessIdentit
         payload.get("started_at"),
         payload.get("audit_token"),
     )
-    if not isinstance(pid, int) or not isinstance(started_at, list) or len(started_at) != 2:
+    valid_pid = isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+    if not valid_pid or not isinstance(started_at, list) or len(started_at) != 2:
         raise SimulatorLifecycleError(f"invalid {label}")
-    if not all(isinstance(value, int) for value in started_at):
+    if (
+        not all(isinstance(value, int) and not isinstance(value, bool) for value in started_at)
+        or started_at[0] <= 0
+        or started_at[1] < 0
+    ):
         raise SimulatorLifecycleError(f"invalid {label} start time")
     if token is not None and (
         not isinstance(token, list)
         or len(token) != 8
-        or not all(isinstance(value, int) for value in token)
+        or not all(
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 <= value <= 0xFFFFFFFF
+            for value in token
+        )
     ):
         raise SimulatorLifecycleError(f"invalid {label} audit token")
     return ProcessIdentity(pid, tuple(started_at), None if token is None else tuple(token))
+
+
+def direct_payload_keys(payload: dict[str, object], expected: set[str]) -> None:
+    if set(payload) != expected:
+        raise SimulatorLifecycleError("invalid direct channel payload")
+
+
+def direct_payload_identity(
+    payload: dict[str, object], event: str
+) -> ProcessIdentity:
+    direct_payload_keys(payload, {"event", "identity"})
+    return process_identity_from_payload(payload["identity"], f"direct {event} identity")
+
+
+def direct_identity_in(
+    identity: ProcessIdentity, candidates: Iterable[ProcessIdentity]
+) -> bool:
+    return any(same_direct_process(identity, candidate) for candidate in candidates)
+
+
+def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> None:
+    event = payload.get("event")
+    if event == "wrapper":
+        identity = direct_payload_identity(payload, event)
+        if channel.sequence != 0 or channel.wrapper is not None:
+            raise SimulatorLifecycleError("duplicate direct wrapper identity")
+        channel.wrapper = identity
+    elif event == "target":
+        identity = direct_payload_identity(payload, event)
+        if channel.wrapper is None or channel.target is not None or channel.failure:
+            raise SimulatorLifecycleError("duplicate direct target identity")
+        if same_direct_process(identity, channel.wrapper):
+            raise SimulatorLifecycleError("invalid direct target identity")
+        channel.target = identity
+    elif event == "descendant":
+        if channel.target is None or channel.failure:
+            raise SimulatorLifecycleError("out-of-order direct descendant identity")
+        identity = direct_payload_identity(payload, event)
+        if channel.wrapper is not None and same_direct_process(identity, channel.wrapper):
+            raise SimulatorLifecycleError("invalid direct descendant identity")
+        if same_direct_process(identity, channel.target):
+            return
+        if not direct_identity_in(identity, channel.descendants):
+            channel.descendants.add(identity)
+    elif event == "status":
+        direct_payload_keys(payload, {"event", "returncode"})
+        if channel.target is None or channel.returncode is not None or channel.failure:
+            raise SimulatorLifecycleError("duplicate direct command status")
+        returncode = payload["returncode"]
+        if isinstance(returncode, bool) or not isinstance(returncode, int):
+            raise SimulatorLifecycleError("invalid direct command return code")
+        channel.returncode = returncode
+    elif event == "error":
+        direct_payload_keys(payload, {"event", "message"})
+        if channel.failure is not None or channel.returncode is not None:
+            raise SimulatorLifecycleError("duplicate direct command error")
+        if not isinstance(payload["message"], str):
+            raise SimulatorLifecycleError("invalid direct command error")
+        channel.failure = payload["message"]
+    else:
+        raise SimulatorLifecycleError("invalid direct channel event")
+
+
+def apply_direct_message(channel: DirectChannel, content: bytes) -> None:
+    try:
+        message = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SimulatorLifecycleError("invalid direct channel message") from error
+    if not isinstance(message, dict) or set(message) != {"mac", "payload", "sequence"}:
+        raise SimulatorLifecycleError("invalid direct channel message")
+    sequence, payload, received = message["sequence"], message["payload"], message["mac"]
+    if isinstance(sequence, bool) or sequence != channel.sequence + 1:
+        raise SimulatorLifecycleError("invalid direct channel sequence")
+    if not isinstance(payload, dict) or not isinstance(received, str):
+        raise SimulatorLifecycleError("invalid direct channel message")
+    expected = hmac.new(
+        channel.key, direct_message_bytes(sequence, payload), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(received, expected):
+        raise SimulatorLifecycleError("unauthenticated direct channel message")
+    apply_direct_payload(channel, payload)
+    channel.sequence = sequence
+
+
+def close_direct_channel(channel: DirectChannel) -> None:
+    descriptor = channel.descriptor
+    channel.descriptor = -1
+    channel.closed = True
+    if descriptor >= 0:
+        os.close(descriptor)
+
+
+def pump_direct_channel(channel: DirectChannel, deadline: float | None) -> None:
+    if channel.descriptor < 0:
+        return
+    work = 0
+    try:
+        while not channel.closed and work < DIRECT_CHANNEL_WORK_PER_PUMP:
+            if deadline is not None and time.monotonic() >= deadline:
+                return
+            while b"\n" in channel.buffer and work < DIRECT_CHANNEL_WORK_PER_PUMP:
+                if deadline is not None and time.monotonic() >= deadline:
+                    return
+                content, channel.buffer = channel.buffer.split(b"\n", 1)
+                if len(content) > DIRECT_CHANNEL_LIMIT_BYTES:
+                    raise SimulatorLifecycleError("direct channel frame exceeds limit")
+                apply_direct_message(channel, content)
+                work += 1
+            if work >= DIRECT_CHANNEL_WORK_PER_PUMP:
+                return
+            chunk = os.read(channel.descriptor, DIRECT_CHANNEL_LIMIT_BYTES)
+            work += 1
+            if not chunk:
+                close_direct_channel(channel)
+                break
+            channel.buffer += chunk
+            if len(channel.buffer) > DIRECT_CHANNEL_LIMIT_BYTES and b"\n" not in channel.buffer:
+                raise SimulatorLifecycleError("direct channel frame exceeds limit")
+    except BlockingIOError:
+        return
+    except Exception as error:
+        cleanup_errors: list[str] = []
+        record_cleanup_failure(
+            cleanup_errors, "descriptor close failed", lambda: close_direct_channel(channel)
+        )
+        append_cleanup_errors(error, "direct channel cleanup error", cleanup_errors)
+        raise
+    if channel.closed and channel.buffer:
+        raise SimulatorLifecycleError("truncated direct channel message")
+
+
+def bounded_process_identity(
+    pid: int, deadline: float, label: str = "direct process identity"
+) -> ProcessIdentity | None:
+    return deadline_call(
+        lambda: direct_process_identity(pid), deadline, f"{label} deadline expired"
+    )
+
+
+def bounded_direct_child_identity(
+    parent: ProcessIdentity, pid: int, deadline: float
+) -> ProcessIdentity | None:
+    return deadline_call(
+        lambda: direct_child_identity(parent, pid),
+        deadline,
+        "direct child identity deadline expired",
+    )
+
+
+def bounded_unique_identifier_info(
+    pid: int, deadline: float
+) -> ProcUniqueIdentifierInfo | None:
+    return deadline_call(
+        lambda: unique_identifier_info(pid),
+        deadline,
+        "direct unique identity census deadline expired",
+    )
+
+
+def bounded_direct_children(
+    parent: ProcessIdentity, deadline: float
+) -> set[ProcessIdentity]:
+    current = bounded_process_identity(parent.pid, deadline)
+    if current is None or not same_direct_process(current, parent):
+        return set()
+    process_ids = deadline_call(
+        lambda: direct_child_process_ids(parent.pid),
+        deadline,
+        "direct child census deadline expired",
+    )
+    current = bounded_process_identity(parent.pid, deadline)
+    if current is None or not same_direct_process(current, parent):
+        return set()
+    children = {
+        identity
+        for pid in process_ids
+        if (identity := bounded_direct_child_identity(parent, pid, deadline)) is not None
+    }
+    current = bounded_process_identity(parent.pid, deadline)
+    return children if current is not None and same_direct_process(current, parent) else set()
+
+
+def await_direct_identity(
+    channel: DirectChannel, process: subprocess.Popen[bytes], deadline: float | None
+) -> ProcessIdentity:
+    handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+    setup_deadline = reserved_deadline(deadline, CLEANUP_RESERVE_SECONDS)
+    if setup_deadline is not None:
+        handshake_by = min(handshake_by, setup_deadline)
+    while time.monotonic() < handshake_by:
+        pump_direct_channel(channel, handshake_by)
+        if channel.failure is not None:
+            raise SimulatorLifecycleError(f"direct wrapper failed: {channel.failure}")
+        identity = channel.wrapper
+        if identity is not None:
+            current = bounded_process_identity(process.pid, handshake_by)
+            if (
+                identity.pid != process.pid
+                or current is None
+                or not same_direct_process(current, identity)
+            ):
+                raise SimulatorLifecycleError("forged direct wrapper identity")
+            return identity
+        if channel.closed or process.poll() is not None:
+            raise SimulatorLifecycleError("direct wrapper exited before identity handshake")
+        time.sleep(bounded_wait(handshake_by, DESCENDANT_POLL_SECONDS))
+    raise SimulatorLifecycleError("direct wrapper identity unavailable")
+
+
+def inspect_darwin_direct_descendants(
+    ancestors: set[ProcessIdentity], deadline: float
+) -> set[ProcessIdentity]:
+    children_by_parent: dict[int, list[ProcessIdentity]] = {}
+    process_ids = deadline_call(
+        lambda: all_process_ids(deadline),
+        deadline,
+        "direct Darwin process census deadline expired",
+    )
+    for pid in process_ids:
+        require_census_budget(deadline)
+        info = bounded_unique_identifier_info(pid, deadline)
+        if info is not None:
+            identity = direct_identity(unique_process_identity(pid, info))
+            children_by_parent.setdefault(info.p_puniqueid, []).append(identity)
+    known: set[int] = set()
+    pending: list[int] = []
+    for identity in ancestors:
+        require_census_budget(deadline)
+        unique_id = identity.started_at[0]
+        if unique_id not in known:
+            known.add(unique_id)
+            pending.append(unique_id)
+    descendants: set[ProcessIdentity] = set()
+    while pending:
+        require_census_budget(deadline)
+        parent_unique_id = pending.pop()
+        for identity in children_by_parent.get(parent_unique_id, []):
+            require_census_budget(deadline)
+            if identity in descendants:
+                continue
+            descendants.add(identity)
+            unique_id = identity.started_at[0]
+            if unique_id not in known:
+                known.add(unique_id)
+                pending.append(unique_id)
+    return descendants
+
+
+def direct_descendant_census(
+    job: DirectJob, deadline: float
+) -> set[ProcessIdentity]:
+    observed = set(job.channel.descendants)
+    roots = observed | {job.identity}
+    if job.channel.target is not None:
+        roots.add(job.channel.target)
+    pending = list(roots)
+    while pending:
+        for identity in bounded_direct_children(pending.pop(), deadline) - roots:
+            roots.add(identity)
+            observed.add(identity)
+            pending.append(identity)
+    if LIBPROC is not None:
+        observed |= inspect_darwin_direct_descendants(roots, deadline)
+    excluded = {direct_identity_key(job.identity)}
+    if job.channel.target is not None:
+        excluded.add(direct_identity_key(job.channel.target))
+    descendants = {
+        direct_identity_key(identity): identity
+        for identity in observed
+        if direct_identity_key(identity) not in excluded
+    }
+    return set(descendants.values())
+
+
+def direct_descendants(job: DirectJob, deadline: float) -> set[ProcessIdentity]:
+    pump_direct_channel(job.channel, deadline)
+    return direct_descendant_census(job, deadline)
+
+
+def current_direct_identity(
+    identity: ProcessIdentity, deadline: float
+) -> ProcessIdentity | None:
+    current = bounded_process_identity(identity.pid, deadline)
+    if current is None or not same_direct_process(current, identity):
+        return None
+    return current
+
+
+def live_direct_descendants(job: DirectJob, deadline: float) -> set[ProcessIdentity]:
+    pump_direct_channel(job.channel, deadline)
+    return {
+        current
+        for identity in direct_descendant_census(job, deadline)
+        if (current := current_direct_identity(identity, deadline)) is not None
+    }
+
+
+def direct_job_status(job: DirectJob, deadline: float | None = None) -> int | None:
+    pump_direct_channel(job.channel, deadline)
+    if job.channel.failure is not None:
+        raise SimulatorLifecycleError(
+            f"direct command failed to start: {job.channel.failure}"
+        )
+    if job.channel.closed and job.channel.returncode is None:
+        raise SimulatorLifecycleError("direct command channel closed before status")
+    return job.channel.returncode
 
 
 def launchd_service_pid(job: LaunchdJob, deadline: float) -> int:
@@ -857,7 +1681,9 @@ def launchd_service_pid(job: LaunchdJob, deadline: float) -> int:
             return int(matches[0])
         if len(matches) > 1:
             raise SimulatorLifecycleError("ambiguous launchd containment process")
-        time.sleep(min(DESCENDANT_POLL_SECONDS, deadline - time.monotonic()))
+        wait = bounded_wait(deadline, DESCENDANT_POLL_SECONDS)
+        if wait > 0:
+            time.sleep(wait)
     raise SimulatorLifecycleError("launchd containment process unavailable")
 
 
@@ -865,20 +1691,34 @@ def launchd_service_containment(
     job: LaunchdJob, deadline: float
 ) -> tuple[int, ProcessIdentity]:
     pid = launchd_service_pid(job, deadline)
-    identity, coalition_id, parent_coalition = deadline_call(
-        lambda: (
-            process_identity(pid),
-            resource_coalition_id(pid),
-            resource_coalition_id(os.getpid()),
-        ),
+    inspection = deadline_call(
+        lambda: inspect_launchd_service_containment(pid),
         deadline,
         "launchd containment validation deadline expired",
     )
-    if identity is None:
+    if inspection is None:
         raise SimulatorLifecycleError("unstable launchd containment identity")
+    identity, coalition_id, parent_coalition = inspection
     if coalition_id is None or coalition_id <= 0 or coalition_id == parent_coalition:
         raise SimulatorLifecycleError("unsafe contained coalition identity")
     return coalition_id, identity
+
+
+def inspect_launchd_service_containment(
+    pid: int,
+) -> tuple[ProcessIdentity, int | None, int | None] | None:
+    first_identity = process_identity(pid)
+    first_coalition = resource_coalition_id(pid)
+    parent_coalition = resource_coalition_id(os.getpid())
+    second_coalition = resource_coalition_id(pid)
+    second_identity = process_identity(pid)
+    if (
+        first_identity is None
+        or first_identity != second_identity
+        or first_coalition != second_coalition
+    ):
+        return None
+    return first_identity, first_coalition, parent_coalition
 
 
 def wait_for_containment_sidecar(job: LaunchdJob, deadline: float) -> object:
@@ -1151,6 +1991,226 @@ def wait_for_job_status(
     return None
 
 
+def wait_for_direct_status(
+    job: DirectJob, timeout: float, wall_deadline: float | None = None
+) -> int | None:
+    deadline = time.monotonic() + timeout
+    observation_deadline = reserved_deadline(wall_deadline, CLEANUP_RESERVE_SECONDS)
+    if observation_deadline is not None:
+        deadline = min(deadline, observation_deadline)
+    while time.monotonic() < deadline:
+        returncode = direct_job_status(job, deadline)
+        if returncode is not None:
+            return returncode
+        time.sleep(bounded_wait(deadline, DESCENDANT_POLL_SECONDS))
+    return None
+
+
+def signal_direct_identity(
+    identity: ProcessIdentity, requested: signal.Signals, deadline: float
+) -> bool:
+    if LIBPROC is None:
+        return signal_linux_direct_identity(identity, requested, deadline)
+    current = current_direct_identity(identity, deadline)
+    if current is None:
+        return False
+    if identity.audit_token is not None and signal_audit_token(
+        identity.audit_token, requested
+    ):
+        return True
+    return (
+        current.audit_token is not None
+        and signal_audit_token(current.audit_token, requested)
+    )
+
+
+def signal_linux_direct_identity(
+    identity: ProcessIdentity, requested: signal.Signals, deadline: float
+) -> bool:
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is None or pidfd_send_signal is None:
+        raise SimulatorLifecycleError("Linux identity-bound signaling is unavailable")
+    try:
+        descriptor = pidfd_open(identity.pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError as error:
+        raise SimulatorLifecycleError("Linux identity handle unavailable") from error
+    try:
+        current = current_direct_identity(identity, deadline)
+        if current is None:
+            result = False
+        else:
+            try:
+                pidfd_send_signal(descriptor, requested, None, 0)
+                result = True
+            except ProcessLookupError:
+                result = False
+            except OSError as error:
+                raise SimulatorLifecycleError("Linux identity-bound signal failed") from error
+    except Exception as error:
+        cleanup_errors: list[str] = []
+        record_cleanup_failure(
+            cleanup_errors, "pidfd close failed", lambda: os.close(descriptor)
+        )
+        append_cleanup_errors(error, "Linux identity cleanup error", cleanup_errors)
+        raise
+    try:
+        os.close(descriptor)
+    except OSError as error:
+        raise SimulatorLifecycleError(
+            f"Linux identity handle cleanup failed: {error}"
+        ) from error
+    return result
+
+
+def signal_direct_target(
+    job: DirectJob, requested: signal.Signals, deadline: float
+) -> None:
+    target = job.channel.target
+    if target is None or signal_direct_identity(target, requested, deadline):
+        return
+    if current_direct_identity(target, deadline) is not None:
+        raise SimulatorLifecycleError("identity-bound direct target signal failed")
+
+
+def signal_direct_descendants(
+    job: DirectJob, requested: signal.Signals, deadline: float
+) -> None:
+    for identity in live_direct_descendants(job, deadline):
+        require_census_budget(deadline)
+        if signal_direct_identity(identity, requested, deadline):
+            continue
+        current = current_direct_identity(identity, deadline)
+        if current is not None and same_direct_process(current, identity):
+            raise SimulatorLifecycleError("identity-bound direct signal failed")
+
+
+def force_direct_wrapper_exit(job: DirectJob, deadline: float) -> None:
+    if job.process.poll() is not None:
+        return
+    if signal_direct_identity(job.identity, signal.SIGKILL, deadline):
+        return
+    if current_direct_identity(job.identity, deadline) is not None:
+        raise SimulatorLifecycleError("identity-bound direct wrapper signal failed")
+
+
+def reap_direct_wrapper(job: DirectJob, deadline: float) -> None:
+    if job.process.poll() is not None:
+        return
+    reap_process_with_grace(
+        job.process,
+        deadline,
+        CLEANUP_RESERVE_SECONDS,
+        "direct wrapper reap deadline expired",
+        "direct wrapper reap timed out",
+    )
+
+
+def record_direct_cleanup(
+    errors: list[str], operation: Callable[[], object]
+) -> object | None:
+    try:
+        return operation()
+    except Exception as error:
+        errors.append(str(error))
+        return None
+
+
+def direct_cleanup_observation(
+    job: DirectJob, deadline: float, errors: list[str]
+) -> tuple[set[ProcessIdentity], bool]:
+    try:
+        pump_direct_channel(job.channel, deadline)
+    except Exception as error:
+        errors.append(str(error))
+    try:
+        live = {
+            current
+            for identity in direct_descendant_census(job, deadline)
+            if (current := current_direct_identity(identity, deadline)) is not None
+        }
+        return live, True
+    except Exception as error:
+        errors.append(str(error))
+        return set(), False
+
+
+def direct_target_is_live(job: DirectJob, deadline: float) -> bool:
+    target = job.channel.target
+    return target is not None and current_direct_identity(target, deadline) is not None
+
+
+def drain_direct_job(job: DirectJob, deadline: float, errors: list[str]) -> None:
+    empty_since: float | None = None
+    while time.monotonic() < deadline:
+        live, observed = direct_cleanup_observation(job, deadline, errors)
+        for identity in live:
+            record_direct_cleanup(
+                errors,
+                lambda identity=identity: signal_direct_identity(
+                    identity, signal.SIGKILL, deadline
+                ),
+            )
+        record_direct_cleanup(
+            errors, lambda: signal_direct_target(job, signal.SIGKILL, deadline)
+        )
+        now = time.monotonic()
+        target_live = record_direct_cleanup(
+            errors, lambda: direct_target_is_live(job, deadline)
+        )
+        if observed and not live and target_live is False:
+            empty_since = empty_since or now
+            if now - empty_since >= DESCENDANT_QUIESCENCE_SECONDS:
+                return
+        else:
+            empty_since = None
+        time.sleep(bounded_wait(deadline, DESCENDANT_POLL_SECONDS))
+    errors.append("direct process cleanup incomplete")
+
+
+def cleanup_direct_job(
+    job: DirectJob, deadline: float | None, signal_root: bool
+) -> None:
+    cleanup_by = cleanup_deadline(deadline)
+    errors: list[str] = []
+    try:
+        if signal_root:
+            phases = [(signal.SIGINT, 0.05), (signal.SIGTERM, 0.1)]
+            if hasattr(signal, "SIGINFO"):
+                phases.insert(0, (signal.SIGINFO, 0.02))
+            for requested, pause in phases:
+                record_direct_cleanup(
+                    errors,
+                    lambda requested=requested: pump_direct_channel(
+                        job.channel, cleanup_by
+                    ),
+                )
+                record_direct_cleanup(
+                    errors,
+                    lambda requested=requested: signal_direct_target(
+                        job, requested, cleanup_by
+                    ),
+                )
+                record_direct_cleanup(
+                    errors,
+                    lambda requested=requested: signal_direct_descendants(
+                        job, requested, cleanup_by
+                    ),
+                )
+                time.sleep(bounded_wait(cleanup_by, pause))
+        drain_direct_job(job, cleanup_by, errors)
+    finally:
+        record_direct_cleanup(
+            errors, lambda: force_direct_wrapper_exit(job, cleanup_by)
+        )
+        record_direct_cleanup(errors, lambda: reap_direct_wrapper(job, cleanup_by))
+        record_direct_cleanup(errors, lambda: close_direct_channel(job.channel))
+    if errors:
+        raise SimulatorLifecycleError("; ".join(dict.fromkeys(errors)))
+
+
 def write_timeout_evidence(
     args: argparse.Namespace,
     attempt: int,
@@ -1403,31 +2463,87 @@ def lifecycle_timeout(
     return configured if available is None else min(configured, available)
 
 
-def lifecycle_process(
+def direct_lifecycle_process(
+    command: list[str], timeout: float, deadline: float | None
+) -> LifecycleOutcome:
+    job = spawn_direct_job(command, deadline)
+    cleanup_attempted = False
+    cleanup_errors: list[str] = []
+    try:
+        returncode = wait_for_direct_status(job, timeout, deadline)
+        cleanup_attempted = True
+        try:
+            cleanup_direct_job(job, deadline, returncode is None)
+        except SimulatorLifecycleError as error:
+            cleanup_errors.append(str(error))
+        stdout = job_output(job.stdout_path)
+        stderr = job_output(job.stderr_path)
+    except Exception as error:
+        if not cleanup_attempted and job.root.exists():
+            record_cleanup_failure(
+                cleanup_errors, "", lambda: cleanup_direct_job(job, deadline, True)
+            )
+        record_cleanup_failure(
+            cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+        )
+        append_cleanup_errors(error, "direct cleanup error", cleanup_errors)
+        raise
+    record_cleanup_failure(
+        cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+    )
+    cleanup_error = cleanup_error_text(cleanup_errors)
+    if cleanup_error is not None:
+        stderr += f"\ndirect cleanup error: {cleanup_error}\n"
+        if returncode == 0:
+            raise SimulatorLifecycleError(cleanup_error)
+    if returncode is None:
+        raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+    return LifecycleOutcome(command, returncode, stdout, stderr)
+
+
+def contained_lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
     job = spawn_contained_job(command, False, deadline)
     cleanup_attempted = False
+    cleanup_errors: list[str] = []
     try:
         returncode = wait_for_job_status(job, timeout, deadline)
         cleanup_attempted = True
-        cleanup_error = lifecycle_cleanup_error(job, deadline, returncode is None)
+        record_cleanup_failure(
+            cleanup_errors, "", lambda: cleanup_contained_job(job, deadline, returncode is None)
+        )
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
-        if cleanup_error is not None:
-            stderr += f"\ncontainment teardown warning: {cleanup_error}\n"
-        if returncode is None:
-            raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
-        return LifecycleOutcome(command, returncode, stdout, stderr, job)
-    except Exception:
+    except Exception as error:
         if not cleanup_attempted and job.root.exists():
-            try:
-                cleanup_contained_job(job, deadline, True)
-            except SimulatorLifecycleError:
-                pass
+            record_cleanup_failure(
+                cleanup_errors, "", lambda: cleanup_contained_job(job, deadline, True)
+            )
+        record_cleanup_failure(
+            cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+        )
+        append_cleanup_errors(error, "coalition cleanup error", cleanup_errors)
         raise
-    finally:
-        shutil.rmtree(job.root, ignore_errors=True)
+    record_cleanup_failure(
+        cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+    )
+    cleanup_error = cleanup_error_text(cleanup_errors)
+    if cleanup_error is not None:
+        stderr += f"\ncoalition cleanup error: {cleanup_error}\n"
+        if returncode == 0:
+            raise SimulatorLifecycleError(cleanup_error)
+    if returncode is None:
+        raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+    return LifecycleOutcome(command, returncode, stdout, stderr)
+
+
+def lifecycle_process(
+    command: list[str], timeout: float, deadline: float | None
+) -> LifecycleOutcome:
+    if LIBPROC is not None:
+        return contained_lifecycle_process(command, timeout, deadline)
+    return direct_lifecycle_process(command, timeout, deadline)
 
 
 def contained_cleanup_error(
@@ -1441,7 +2557,7 @@ def contained_cleanup_error(
 
 
 def cleanup_process_evidence(
-    evidence: str, cleanup_error: SimulatorLifecycleError | None
+    evidence: str, cleanup_error: str | None
 ) -> str:
     if cleanup_error is None:
         return evidence
@@ -1809,6 +2925,25 @@ def write_log_header(
         evidence_errors.append(error)
 
 
+def append_failed_attempt_cleanup(
+    error: Exception,
+    job: LaunchdJob,
+    deadline: float | None,
+    cleanup_attempted: bool,
+) -> None:
+    cleanup_errors: list[str] = []
+    if not cleanup_attempted and job.root.exists():
+        record_cleanup_failure(
+            cleanup_errors,
+            "containment cleanup failed",
+            lambda: cleanup_contained_job(job, deadline, True),
+        )
+    record_cleanup_failure(
+        cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+    )
+    append_cleanup_errors(error, "xcodebuild cleanup error", cleanup_errors)
+
+
 def run_attempt(
     args: argparse.Namespace,
     command: list[str],
@@ -1834,26 +2969,27 @@ def run_attempt(
             evidence_deadline = process_evidence_deadline(deadline)
             process_evidence = launchd_job_evidence(job, evidence_deadline)
         cleanup_attempted = True
-        cleanup_error = contained_cleanup_error(
+        cleanup_errors: list[str] = []
+        containment_error = contained_cleanup_error(
             job, deadline, timeout_reason is not None
         )
+        if containment_error is not None:
+            cleanup_errors.append(str(containment_error))
+        record_cleanup_failure(
+            cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+        )
+        cleanup_error = cleanup_error_text(cleanup_errors)
         process_evidence = cleanup_process_evidence(process_evidence, cleanup_error)
         return AttemptOutcome(
             returncode if returncode is not None else -signal.SIGKILL,
             output,
             timeout_reason,
             process_evidence,
-            None if cleanup_error is None else str(cleanup_error),
+            cleanup_error,
         )
-    except Exception:
-        if not cleanup_attempted and job.root.exists():
-            try:
-                cleanup_contained_job(job, deadline, True)
-            except SimulatorLifecycleError:
-                pass
+    except Exception as error:
+        append_failed_attempt_cleanup(error, job, deadline, cleanup_attempted)
         raise
-    finally:
-        shutil.rmtree(job.root, ignore_errors=True)
 
 
 def timeout_classification(args: argparse.Namespace, outcome: AttemptOutcome) -> tuple[str, int]:
@@ -1996,6 +3132,25 @@ def run_contained_child(arguments: list[str]) -> int:
     )
 
 
+def run_direct_child(arguments: list[str]) -> int:
+    if len(arguments) < 6 or arguments[4] != "--":
+        print("invalid direct-child arguments", file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    return direct_child(
+        int(arguments[1]),
+        int(arguments[2]),
+        int(arguments[3]),
+        arguments[5:],
+    )
+
+
+def run_direct_target(arguments: list[str]) -> int:
+    if len(arguments) < 4 or arguments[2] != "--":
+        print("invalid direct-target arguments", file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    return direct_target(int(arguments[1]), arguments[3:])
+
+
 def run_evidence_writer(arguments: list[str]) -> int:
     if len(arguments) != 2:
         print("invalid evidence-writer arguments", file=sys.stderr)
@@ -2015,6 +3170,10 @@ def run_evidence_writer(arguments: list[str]) -> int:
 def main() -> int:
     if sys.argv[1:2] == [CONTAINED_CHILD_ARGUMENT]:
         return run_contained_child(sys.argv[1:])
+    if sys.argv[1:2] == [DIRECT_CHILD_ARGUMENT]:
+        return run_direct_child(sys.argv[1:])
+    if sys.argv[1:2] == [DIRECT_TARGET_ARGUMENT]:
+        return run_direct_target(sys.argv[1:])
     if sys.argv[1:2] == [EVIDENCE_WRITER_ARGUMENT]:
         return run_evidence_writer(sys.argv[1:])
     return run(parse_args())

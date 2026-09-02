@@ -63,6 +63,70 @@ def launchd_job(
     )
 
 
+def direct_job(root: Path) -> run_xcode_tests.DirectJob:
+    process = mock.Mock(spec=subprocess.Popen)
+    process.poll.return_value = None
+    return run_xcode_tests.DirectJob(
+        root,
+        root / "stdout.log",
+        root / "stderr.log",
+        process,
+        run_xcode_tests.ProcessIdentity(123, (456, 789)),
+        run_xcode_tests.DirectChannel(-1, b"test-key"),
+    )
+
+
+def direct_frame(
+    key: bytes, sequence: int, payload: dict[str, object]
+) -> bytes:
+    authenticated = run_xcode_tests.direct_message_bytes(sequence, payload)
+    message = {
+        "mac": run_xcode_tests.hmac.new(
+            key, authenticated, run_xcode_tests.hashlib.sha256
+        ).hexdigest(),
+        "payload": payload,
+        "sequence": sequence,
+    }
+    return run_xcode_tests.json.dumps(
+        message, separators=(",", ":"), sort_keys=True
+    ).encode() + b"\n"
+
+
+def darwin_descendant_fixture() -> tuple[
+    run_xcode_tests.ProcessIdentity,
+    list[int],
+    dict[int, run_xcode_tests.ProcUniqueIdentifierInfo],
+    set[run_xcode_tests.ProcessIdentity],
+]:
+    root = run_xcode_tests.ProcessIdentity(900, (1, 0))
+    process_ids: list[int] = []
+    infos: dict[int, run_xcode_tests.ProcUniqueIdentifierInfo] = {}
+    expected: set[run_xcode_tests.ProcessIdentity] = set()
+
+    def add_identity(pid: int, unique_id: int, parent_unique_id: int) -> None:
+        info = run_xcode_tests.ProcUniqueIdentifierInfo()
+        info.p_uniqueid = unique_id
+        info.p_puniqueid = parent_unique_id
+        info.p_idversion = 1
+        process_ids.append(pid)
+        infos[pid] = info
+        audit_token = [0] * 8
+        audit_token[5], audit_token[7] = pid, 1
+        expected.add(
+            run_xcode_tests.ProcessIdentity(pid, (unique_id, 0), tuple(audit_token))
+        )
+
+    parent_unique_id = root.started_at[0]
+    for level in range(40):
+        for branch in range(3):
+            leaf_id = 10_000 + level * 3 + branch
+            add_identity(20_000 + leaf_id, leaf_id, parent_unique_id)
+        chain_id = level + 2
+        add_identity(1_000 + level, chain_id, parent_unique_id)
+        parent_unique_id = chain_id
+    return root, process_ids, infos, expected
+
+
 def launchd_service_pid(label: str) -> int | None:
     result = subprocess.run(
         ["/bin/launchctl", "print", f"gui/{os.getuid()}/{label}"],
@@ -430,10 +494,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     "pathlib.Path(sys.argv[1]).write_text(str(child.pid))"
                 )
                 source = (
-                    "import pathlib,subprocess,sys,time; time.sleep(0.3); "
+                    "import subprocess,sys; "
                     f"middle=subprocess.Popen([sys.executable,'-c',{intermediary!r},{str(pid_path)!r}],"
                     "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
-                    "time.sleep(0.003); middle.wait(timeout=2); "
+                    "middle.wait(timeout=2); "
                     "raise SystemExit(7)"
                 )
                 with self.assertRaisesRegex(
@@ -451,6 +515,158 @@ class XcodeTestRunnerTests(unittest.TestCase):
                         os.kill(grandchild_pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux subreaper")
+    def test_direct_cleanup_reaps_descendant_forked_during_sigterm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_path = root / "termination-child.pid"
+            source = """
+                import os, pathlib, signal, subprocess, sys, time
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                def terminate(*_):
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(30)"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+                    os._exit(7)
+                signal.signal(signal.SIGTERM, terminate)
+                print("READY", flush=True)
+                time.sleep(30)
+            """
+            command = [sys.executable, "-c", textwrap.dedent(source), str(pid_path)]
+            child_pid = self.terminate_ready_direct_job(command, pid_path)
+        try:
+            self.assertTrue(self.wait_until_process_exits(child_pid))
+        finally:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def test_direct_pipe_failure_closes_earlier_pipe_and_removes_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "spawn"
+            acquired: list[int] = []
+            failure = OSError("key pipe failed")
+            real_pipe = os.pipe
+
+            def create_root(**_options: object) -> str:
+                root.mkdir()
+                return str(root)
+
+            def fail_after_first_pipe() -> tuple[int, int]:
+                if acquired:
+                    raise failure
+                descriptors = real_pipe()
+                acquired.extend(descriptors)
+                return descriptors
+
+            with mock.patch.object(
+                run_xcode_tests.tempfile, "mkdtemp", side_effect=create_root
+            ), mock.patch.object(
+                run_xcode_tests.os, "pipe", side_effect=fail_after_first_pipe
+            ), mock.patch.object(
+                run_xcode_tests, "LIBPROC", None
+            ):
+                with self.assertRaisesRegex(OSError, "key pipe failed") as raised:
+                    run_xcode_tests.spawn_direct_job(["target"], None)
+            self.assertIs(raised.exception, failure)
+            self.assertFalse(root.exists())
+            for descriptor in acquired:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_direct_setup_preserves_primary_when_abort_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "spawn"
+            acquired: list[int] = []
+            real_pipe = os.pipe
+            process = mock.Mock(spec=subprocess.Popen)
+            primary = run_xcode_tests.SimulatorLifecycleError("identity failed")
+            cleanup = run_xcode_tests.SimulatorLifecycleError("abort timed out")
+
+            def create_root(**_options: object) -> str:
+                root.mkdir()
+                return str(root)
+
+            def capture_pipe() -> tuple[int, int]:
+                descriptors = real_pipe()
+                acquired.extend(descriptors)
+                return descriptors
+
+            with mock.patch.object(
+                run_xcode_tests.tempfile, "mkdtemp", side_effect=create_root
+            ), mock.patch.object(
+                run_xcode_tests.os, "pipe", side_effect=capture_pipe
+            ), mock.patch.object(
+                run_xcode_tests.os, "write", side_effect=lambda _fd, content: len(content)
+            ), mock.patch.object(
+                run_xcode_tests.subprocess, "Popen", return_value=process
+            ), mock.patch.object(
+                run_xcode_tests, "await_direct_identity", side_effect=primary
+            ), mock.patch.object(
+                run_xcode_tests, "LIBPROC", None
+            ), mock.patch.object(
+                run_xcode_tests, "abort_direct_spawn", side_effect=cleanup
+            ) as abort:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "identity failed; direct setup cleanup error: abort timed out",
+                ) as raised:
+                    run_xcode_tests.spawn_direct_job(["target"], None)
+            self.assertIs(raised.exception, primary)
+            abort.assert_called_once_with(process, None)
+            self.assertFalse(root.exists())
+            for descriptor in acquired:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_abort_direct_spawn_zero_budget_uses_bounded_reap(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        process.wait.return_value = -signal.SIGKILL
+        with mock.patch.object(run_xcode_tests.threading, "Thread") as thread:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "direct wrapper setup cleanup deadline expired",
+            ):
+                run_xcode_tests.abort_direct_spawn(process, time.monotonic() - 1)
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once()
+        timeout = process.wait.call_args.kwargs["timeout"]
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, run_xcode_tests.DIRECT_WRAPPER_REAP_SECONDS)
+        thread.assert_not_called()
+
+    def test_reap_direct_wrapper_zero_budget_uses_bounded_reap(self) -> None:
+        job = direct_job(Path("/tmp/unused-direct-job"))
+        job.process.wait.return_value = 0
+        with mock.patch.object(run_xcode_tests.threading, "Thread") as thread:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "direct wrapper reap deadline expired",
+            ):
+                run_xcode_tests.reap_direct_wrapper(job, time.monotonic() - 1)
+        job.process.wait.assert_called_once()
+        timeout = job.process.wait.call_args.kwargs["timeout"]
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, run_xcode_tests.CLEANUP_RESERVE_SECONDS)
+        thread.assert_not_called()
+
+    def test_darwin_direct_spawn_requires_resource_coalition(self) -> None:
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests.tempfile, "mkdtemp"
+        ) as create_root:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "Darwin direct containment unavailable",
+            ):
+                run_xcode_tests.spawn_direct_job(["target"], None)
+        create_root.assert_not_called()
 
     def test_descendant_forked_during_sigterm_is_cleaned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -512,6 +728,404 @@ class XcodeTestRunnerTests(unittest.TestCase):
             process_ids = run_xcode_tests.all_process_ids(time.monotonic() + 1)
         self.assertEqual(capacities, [1024, 2048])
         self.assertEqual(process_ids, list(range(1, 1501)))
+
+    def test_direct_channel_frame_flood_is_bounded_without_losing_status(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        os.set_blocking(read_descriptor, False)
+        channel = run_xcode_tests.DirectChannel(read_descriptor, b"authenticated")
+        identities = [
+            run_xcode_tests.ProcessIdentity(pid, (pid, 1))
+            for pid in range(100, 228)
+        ]
+        payloads = [
+            {"event": "wrapper", "identity": run_xcode_tests.identity_payload(identities[0])},
+            {"event": "target", "identity": run_xcode_tests.identity_payload(identities[1])},
+            *(
+                {"event": "descendant", "identity": run_xcode_tests.identity_payload(identity)}
+                for identity in identities[2:]
+            ),
+            {"event": "status", "returncode": 0},
+        ]
+        channel.buffer = b"".join(
+            direct_frame(channel.key, sequence, payload)
+            for sequence, payload in enumerate(payloads, 1)
+        )
+        try:
+            run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
+            self.assertIsNone(channel.returncode)
+            self.assertEqual(channel.sequence, run_xcode_tests.DIRECT_CHANNEL_WORK_PER_PUMP)
+            run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
+            self.assertEqual(channel.returncode, 0)
+        finally:
+            os.close(write_descriptor)
+            run_xcode_tests.close_direct_channel(channel)
+
+    def test_direct_channel_closes_descriptor_on_eof_and_invalid_frames(self) -> None:
+        cases = [("eof", b"", None), ("malformed", b"{bad}\n", "invalid"), ("truncated", b"{bad", "truncated")]
+        for name, content, expected in cases:
+            with self.subTest(name=name):
+                read_descriptor, write_descriptor = os.pipe()
+                os.set_blocking(read_descriptor, False)
+                channel = run_xcode_tests.DirectChannel(read_descriptor, b"key")
+                os.write(write_descriptor, content)
+                os.close(write_descriptor)
+                if expected is None:
+                    run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
+                else:
+                    with self.assertRaisesRegex(
+                        run_xcode_tests.SimulatorLifecycleError, expected
+                    ):
+                        run_xcode_tests.pump_direct_channel(
+                            channel, time.monotonic() + 1
+                        )
+                self.assertTrue(channel.closed)
+                self.assertEqual(channel.descriptor, -1)
+                with self.assertRaises(OSError):
+                    os.fstat(read_descriptor)
+
+    def test_malformed_channel_error_survives_descriptor_close_failure(self) -> None:
+        channel = run_xcode_tests.DirectChannel(91, b"key", buffer=b"frame\n")
+        primary = run_xcode_tests.SimulatorLifecycleError("invalid direct channel message")
+        close_error = OSError("descriptor busy")
+        with mock.patch.object(
+            run_xcode_tests, "apply_direct_message", side_effect=primary
+        ), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=close_error
+        ) as close:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "invalid direct channel message; direct channel cleanup error: "
+                "descriptor close failed: descriptor busy",
+            ) as raised:
+                run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
+        self.assertIs(raised.exception, primary)
+        self.assertTrue(channel.closed)
+        self.assertEqual(channel.descriptor, -1)
+        close.assert_called_once_with(91)
+
+    def test_direct_channel_deadline_prevents_further_authenticated_work(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        os.set_blocking(read_descriptor, False)
+        channel = run_xcode_tests.DirectChannel(read_descriptor, b"key")
+        channel.buffer = direct_frame(
+            channel.key,
+            1,
+            {"event": "wrapper", "identity": run_xcode_tests.identity_payload(
+                run_xcode_tests.ProcessIdentity(123, (1, 2))
+            )},
+        )
+        try:
+            run_xcode_tests.pump_direct_channel(channel, time.monotonic() - 1)
+            self.assertEqual(channel.sequence, 0)
+            self.assertNotEqual(channel.buffer, b"")
+        finally:
+            os.close(write_descriptor)
+            run_xcode_tests.close_direct_channel(channel)
+
+    def test_direct_channel_deadline_expiry_stops_buffered_frame_loop(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        os.set_blocking(read_descriptor, False)
+        channel = run_xcode_tests.DirectChannel(
+            read_descriptor,
+            b"key",
+            wrapper=run_xcode_tests.ProcessIdentity(1, (1, 1)),
+            target=run_xcode_tests.ProcessIdentity(2, (2, 2)),
+        )
+        frames = b"".join(
+            direct_frame(
+                channel.key,
+                sequence,
+                {"event": "descendant", "identity": run_xcode_tests.identity_payload(
+                    run_xcode_tests.ProcessIdentity(sequence + 2, (sequence + 2, 3))
+                )},
+            )
+            for sequence in range(1, run_xcode_tests.DIRECT_CHANNEL_WORK_PER_PUMP + 1)
+        )
+        channel.buffer = frames
+        try:
+            with mock.patch.object(
+                run_xcode_tests.time, "monotonic", side_effect=[9.0, 10.0]
+            ):
+                run_xcode_tests.pump_direct_channel(channel, 10.0)
+            self.assertEqual(channel.sequence, 0)
+            self.assertEqual(channel.buffer, frames)
+        finally:
+            os.close(write_descriptor)
+            run_xcode_tests.close_direct_channel(channel)
+
+    def test_linux_direct_signal_uses_pidfd_before_identity_recheck(self) -> None:
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 20))
+        events: list[str] = []
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests.os, "pidfd_open", create=True,
+            side_effect=lambda *_args: events.append("open") or 91,
+        ), mock.patch.object(
+            run_xcode_tests, "current_direct_identity",
+            side_effect=lambda *_args: events.append("inspect") or identity,
+        ), mock.patch.object(
+            run_xcode_tests.signal, "pidfd_send_signal", create=True,
+            side_effect=lambda *_args: events.append("signal"),
+        ), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=lambda *_args: events.append("close")
+        ):
+            self.assertTrue(
+                run_xcode_tests.signal_direct_identity(
+                    identity, signal.SIGTERM, time.monotonic() + 1
+                )
+            )
+        self.assertEqual(events, ["open", "inspect", "signal", "close"])
+
+    def test_linux_direct_signal_rejects_reused_pid_after_pidfd_open(self) -> None:
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 20))
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests.os, "pidfd_open", create=True, return_value=91
+        ), mock.patch.object(
+            run_xcode_tests, "current_direct_identity", return_value=None
+        ), mock.patch.object(
+            run_xcode_tests.signal, "pidfd_send_signal", create=True
+        ) as send, mock.patch.object(run_xcode_tests.os, "close") as close:
+            self.assertFalse(
+                run_xcode_tests.signal_direct_identity(
+                    identity, signal.SIGTERM, time.monotonic() + 1
+                )
+            )
+        send.assert_not_called()
+        close.assert_called_once_with(91)
+
+    def test_direct_child_snapshot_rejects_reused_unrelated_pid(self) -> None:
+        parent = run_xcode_tests.ProcessIdentity(1111, (10, 20))
+        replacement = run_xcode_tests.ProcessIdentity(2222, (30, 40))
+
+        def current_identity(pid: int) -> run_xcode_tests.ProcessIdentity:
+            return parent if pid == parent.pid else replacement
+
+        with mock.patch.object(
+            run_xcode_tests, "direct_process_identity", side_effect=current_identity
+        ), mock.patch.object(
+            run_xcode_tests, "direct_child_process_ids", return_value=[replacement.pid]
+        ), mock.patch.object(
+            run_xcode_tests,
+            "direct_process_record",
+            return_value=(replacement, 9999),
+        ):
+            children = run_xcode_tests.observed_direct_children(parent)
+        self.assertEqual(children, set())
+
+    def test_direct_child_identity_rejects_pid_reuse_during_binding(self) -> None:
+        parent = run_xcode_tests.ProcessIdentity(1111, (10, 20))
+        departed = run_xcode_tests.ProcessIdentity(2222, (30, 40))
+        replacement = run_xcode_tests.ProcessIdentity(2222, (50, 60))
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_record",
+            side_effect=[
+                (departed, parent.pid),
+                (replacement, parent.pid),
+            ],
+        ):
+            identity = run_xcode_tests.direct_child_identity(parent, departed.pid)
+        self.assertIsNone(identity)
+
+    def test_stable_darwin_process_info_rejects_uniqueid_churn(self) -> None:
+        first = run_xcode_tests.ProcUniqueIdentifierInfo()
+        first.p_uniqueid = 10
+        first.p_idversion = 20
+        second = run_xcode_tests.ProcUniqueIdentifierInfo()
+        second.p_uniqueid = 11
+        second.p_idversion = 20
+        library = mock.Mock()
+
+        def read_bsd_info(
+            pid: int, _flavor: int, _arg: int, pointer: object, _size: int
+        ) -> int:
+            pointer._obj.pbi_pid = pid  # type: ignore[attr-defined]
+            return ctypes.sizeof(run_xcode_tests.ProcBSDInfo)
+
+        library.proc_pidinfo.side_effect = read_bsd_info
+        with mock.patch.object(run_xcode_tests, "LIBPROC", library), mock.patch.object(
+            run_xcode_tests,
+            "unique_identifier_info",
+            side_effect=[first, second],
+        ):
+            record = run_xcode_tests.stable_darwin_process_info(2222)
+        self.assertIsNone(record)
+
+    def test_launchd_containment_rejects_identity_or_coalition_churn(self) -> None:
+        original = run_xcode_tests.ProcessIdentity(2222, (10, 20))
+        replacement = run_xcode_tests.ProcessIdentity(2222, (11, 20))
+        cases = (
+            ("identity", original, replacement, 77, 77),
+            ("coalition", original, original, 77, 99),
+        )
+        for name, first, second, first_coalition, second_coalition in cases:
+            with self.subTest(name=name), mock.patch.object(
+                run_xcode_tests, "process_identity", side_effect=[first, second]
+            ) as identities, mock.patch.object(
+                run_xcode_tests,
+                "resource_coalition_id",
+                side_effect=[first_coalition, 88, second_coalition],
+            ) as coalitions:
+                result = run_xcode_tests.inspect_launchd_service_containment(2222)
+            self.assertIsNone(result)
+            self.assertEqual(identities.call_args_list, [mock.call(2222), mock.call(2222)])
+            self.assertEqual(
+                coalitions.call_args_list,
+                [mock.call(2222), mock.call(os.getpid()), mock.call(2222)],
+            )
+
+    def test_bounded_child_census_rejects_reused_unrelated_pid(self) -> None:
+        parent = run_xcode_tests.ProcessIdentity(1111, (10, 20))
+        replacement = run_xcode_tests.ProcessIdentity(2222, (30, 40))
+
+        def bounded_identity(
+            pid: int, _deadline: float
+        ) -> run_xcode_tests.ProcessIdentity:
+            return parent if pid == parent.pid else replacement
+
+        with mock.patch.object(
+            run_xcode_tests, "bounded_process_identity", side_effect=bounded_identity
+        ), mock.patch.object(
+            run_xcode_tests, "direct_child_process_ids", return_value=[replacement.pid]
+        ), mock.patch.object(
+            run_xcode_tests,
+            "direct_process_record",
+            return_value=(replacement, 9999),
+        ):
+            children = run_xcode_tests.bounded_direct_children(
+                parent, time.monotonic() + 1
+            )
+        self.assertEqual(children, set())
+
+    def test_pidfd_close_failure_attaches_to_primary_identity_error(self) -> None:
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 20))
+        primary = run_xcode_tests.SimulatorLifecycleError("identity inspection failed")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests.os, "pidfd_open", create=True, return_value=91
+        ), mock.patch.object(
+            run_xcode_tests, "current_direct_identity", side_effect=primary
+        ), mock.patch.object(
+            run_xcode_tests.signal, "pidfd_send_signal", create=True
+        ) as send, mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=OSError("descriptor busy")
+        ) as close:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "identity inspection failed; Linux identity cleanup error: "
+                "pidfd close failed: descriptor busy",
+            ) as raised:
+                run_xcode_tests.signal_direct_identity(
+                    identity, signal.SIGTERM, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        send.assert_not_called()
+        close.assert_called_once_with(91)
+
+    def test_pidfd_close_failure_fails_closed_after_successful_signal(self) -> None:
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 20))
+        close_error = OSError("descriptor busy")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests.os, "pidfd_open", create=True, return_value=91
+        ), mock.patch.object(
+            run_xcode_tests, "current_direct_identity", return_value=identity
+        ), mock.patch.object(
+            run_xcode_tests.signal, "pidfd_send_signal", create=True
+        ) as send, mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=close_error
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "Linux identity handle cleanup failed: descriptor busy",
+            ) as raised:
+                run_xcode_tests.signal_direct_identity(
+                    identity, signal.SIGTERM, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception.__cause__, close_error)
+        send.assert_called_once_with(91, signal.SIGTERM, None, 0)
+
+    def test_direct_darwin_pid_census_has_hard_deadline(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def stalled_census(_deadline: float) -> list[int]:
+            entered.set()
+            release.wait(1)
+            return []
+
+        deadline = time.monotonic() + 0.02
+        try:
+            with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+                run_xcode_tests, "all_process_ids", side_effect=stalled_census
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.OperationDeadlineExpired,
+                    "Darwin process census deadline expired",
+                ):
+                    run_xcode_tests.inspect_darwin_direct_descendants(set(), deadline)
+            self.assertTrue(entered.is_set())
+        finally:
+            release.set()
+
+    def test_direct_darwin_identity_lookup_has_hard_deadline(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def stalled_identity(_pid: int) -> object:
+            entered.set()
+            release.wait(1)
+            return None
+
+        deadline = time.monotonic() + 0.02
+        try:
+            with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+                run_xcode_tests, "all_process_ids", return_value=[42]
+            ), mock.patch.object(
+                run_xcode_tests, "unique_identifier_info", side_effect=stalled_identity
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.OperationDeadlineExpired,
+                    "unique identity census deadline expired",
+                ):
+                    run_xcode_tests.inspect_darwin_direct_descendants(set(), deadline)
+            self.assertTrue(entered.is_set())
+        finally:
+            release.set()
+
+    def test_direct_darwin_descendant_closure_is_complete_with_budget(self) -> None:
+        root, process_ids, infos, expected = darwin_descendant_fixture()
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "all_process_ids", return_value=process_ids
+        ), mock.patch.object(
+            run_xcode_tests,
+            "bounded_unique_identifier_info",
+            side_effect=lambda pid, _deadline: infos[pid],
+        ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
+            descendants = run_xcode_tests.inspect_darwin_direct_descendants(
+                {root}, 1.0
+            )
+        self.assertEqual(descendants, expected)
+
+    def test_direct_darwin_descendant_closure_stops_on_expiring_clock(self) -> None:
+        root, process_ids, infos, _expected = darwin_descendant_fixture()
+        clock_calls = 0
+
+        def expiring_clock() -> float:
+            nonlocal clock_calls
+            clock_calls += 1
+            return 1.0 if clock_calls >= len(process_ids) + 80 else 0.0
+
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "all_process_ids", return_value=process_ids
+        ), mock.patch.object(
+            run_xcode_tests,
+            "bounded_unique_identifier_info",
+            side_effect=lambda pid, _deadline: infos[pid],
+        ), mock.patch.object(run_xcode_tests.time, "monotonic", expiring_clock):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "Darwin coalition census deadline expired",
+            ):
+                run_xcode_tests.inspect_darwin_direct_descendants({root}, 1.0)
+        self.assertGreater(clock_calls, len(process_ids))
 
     def test_coalition_census_hard_deadline_bounds_all_pid_lookups(self) -> None:
         entered = threading.Event()
@@ -755,15 +1369,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
             )
             self.assertEqual(started.returncode, 0, started.stderr)
             concurrent_identity = wait_for_launchd_service_identity(concurrent, "/bin/sleep")
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                args = simulator_args(root)
-                args.diagnostics_dir.mkdir()
-                args.wall_deadline = time.monotonic() + 5
-                result = run_xcode_tests.lifecycle_command(
-                    args, "launchd-escape", [sys.executable, "-c", source, escaped]
-                )
-            self.assertIn("SUBMIT_RC=1", result.stdout)
+            output = self.completed_contained_output(
+                [sys.executable, "-c", source, escaped]
+            )
+            self.assertIn("SUBMIT_RC=1", output)
             self.assertIsNone(launchd_service_pid(escaped))
             self.assertEqual(
                 run_xcode_tests.process_identity(concurrent_identity.pid),
@@ -867,6 +1476,18 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(standalone, 10.0 + run_xcode_tests.CLEANUP_RESERVE_SECONDS)
         self.assertEqual(distant, 10.0 + run_xcode_tests.CLEANUP_RESERVE_SECONDS)
         self.assertEqual(urgent, 10.25)
+
+    def test_launchd_domain_failure_does_not_create_job_root(self) -> None:
+        failure = run_xcode_tests.SimulatorLifecycleError("domain unavailable")
+        with mock.patch.object(
+            run_xcode_tests, "launchd_domain", side_effect=failure
+        ), mock.patch.object(run_xcode_tests.tempfile, "mkdtemp") as create_root:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError, "domain unavailable"
+            ) as raised:
+                run_xcode_tests.create_launchd_job()
+        self.assertIs(raised.exception, failure)
+        create_root.assert_not_called()
 
     def test_launchctl_timeout_kills_and_reaps_identity_bound_process(self) -> None:
         token = (0, 0, 0, 0, 0, 2222, 0, 41)
@@ -973,20 +1594,20 @@ class XcodeTestRunnerTests(unittest.TestCase):
             root = Path(directory)
             args = simulator_args(root)
             args.diagnostics_dir.mkdir()
-            job = launchd_job(root / "job")
+            job = direct_job(root / "job")
             job.root.mkdir()
             job.stderr_path.write_text("command stalled\n", encoding="utf-8")
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
-                "launchctl timed out"
+                "direct process cleanup incomplete"
             )
-            with mock.patch.object(
-                run_xcode_tests, "spawn_contained_job", return_value=job
+            with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+                run_xcode_tests, "spawn_direct_job", return_value=job
             ), mock.patch.object(
-                run_xcode_tests, "wait_for_job_status", return_value=None
+                run_xcode_tests, "wait_for_direct_status", return_value=None
             ), mock.patch.object(
                 run_xcode_tests,
-                "lifecycle_cleanup_error",
-                return_value=str(cleanup_error),
+                "cleanup_direct_job",
+                side_effect=cleanup_error,
             ) as cleanup:
                 with self.assertRaisesRegex(
                     run_xcode_tests.SimulatorLifecycleError,
@@ -997,7 +1618,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     )
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
         self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
-        self.assertIn("containment teardown warning: launchctl timed out", evidence)
+        self.assertIn("direct cleanup error: direct process cleanup incomplete", evidence)
         cleanup.assert_called_once_with(job, None, True)
         self.assertFalse(job.root.exists())
 
@@ -1006,47 +1627,163 @@ class XcodeTestRunnerTests(unittest.TestCase):
             root = Path(directory)
             args = simulator_args(root)
             args.diagnostics_dir.mkdir()
-            job = launchd_job(root / "job")
+            job = direct_job(root / "job")
             job.root.mkdir()
             job.stderr_path.write_text("target failed\n", encoding="utf-8")
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
-                "launchctl timed out"
+                "direct process cleanup incomplete"
             )
-            with mock.patch.object(
-                run_xcode_tests, "spawn_contained_job", return_value=job
+            with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+                run_xcode_tests, "spawn_direct_job", return_value=job
             ), mock.patch.object(
-                run_xcode_tests, "wait_for_job_status", return_value=7
+                run_xcode_tests, "wait_for_direct_status", return_value=7
             ), mock.patch.object(
-                run_xcode_tests, "lifecycle_cleanup_error", return_value=str(cleanup_error)
+                run_xcode_tests, "cleanup_direct_job", side_effect=cleanup_error
             ) as cleanup:
                 with self.assertRaisesRegex(
                     run_xcode_tests.SimulatorLifecycleError, "probe exited 7"
                 ):
                     run_xcode_tests.lifecycle_command(args, "probe", ["target"])
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
-        self.assertIn("containment teardown warning: launchctl timed out", evidence)
+            self.assert_direct_lifecycle_sequence_avoids_launchd(args)
+        self.assertIn("direct cleanup error: direct process cleanup incomplete", evidence)
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
     def test_successful_lifecycle_fails_closed_on_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            job = launchd_job(Path(directory) / "job")
+            job = direct_job(Path(directory) / "job")
             job.root.mkdir()
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
-                "launchd bootout exited 1: permission denied"
+                "direct process cleanup incomplete"
             )
             with mock.patch.object(
+                run_xcode_tests, "spawn_direct_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_direct_status", return_value=0
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_direct_job", side_effect=cleanup_error
+            ) as cleanup:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError, "cleanup incomplete"
+                ):
+                    run_xcode_tests.direct_lifecycle_process(["target"], 1, None)
+        cleanup.assert_called_once_with(job, None, False)
+        self.assertFalse(job.root.exists())
+
+    def test_successful_lifecycle_fails_closed_on_root_removal_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = direct_job(Path(directory) / "job")
+            job.root.mkdir()
+            with mock.patch.object(
+                run_xcode_tests, "spawn_direct_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_direct_status", return_value=0
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_direct_job"
+            ) as cleanup, mock.patch.object(
+                run_xcode_tests.shutil, "rmtree", side_effect=OSError("root busy")
+            ) as remove:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "job root removal failed: root busy",
+                ):
+                    run_xcode_tests.direct_lifecycle_process(["target"], 1, None)
+        cleanup.assert_called_once_with(job, None, False)
+        remove.assert_called_once_with(job.root)
+
+    def test_direct_status_failure_preserves_primary_and_cleanup_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = direct_job(Path(directory) / "job")
+            job.root.mkdir()
+            primary = run_xcode_tests.SimulatorLifecycleError(
+                "invalid direct channel message"
+            )
+            cleanup_error = run_xcode_tests.SimulatorLifecycleError(
+                "direct process cleanup incomplete"
+            )
+            with mock.patch.object(
+                run_xcode_tests, "spawn_direct_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_direct_status", side_effect=primary
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_direct_job", side_effect=cleanup_error
+            ) as cleanup:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "invalid direct channel message; direct cleanup error: "
+                    "direct process cleanup incomplete",
+                ) as raised:
+                    run_xcode_tests.direct_lifecycle_process(["target"], 1, None)
+        self.assertIs(raised.exception, primary)
+        cleanup.assert_called_once_with(job, None, True)
+        self.assertFalse(job.root.exists())
+
+    def test_darwin_lifecycle_uses_resource_coalition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory) / "job")
+            job.root.mkdir()
+            job.stdout_path.write_text("contained\n", encoding="utf-8")
+            with mock.patch.object(
+                run_xcode_tests, "LIBPROC", object()
+            ), mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ) as spawn, mock.patch.object(
+                run_xcode_tests, "wait_for_job_status", return_value=0
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_contained_job"
+            ) as cleanup, mock.patch.object(
+                run_xcode_tests, "spawn_direct_job"
+            ) as direct:
+                result = run_xcode_tests.lifecycle_process(["target"], 1, None)
+        self.assertEqual(result.stdout, "contained\n")
+        spawn.assert_called_once_with(["target"], False, None)
+        cleanup.assert_called_once_with(job, None, False)
+        direct.assert_not_called()
+        self.assertFalse(job.root.exists())
+
+    def test_darwin_lifecycle_fails_closed_on_coalition_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory) / "job")
+            job.root.mkdir()
+            failure = run_xcode_tests.SimulatorLifecycleError("coalition drain failed")
+            with mock.patch.object(
+                run_xcode_tests, "LIBPROC", object()
+            ), mock.patch.object(
                 run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
                 run_xcode_tests, "wait_for_job_status", return_value=0
             ), mock.patch.object(
-                run_xcode_tests, "lifecycle_cleanup_error", side_effect=cleanup_error
-            ) as cleanup:
+                run_xcode_tests, "cleanup_contained_job", side_effect=failure
+            ):
                 with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError, "permission denied"
+                    run_xcode_tests.SimulatorLifecycleError, "coalition drain failed"
                 ):
                     run_xcode_tests.lifecycle_process(["target"], 1, None)
-        cleanup.assert_called_once_with(job, None, False)
+        self.assertFalse(job.root.exists())
+
+    def test_darwin_lifecycle_preserves_primary_and_cleanup_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory) / "job")
+            job.root.mkdir()
+            primary = run_xcode_tests.SimulatorLifecycleError("invalid status sidecar")
+            cleanup = run_xcode_tests.SimulatorLifecycleError("coalition drain failed")
+            with mock.patch.object(
+                run_xcode_tests, "LIBPROC", object()
+            ), mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_job_status", side_effect=primary
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup
+            ) as cleanup_job:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "invalid status sidecar; coalition cleanup error: coalition drain failed",
+                ) as raised:
+                    run_xcode_tests.lifecycle_process(["target"], 1, None)
+        self.assertIs(raised.exception, primary)
+        cleanup_job.assert_called_once_with(job, None, True)
         self.assertFalse(job.root.exists())
 
     def test_lifecycle_cleanup_records_timeout_after_coalition_drain(self) -> None:
@@ -1143,6 +1880,34 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(launchctl.call_args.args[1], setup_deadline)
         handshake.assert_called_once_with(job, setup_deadline)
         abort.assert_called_once_with(job, None, deadline)
+
+    def test_launchd_setup_preserves_primary_and_all_cleanup_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory) / "job")
+            job.root.mkdir()
+            deadline = time.monotonic() + 1
+            primary = run_xcode_tests.SimulatorLifecycleError("bootstrap failed")
+            abort_error = run_xcode_tests.SimulatorLifecycleError("abort failed")
+            with mock.patch.object(
+                run_xcode_tests, "create_launchd_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "launchd_domain", return_value=f"gui/{os.getuid()}"
+            ), mock.patch.object(
+                run_xcode_tests, "launchctl_run", side_effect=primary
+            ), mock.patch.object(
+                run_xcode_tests, "abort_containment_handshake", side_effect=abort_error
+            ) as abort, mock.patch.object(
+                run_xcode_tests.shutil, "rmtree", side_effect=OSError("root busy")
+            ) as remove:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "bootstrap failed; launchd setup cleanup error: containment abort "
+                    "failed: abort failed; setup root removal failed: root busy",
+                ) as raised:
+                    run_xcode_tests.spawn_contained_job(["target"], False, deadline)
+        self.assertIs(raised.exception, primary)
+        abort.assert_called_once_with(job, None, deadline)
+        remove.assert_called_once_with(job.root)
 
     def test_attempt_observation_reserves_evidence_and_cleanup_time(self) -> None:
         args = argparse.Namespace(wall_deadline=100.0, wall_timeout=100, idle_timeout=300)
@@ -1348,6 +2113,34 @@ class XcodeTestRunnerTests(unittest.TestCase):
         cleanup.assert_called_once_with(job, args.wall_deadline, False)
         self.assertFalse(job.root.exists())
 
+    def test_attempt_status_error_survives_failed_containment_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = simulator_args(root)
+            args.wall_deadline = time.monotonic() + 10
+            job = launchd_job(root / "job")
+            job.root.mkdir()
+            primary = run_xcode_tests.SimulatorLifecycleError("invalid xcodebuild status")
+            cleanup_error = run_xcode_tests.SimulatorLifecycleError("containment stuck")
+            with mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "observe_attempt", side_effect=primary
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
+            ) as cleanup:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "invalid xcodebuild status; xcodebuild cleanup error: containment "
+                    "cleanup failed: containment stuck",
+                ) as raised:
+                    run_xcode_tests.run_attempt(
+                        args, args.command, io.StringIO(), 1, 0.0, []
+                    )
+        self.assertIs(raised.exception, primary)
+        cleanup.assert_called_once_with(job, args.wall_deadline, True)
+        self.assertFalse(job.root.exists())
+
     def test_run_attempt_keeps_xcodebuild_launchd_contained(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             args = simulator_args(Path(directory))
@@ -1415,6 +2208,41 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     actual = run_xcode_tests.run(args)
             self.assertEqual(actual, expected)
 
+    def assert_direct_lifecycle_sequence_avoids_launchd(
+        self, args: argparse.Namespace
+    ) -> None:
+        if not sys.platform.startswith("linux"):
+            return
+        args.wall_deadline = time.monotonic() + 5
+        unavailable = run_xcode_tests.SimulatorLifecycleError("launchctl timed out")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests, "launchctl_run", side_effect=unavailable
+        ) as launchctl, mock.patch.object(
+            run_xcode_tests, "spawn_contained_job", side_effect=unavailable
+        ) as contained:
+            listed = run_xcode_tests.lifecycle_command(
+                args, "list-simulators", [sys.executable, "-c", "print('listed')"]
+            )
+            booted = run_xcode_tests.lifecycle_command(
+                args, "boot-simulator", [sys.executable, "-c", "print('booted')"]
+            )
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError, "generic-launchctl exited 7"
+            ):
+                run_xcode_tests.lifecycle_command(
+                    args,
+                    "generic-launchctl",
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys; print('permission denied', file=sys.stderr); sys.exit(7)",
+                    ],
+                )
+        self.assertEqual(listed.stdout, "listed\n")
+        self.assertEqual(booted.stdout, "booted\n")
+        launchctl.assert_not_called()
+        contained.assert_not_called()
+
     def successful_command_child_pid(self, source: str) -> int:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1428,6 +2256,25 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIsNotNone(match)
         assert match is not None
         return int(match.group(1))
+
+    def completed_contained_output(self, command: list[str]) -> str:
+        deadline = time.monotonic() + 5
+        job = run_xcode_tests.spawn_contained_job(command, False, deadline)
+        cleaned = False
+        try:
+            returncode = run_xcode_tests.wait_for_job_status(job, 2, deadline)
+            self.assertEqual(returncode, 0, run_xcode_tests.job_output(job.stderr_path))
+            output = run_xcode_tests.job_output(job.stdout_path)
+            run_xcode_tests.cleanup_contained_job(job, deadline, False)
+            cleaned = True
+            return output
+        finally:
+            if not cleaned:
+                try:
+                    run_xcode_tests.cleanup_contained_job(job, deadline, True)
+                except run_xcode_tests.SimulatorLifecycleError:
+                    pass
+            shutil.rmtree(job.root, ignore_errors=True)
 
     def wait_until_process_exits(self, pid: int) -> bool:
         for _ in range(40):
@@ -1455,6 +2302,23 @@ class XcodeTestRunnerTests(unittest.TestCase):
             if not cleaned:
                 try:
                     run_xcode_tests.cleanup_contained_job(job, deadline, True)
+                except run_xcode_tests.SimulatorLifecycleError:
+                    pass
+            shutil.rmtree(job.root, ignore_errors=True)
+
+    def terminate_ready_direct_job(self, command: list[str], pid_path: Path) -> int:
+        deadline = time.monotonic() + 4
+        job = run_xcode_tests.spawn_direct_job(command, deadline)
+        cleaned = False
+        try:
+            self.assertTrue(self.wait_until_file_contains(job.stdout_path, "READY"))
+            run_xcode_tests.cleanup_direct_job(job, deadline, True)
+            cleaned = True
+            return int(pid_path.read_text(encoding="utf-8"))
+        finally:
+            if not cleaned:
+                try:
+                    run_xcode_tests.cleanup_direct_job(job, deadline, True)
                 except run_xcode_tests.SimulatorLifecycleError:
                     pass
             shutil.rmtree(job.root, ignore_errors=True)
