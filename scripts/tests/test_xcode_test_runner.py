@@ -1588,24 +1588,26 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertLess(elapsed, 1.0)
         self.assertIsNone(run_xcode_tests.process_identity(pid))
 
-    def test_command_timeout_survives_failed_cleanup_without_retry(self) -> None:
+    def test_darwin_timeout_survives_coalition_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = simulator_args(root)
             args.diagnostics_dir.mkdir()
-            job = direct_job(root / "job")
+            job = launchd_job(root / "job")
             job.root.mkdir()
             job.stderr_path.write_text("command stalled\n", encoding="utf-8")
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
-                "direct process cleanup incomplete"
+                "coalition cleanup incomplete"
             )
-            with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
-                run_xcode_tests, "spawn_direct_job", return_value=job
+            with mock.patch.object(
+                run_xcode_tests.sys, "platform", "darwin"
             ), mock.patch.object(
-                run_xcode_tests, "wait_for_direct_status", return_value=None
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_job_status", return_value=None
             ), mock.patch.object(
                 run_xcode_tests,
-                "cleanup_direct_job",
+                "lifecycle_cleanup_error",
                 side_effect=cleanup_error,
             ) as cleanup:
                 with self.assertRaisesRegex(
@@ -1617,34 +1619,36 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     )
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
         self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
-        self.assertIn("direct cleanup error: direct process cleanup incomplete", evidence)
+        self.assertIn("coalition cleanup error: coalition cleanup incomplete", evidence)
         cleanup.assert_called_once_with(job, None, True)
         self.assertFalse(job.root.exists())
 
-    def test_completed_lifecycle_exit_survives_failed_cleanup(self) -> None:
+    def test_darwin_command_nonzero_wins_over_coalition_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = simulator_args(root)
             args.diagnostics_dir.mkdir()
-            job = direct_job(root / "job")
+            job = launchd_job(root / "job")
             job.root.mkdir()
             job.stderr_path.write_text("target failed\n", encoding="utf-8")
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
-                "direct process cleanup incomplete"
+                "coalition cleanup incomplete"
             )
-            with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
-                run_xcode_tests, "spawn_direct_job", return_value=job
+            with mock.patch.object(
+                run_xcode_tests.sys, "platform", "darwin"
             ), mock.patch.object(
-                run_xcode_tests, "wait_for_direct_status", return_value=7
+                run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
-                run_xcode_tests, "cleanup_direct_job", side_effect=cleanup_error
+                run_xcode_tests, "wait_for_job_status", return_value=7
+            ), mock.patch.object(
+                run_xcode_tests, "lifecycle_cleanup_error", side_effect=cleanup_error
             ) as cleanup:
                 with self.assertRaisesRegex(
                     run_xcode_tests.SimulatorLifecycleError, "probe exited 7"
                 ):
                     run_xcode_tests.lifecycle_command(args, "probe", ["target"])
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
-        self.assertIn("direct cleanup error: direct process cleanup incomplete", evidence)
+        self.assertIn("coalition cleanup error: coalition cleanup incomplete", evidence)
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
@@ -1717,71 +1721,76 @@ class XcodeTestRunnerTests(unittest.TestCase):
         cleanup.assert_called_once_with(job, None, True)
         self.assertFalse(job.root.exists())
 
-    def test_darwin_lifecycle_uses_direct_containment(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            job = direct_job(Path(directory) / "job")
-            job.root.mkdir()
-            job.stdout_path.write_text("direct\n", encoding="utf-8")
-            with mock.patch.object(
-                run_xcode_tests, "LIBPROC", object()
-            ), mock.patch.object(
-                run_xcode_tests, "spawn_direct_job", return_value=job
-            ) as spawn, mock.patch.object(
-                run_xcode_tests, "wait_for_direct_status", return_value=0
-            ), mock.patch.object(
-                run_xcode_tests, "cleanup_direct_job"
-            ) as cleanup, mock.patch.object(
-                run_xcode_tests, "spawn_contained_job"
-            ) as contained:
-                result = run_xcode_tests.lifecycle_process(["target"], 1, None)
-        self.assertEqual(result.stdout, "direct\n")
-        spawn.assert_called_once_with(["target"], None)
-        cleanup.assert_called_once_with(job, None, False)
-        contained.assert_not_called()
-        self.assertFalse(job.root.exists())
+    def test_darwin_lifecycle_selects_launchd_coalition(self) -> None:
+        expected = run_xcode_tests.LifecycleOutcome(["target"], 0, "contained\n", "")
+        with mock.patch.object(
+            run_xcode_tests.sys, "platform", "darwin"
+        ), mock.patch.object(
+            run_xcode_tests, "contained_lifecycle_process", return_value=expected
+        ) as contained, mock.patch.object(
+            run_xcode_tests, "direct_lifecycle_process"
+        ) as direct:
+            result = run_xcode_tests.lifecycle_process(["target"], 1, None)
+        self.assertIs(result, expected)
+        contained.assert_called_once_with(["target"], 1, None)
+        direct.assert_not_called()
 
-    def test_darwin_lifecycle_fails_closed_on_direct_cleanup_failure(self) -> None:
+    def test_darwin_lifecycle_fails_closed_on_coalition_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            job = direct_job(Path(directory) / "job")
+            job = launchd_job(Path(directory) / "job")
             job.root.mkdir()
-            failure = run_xcode_tests.SimulatorLifecycleError("direct drain failed")
+            failure = run_xcode_tests.SimulatorLifecycleError("coalition drain failed")
             with mock.patch.object(
-                run_xcode_tests, "LIBPROC", object()
+                run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
-                run_xcode_tests, "spawn_direct_job", return_value=job
+                run_xcode_tests, "wait_for_job_status", return_value=0
             ), mock.patch.object(
-                run_xcode_tests, "wait_for_direct_status", return_value=0
-            ), mock.patch.object(
-                run_xcode_tests, "cleanup_direct_job", side_effect=failure
-            ):
+                run_xcode_tests, "lifecycle_cleanup_error", side_effect=failure
+            ) as cleanup:
                 with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError, "direct drain failed"
+                    run_xcode_tests.SimulatorLifecycleError, "coalition drain failed"
                 ):
-                    run_xcode_tests.lifecycle_process(["target"], 1, None)
+                    run_xcode_tests.contained_lifecycle_process(["target"], 1, None)
+        cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
-    def test_darwin_lifecycle_preserves_primary_and_cleanup_errors(self) -> None:
+    def test_darwin_prelaunch_containment_failure_has_no_direct_fallback(self) -> None:
+        failure = run_xcode_tests.SimulatorLifecycleError("bootstrap failed")
+        with mock.patch.object(
+            run_xcode_tests.sys, "platform", "darwin"
+        ), mock.patch.object(
+            run_xcode_tests, "contained_lifecycle_process", side_effect=failure
+        ) as contained, mock.patch.object(
+            run_xcode_tests, "direct_lifecycle_process"
+        ) as direct:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError, "bootstrap failed"
+            ) as raised:
+                run_xcode_tests.lifecycle_process(["target"], 1, None)
+        self.assertIs(raised.exception, failure)
+        contained.assert_called_once_with(["target"], 1, None)
+        direct.assert_not_called()
+
+    def test_post_drain_teardown_warning_preserves_successful_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            job = direct_job(Path(directory) / "job")
+            job = launchd_job(Path(directory) / "job")
             job.root.mkdir()
-            primary = run_xcode_tests.SimulatorLifecycleError("invalid status sidecar")
-            cleanup = run_xcode_tests.SimulatorLifecycleError("direct drain failed")
+            job.stdout_path.write_text("contained\n", encoding="utf-8")
+            warning = "bootout warning: permission denied"
             with mock.patch.object(
-                run_xcode_tests, "LIBPROC", object()
+                run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
-                run_xcode_tests, "spawn_direct_job", return_value=job
+                run_xcode_tests, "wait_for_job_status", return_value=0
             ), mock.patch.object(
-                run_xcode_tests, "wait_for_direct_status", side_effect=primary
-            ), mock.patch.object(
-                run_xcode_tests, "cleanup_direct_job", side_effect=cleanup
-            ) as cleanup_job:
-                with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError,
-                    "invalid status sidecar; direct cleanup error: direct drain failed",
-                ) as raised:
-                    run_xcode_tests.lifecycle_process(["target"], 1, None)
-        self.assertIs(raised.exception, primary)
-        cleanup_job.assert_called_once_with(job, None, True)
+                run_xcode_tests, "lifecycle_cleanup_error", return_value=warning
+            ) as cleanup:
+                result = run_xcode_tests.contained_lifecycle_process(
+                    ["target"], 1, None
+                )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "contained\n")
+        self.assertIn(f"launchd teardown warning: {warning}", result.stderr)
+        cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
     def test_lifecycle_cleanup_records_timeout_after_coalition_drain(self) -> None:
@@ -1791,6 +1800,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
         def fail_bootout(*_args: object) -> None:
             events.append("bootout")
             raise timeout
+
+        def confirm_absence(*_args: object) -> None:
+            events.append("confirm")
 
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
@@ -1802,27 +1814,50 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 side_effect=lambda *_args: events.append("drain"),
             ), mock.patch.object(
                 run_xcode_tests, "bootout_job", side_effect=fail_bootout
+            ), mock.patch.object(
+                run_xcode_tests, "confirm_job_absent", side_effect=confirm_absence
             ):
                 warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
-        self.assertEqual(warning, "launchctl timed out")
-        self.assertEqual(events, ["drain", "bootout"])
+        self.assertEqual(warning, "bootout warning: launchctl timed out")
+        self.assertEqual(events, ["drain", "bootout", "confirm"])
 
-    def test_lifecycle_cleanup_fails_closed_for_unknown_teardown_error(self) -> None:
-        failure = run_xcode_tests.SimulatorLifecycleError("bootout permission denied")
+    def test_lifecycle_cleanup_warns_for_all_post_drain_teardown_errors(self) -> None:
+        events: list[str] = []
+        bootout_failure = run_xcode_tests.SimulatorLifecycleError(
+            "bootout permission denied"
+        )
+        absence_failure = run_xcode_tests.SimulatorLifecycleError(
+            "absence permission denied"
+        )
+
+        def fail_bootout(*_args: object) -> None:
+            events.append("bootout")
+            raise bootout_failure
+
+        def fail_absence(*_args: object) -> None:
+            events.append("confirm")
+            raise absence_failure
+
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
             with mock.patch.object(
                 run_xcode_tests, "cleanup_coalition_id", return_value=77
             ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
-                run_xcode_tests, "drain_coalition"
-            ) as drain, mock.patch.object(
-                run_xcode_tests, "bootout_job", side_effect=failure
+                run_xcode_tests,
+                "drain_coalition",
+                side_effect=lambda *_args: events.append("drain"),
+            ), mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=fail_bootout
+            ), mock.patch.object(
+                run_xcode_tests, "confirm_job_absent", side_effect=fail_absence
             ):
-                with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError, "permission denied"
-                ):
-                    run_xcode_tests.lifecycle_cleanup_error(job, None, False)
-        drain.assert_called_once()
+                warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+        self.assertEqual(
+            warning,
+            "bootout warning: bootout permission denied; "
+            "absence warning: absence permission denied",
+        )
+        self.assertEqual(events, ["drain", "bootout", "confirm"])
 
     def test_bootstrap_timeout_always_aborts_possible_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2236,22 +2271,20 @@ class XcodeTestRunnerTests(unittest.TestCase):
         )
         self.assertIn("classification=containment-cleanup-failure", stderr.getvalue())
 
-    @unittest.skipUnless(
-        sys.platform == "darwin" or sys.platform.startswith("linux"),
-        "requires supported process census",
-    )
-    def test_lifecycle_commands_avoid_launchd(self) -> None:
+    def test_linux_lifecycle_commands_avoid_launchd(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             args = simulator_args(Path(directory))
             args.diagnostics_dir.mkdir()
-            self.assert_direct_lifecycle_sequence_avoids_launchd(args)
+            self.assert_linux_direct_lifecycle_sequence_avoids_launchd(args)
 
-    def assert_direct_lifecycle_sequence_avoids_launchd(
+    def assert_linux_direct_lifecycle_sequence_avoids_launchd(
         self, args: argparse.Namespace
     ) -> None:
         args.wall_deadline = time.monotonic() + 5
         unavailable = run_xcode_tests.SimulatorLifecycleError("launchctl timed out")
         with mock.patch.object(
+            run_xcode_tests.sys, "platform", "linux"
+        ), mock.patch.object(
             run_xcode_tests, "launchctl_run", side_effect=unavailable
         ) as launchctl, mock.patch.object(
             run_xcode_tests, "spawn_contained_job", side_effect=unavailable

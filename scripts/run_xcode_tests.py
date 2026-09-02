@@ -1953,14 +1953,19 @@ def lifecycle_cleanup_error(
         signal_coalition_members(coalition_id, requested, cleanup_by)
         pause_before_cleanup(cleanup_by, pause)
     drain_coalition(coalition_id, cleanup_by)
+    warnings: list[str] = []
     try:
         warning = bootout_job(job, cleanup_by)
-        confirm_job_absent(job, cleanup_by)
-        return warning
     except SimulatorLifecycleError as error:
-        if str(error) in {"launchctl timed out", "launchd containment cleanup incomplete"}:
-            return str(error)
-        raise
+        warnings.append(f"bootout warning: {error}")
+    else:
+        if warning is not None:
+            warnings.append(f"bootout warning: {warning}")
+    try:
+        confirm_job_absent(job, cleanup_by)
+    except SimulatorLifecycleError as error:
+        warnings.append(f"absence warning: {error}")
+    return cleanup_error_text(warnings)
 
 
 def job_output(path: Path) -> str:
@@ -2503,12 +2508,16 @@ def contained_lifecycle_process(
     job = spawn_contained_job(command, False, deadline)
     cleanup_attempted = False
     cleanup_errors: list[str] = []
+    teardown_warning: str | None = None
     try:
         returncode = wait_for_job_status(job, timeout, deadline)
         cleanup_attempted = True
-        record_cleanup_failure(
-            cleanup_errors, "", lambda: cleanup_contained_job(job, deadline, returncode is None)
-        )
+        try:
+            teardown_warning = lifecycle_cleanup_error(
+                job, deadline, returncode is None
+            )
+        except SimulatorLifecycleError as error:
+            cleanup_errors.append(str(error))
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
     except Exception as error:
@@ -2525,6 +2534,8 @@ def contained_lifecycle_process(
         cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
     )
     cleanup_error = cleanup_error_text(cleanup_errors)
+    if teardown_warning is not None:
+        stderr += f"\nlaunchd teardown warning: {teardown_warning}\n"
     if cleanup_error is not None:
         stderr += f"\ncoalition cleanup error: {cleanup_error}\n"
         if returncode == 0:
@@ -2537,6 +2548,8 @@ def contained_lifecycle_process(
 def lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
+    if sys.platform == "darwin":
+        return contained_lifecycle_process(command, timeout, deadline)
     return direct_lifecycle_process(command, timeout, deadline)
 
 
