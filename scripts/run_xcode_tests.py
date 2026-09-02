@@ -505,23 +505,29 @@ def resource_coalition_id(pid: int) -> int | None:
     return int(info.coalition_id[COALITION_TYPE_RESOURCE])
 
 
-def require_census_budget(deadline: float) -> None:
+def require_census_budget(
+    deadline: float,
+    timeout_message: str = "Darwin coalition census deadline expired",
+) -> None:
     if time.monotonic() >= deadline:
-        raise SimulatorLifecycleError("Darwin coalition census deadline expired")
+        raise SimulatorLifecycleError(timeout_message)
 
 
-def all_process_ids(deadline: float) -> list[int]:
+def all_process_ids(
+    deadline: float,
+    timeout_message: str = "Darwin coalition census deadline expired",
+) -> list[int]:
     if LIBPROC is None:
         raise SimulatorLifecycleError("Darwin process census is unavailable")
-    require_census_budget(deadline)
+    require_census_budget(deadline, timeout_message)
     capacity = LIBPROC.proc_listallpids(None, 0)
-    require_census_budget(deadline)
+    require_census_budget(deadline, timeout_message)
     if capacity <= 0:
         raise SimulatorLifecycleError("Darwin process census failed")
     while time.monotonic() < deadline:
         values = (ctypes.c_int * capacity)()
         count = LIBPROC.proc_listallpids(values, ctypes.sizeof(values))
-        require_census_budget(deadline)
+        require_census_budget(deadline, timeout_message)
         if count < 0:
             raise SimulatorLifecycleError("Darwin process census failed")
         if count < capacity:
@@ -1667,16 +1673,6 @@ def bounded_direct_child_identity(
     )
 
 
-def bounded_unique_identifier_info(
-    pid: int, deadline: float
-) -> ProcUniqueIdentifierInfo | None:
-    return deadline_call(
-        lambda: unique_identifier_info(pid),
-        deadline,
-        "direct unique identity census deadline expired",
-    )
-
-
 def bounded_direct_children(
     parent: ProcessIdentity, deadline: float
 ) -> set[ProcessIdentity]:
@@ -1727,19 +1723,16 @@ def await_direct_identity(
     raise SimulatorLifecycleError("direct wrapper identity unavailable")
 
 
-def inspect_darwin_direct_descendants(
+def collect_darwin_direct_descendants(
     ancestors: set[ProcessIdentity], deadline: float
 ) -> set[ProcessIdentity]:
+    timeout_message = "direct Darwin process census deadline expired"
     children_by_parent: dict[int, list[ProcessIdentity]] = {}
     children_by_original_parent: dict[int, list[ProcessIdentity]] = {}
-    process_ids = deadline_call(
-        lambda: all_process_ids(deadline),
-        deadline,
-        "direct Darwin process census deadline expired",
-    )
-    for pid in process_ids:
-        require_census_budget(deadline)
-        info = bounded_unique_identifier_info(pid, deadline)
+    for pid in all_process_ids(deadline, timeout_message):
+        require_census_budget(deadline, timeout_message)
+        info = unique_identifier_info(pid)
+        require_census_budget(deadline, timeout_message)
         if info is not None:
             identity = direct_identity(unique_process_identity(pid, info))
             children_by_parent.setdefault(info.p_puniqueid, []).append(identity)
@@ -1751,19 +1744,29 @@ def inspect_darwin_direct_descendants(
     pending = list(ancestors)
     descendants: set[ProcessIdentity] = set()
     while pending:
-        require_census_budget(deadline)
+        require_census_budget(deadline, timeout_message)
         parent = pending.pop()
         candidates = list(children_by_parent.get(parent.started_at[0], []))
         if parent.audit_token is not None and parent.audit_token[7] > 0:
             candidates.extend(children_by_original_parent.get(parent.audit_token[7], []))
         for identity in candidates:
-            require_census_budget(deadline)
+            require_census_budget(deadline, timeout_message)
             if identity in known:
                 continue
             known.add(identity)
             descendants.add(identity)
             pending.append(identity)
     return descendants
+
+
+def inspect_darwin_direct_descendants(
+    ancestors: set[ProcessIdentity], deadline: float
+) -> set[ProcessIdentity]:
+    return deadline_call(
+        lambda: collect_darwin_direct_descendants(ancestors, deadline),
+        deadline,
+        "direct Darwin process census deadline expired",
+    )
 
 
 def direct_descendant_census(
@@ -2175,13 +2178,13 @@ def signal_direct_identity(
 ) -> bool:
     if LIBPROC is None:
         return signal_linux_direct_identity(identity, requested, deadline)
-    current = current_direct_identity(identity, deadline)
-    if current is None:
-        return False
     if identity.audit_token is not None and signal_audit_token(
         identity.audit_token, requested
     ):
         return True
+    current = current_direct_identity(identity, deadline)
+    if current is None:
+        return False
     return (
         current.audit_token is not None
         and signal_audit_token(current.audit_token, requested)
@@ -2266,7 +2269,7 @@ def reap_direct_wrapper(job: DirectJob, deadline: float) -> None:
     reap_process_with_grace(
         job.process,
         deadline,
-        CLEANUP_RESERVE_SECONDS,
+        DIRECT_WRAPPER_REAP_SECONDS,
         "direct wrapper reap deadline expired",
         "direct wrapper reap timed out",
     )
@@ -2338,6 +2341,7 @@ def cleanup_direct_job(
     job: DirectJob, deadline: float | None, signal_root: bool
 ) -> None:
     cleanup_by = cleanup_deadline(deadline)
+    observation_by = cleanup_by - DIRECT_WRAPPER_REAP_SECONDS
     errors: list[str] = []
     try:
         if signal_root:
@@ -2348,23 +2352,23 @@ def cleanup_direct_job(
                 record_direct_cleanup(
                     errors,
                     lambda requested=requested: pump_direct_channel(
-                        job.channel, cleanup_by
+                        job.channel, observation_by
                     ),
                 )
                 record_direct_cleanup(
                     errors,
                     lambda requested=requested: signal_direct_target(
-                        job, requested, cleanup_by
+                        job, requested, observation_by
                     ),
                 )
                 record_direct_cleanup(
                     errors,
                     lambda requested=requested: signal_direct_descendants(
-                        job, requested, cleanup_by
+                        job, requested, observation_by
                     ),
                 )
-                time.sleep(bounded_wait(cleanup_by, pause))
-        drain_direct_job(job, cleanup_by, errors)
+                time.sleep(bounded_wait(observation_by, pause))
+        drain_direct_job(job, observation_by, errors)
     finally:
         record_direct_cleanup(
             errors, lambda: force_direct_wrapper_exit(job, cleanup_by)

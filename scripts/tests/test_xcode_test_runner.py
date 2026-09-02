@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 import uuid
+from typing import Callable
 from unittest import mock
 
 from scripts import run_xcode_tests
@@ -669,8 +670,25 @@ class XcodeTestRunnerTests(unittest.TestCase):
         job.process.wait.assert_called_once()
         timeout = job.process.wait.call_args.kwargs["timeout"]
         self.assertGreater(timeout, 0)
-        self.assertLessEqual(timeout, run_xcode_tests.CLEANUP_RESERVE_SECONDS)
+        self.assertLessEqual(timeout, run_xcode_tests.DIRECT_WRAPPER_REAP_SECONDS)
         thread.assert_not_called()
+
+    def test_direct_cleanup_reserves_wrapper_reap_budget(self) -> None:
+        job = direct_job(Path("/tmp/unused-direct-job"))
+        with mock.patch.object(
+            run_xcode_tests, "cleanup_deadline", return_value=10.0
+        ), mock.patch.object(
+            run_xcode_tests, "drain_direct_job"
+        ) as drain, mock.patch.object(
+            run_xcode_tests, "force_direct_wrapper_exit"
+        ) as force, mock.patch.object(
+            run_xcode_tests, "reap_direct_wrapper"
+        ) as reap, mock.patch.object(run_xcode_tests, "close_direct_channel"):
+            run_xcode_tests.cleanup_direct_job(job, None, False)
+        observation_by = 10.0 - run_xcode_tests.DIRECT_WRAPPER_REAP_SECONDS
+        self.assertEqual(drain.call_args.args[:2], (job, observation_by))
+        force.assert_called_once_with(job, 10.0)
+        reap.assert_called_once_with(job, 10.0)
 
     def test_darwin_direct_spawn_enters_direct_protocol(self) -> None:
         failure = OSError("root unavailable")
@@ -1052,6 +1070,21 @@ class XcodeTestRunnerTests(unittest.TestCase):
         send.assert_not_called()
         close.assert_called_once_with(91)
 
+    def test_darwin_direct_signal_uses_retained_token_after_census_deadline(self) -> None:
+        identity = darwin_direct_identity(2222, 10, 41)
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "signal_audit_token", return_value=True
+        ) as send, mock.patch.object(
+            run_xcode_tests, "current_direct_identity"
+        ) as inspect:
+            self.assertTrue(
+                run_xcode_tests.signal_direct_identity(
+                    identity, signal.SIGKILL, time.monotonic() - 1
+                )
+            )
+        send.assert_called_once_with(identity.audit_token, signal.SIGKILL)
+        inspect.assert_not_called()
+
     def test_direct_child_snapshot_rejects_reused_unrelated_pid(self) -> None:
         parent = run_xcode_tests.ProcessIdentity(1111, (10, 20))
         replacement = run_xcode_tests.ProcessIdentity(2222, (30, 40))
@@ -1206,7 +1239,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         entered = threading.Event()
         release = threading.Event()
 
-        def stalled_census(_deadline: float) -> list[int]:
+        def stalled_census(*_args: object) -> list[int]:
             entered.set()
             release.wait(1)
             return []
@@ -1243,12 +1276,34 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     run_xcode_tests.OperationDeadlineExpired,
-                    "unique identity census deadline expired",
+                    "direct Darwin process census deadline expired",
                 ):
                     run_xcode_tests.inspect_darwin_direct_descendants(set(), deadline)
             self.assertTrue(entered.is_set())
         finally:
             release.set()
+
+    def test_direct_darwin_census_uses_single_deadline_worker(self) -> None:
+        process_ids = list(range(1, 501))
+
+        def bounded(
+            operation: Callable[[], object], _deadline: float, _message: str
+        ) -> object:
+            return operation()
+
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "all_process_ids", return_value=process_ids
+        ), mock.patch.object(
+            run_xcode_tests, "unique_identifier_info", return_value=None
+        ) as inspect, mock.patch.object(
+            run_xcode_tests, "deadline_call", side_effect=bounded
+        ) as deadline_call, mock.patch.object(
+            run_xcode_tests.time, "monotonic", return_value=0.0
+        ):
+            descendants = run_xcode_tests.inspect_darwin_direct_descendants(set(), 1.0)
+        self.assertEqual(descendants, set())
+        self.assertEqual(inspect.call_count, len(process_ids))
+        deadline_call.assert_called_once()
 
     def test_direct_darwin_descendant_closure_is_complete_with_budget(self) -> None:
         root, process_ids, infos, expected = darwin_descendant_fixture()
@@ -1256,8 +1311,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "all_process_ids", return_value=process_ids
         ), mock.patch.object(
             run_xcode_tests,
-            "bounded_unique_identifier_info",
-            side_effect=lambda pid, _deadline: infos[pid],
+            "unique_identifier_info",
+            side_effect=lambda pid: infos[pid],
         ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
             descendants = run_xcode_tests.inspect_darwin_direct_descendants(
                 {root}, 1.0
@@ -1293,8 +1348,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "all_process_ids", return_value=list(infos)
         ), mock.patch.object(
             run_xcode_tests,
-            "bounded_unique_identifier_info",
-            side_effect=lambda pid, _deadline: infos[pid],
+            "unique_identifier_info",
+            side_effect=lambda pid: infos[pid],
         ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
             descendants = run_xcode_tests.inspect_darwin_direct_descendants(
                 {root}, 1.0
@@ -1339,8 +1394,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests, "all_process_ids", return_value=list(infos)
         ), mock.patch.object(
-            run_xcode_tests, "bounded_unique_identifier_info",
-            side_effect=lambda pid, _deadline: infos[pid],
+            run_xcode_tests,
+            "unique_identifier_info",
+            side_effect=lambda pid: infos[pid],
         ), mock.patch.object(
             run_xcode_tests, "bounded_direct_children", return_value=set()
         ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
@@ -1359,21 +1415,21 @@ class XcodeTestRunnerTests(unittest.TestCase):
         def expiring_clock() -> float:
             nonlocal clock_calls
             clock_calls += 1
-            return 1.0 if clock_calls >= len(process_ids) + 80 else 0.0
+            return 1.0 if clock_calls >= 20 else 0.0
 
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests, "all_process_ids", return_value=process_ids
         ), mock.patch.object(
             run_xcode_tests,
-            "bounded_unique_identifier_info",
-            side_effect=lambda pid, _deadline: infos[pid],
+            "unique_identifier_info",
+            side_effect=lambda pid: infos[pid],
         ), mock.patch.object(run_xcode_tests.time, "monotonic", expiring_clock):
             with self.assertRaisesRegex(
                 run_xcode_tests.SimulatorLifecycleError,
-                "Darwin coalition census deadline expired",
+                "direct Darwin process census deadline expired",
             ):
                 run_xcode_tests.inspect_darwin_direct_descendants({root}, 1.0)
-        self.assertGreater(clock_calls, len(process_ids))
+        self.assertEqual(clock_calls, 20)
 
     def test_coalition_census_hard_deadline_bounds_all_pid_lookups(self) -> None:
         entered = threading.Event()
