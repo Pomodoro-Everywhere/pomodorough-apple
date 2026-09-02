@@ -57,6 +57,7 @@ DESCENDANT_POLL_SECONDS = 0.001
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 2.0
+LIFECYCLE_BOOTSTRAP_SECONDS = 10.0
 DIRECT_CHANNEL_KEY_BYTES = 32
 DIRECT_CHANNEL_LIMIT_BYTES = 64 * 1024
 DIRECT_CHANNEL_WORK_PER_PUMP = 128
@@ -1417,7 +1418,10 @@ def write_containment_acknowledgement(
 
 
 def spawn_contained_job(
-    command: list[str], combine_stderr: bool, deadline: float | None
+    command: list[str],
+    combine_stderr: bool,
+    deadline: float | None,
+    bootstrap_maximum: float = 2.0,
 ) -> LaunchdJob:
     acknowledgement_token = secrets.token_hex(32)
     setup_deadline = reserved_deadline(deadline, CLEANUP_RESERVE_SECONDS)
@@ -1433,7 +1437,9 @@ def spawn_contained_job(
             )
         bootstrap_attempted = True
         result = launchctl_run(
-            ["bootstrap", launchd_domain(), str(plist_path)], setup_deadline
+            ["bootstrap", launchd_domain(), str(plist_path)],
+            setup_deadline,
+            bootstrap_maximum,
         )
         if result.returncode:
             raise SimulatorLifecycleError(
@@ -2672,7 +2678,9 @@ def direct_lifecycle_process(
 def contained_lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
-    job = spawn_contained_job(command, False, deadline)
+    job = spawn_contained_job(
+        command, False, deadline, LIFECYCLE_BOOTSTRAP_SECONDS
+    )
     cleanup_attempted = False
     cleanup_errors: list[str] = []
     teardown_warning: str | None = None
@@ -2715,6 +2723,8 @@ def contained_lifecycle_process(
 def lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
+    if sys.platform == "darwin":
+        return contained_lifecycle_process(command, timeout, deadline)
     return direct_lifecycle_process(command, timeout, deadline)
 
 
