@@ -985,8 +985,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests, "wait_for_job_status", return_value=None
             ), mock.patch.object(
                 run_xcode_tests,
-                "cleanup_contained_job",
-                side_effect=cleanup_error,
+                "lifecycle_cleanup_error",
+                return_value=str(cleanup_error),
             ) as cleanup:
                 with self.assertRaisesRegex(
                     run_xcode_tests.SimulatorLifecycleError,
@@ -997,7 +997,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     )
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
         self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
-        self.assertIn("containment cleanup error: launchctl timed out", evidence)
+        self.assertIn("containment teardown warning: launchctl timed out", evidence)
         cleanup.assert_called_once_with(job, None, True)
         self.assertFalse(job.root.exists())
 
@@ -1017,14 +1017,14 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "wait_for_job_status", return_value=7
             ), mock.patch.object(
-                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
+                run_xcode_tests, "lifecycle_cleanup_error", return_value=str(cleanup_error)
             ) as cleanup:
                 with self.assertRaisesRegex(
                     run_xcode_tests.SimulatorLifecycleError, "probe exited 7"
                 ):
                     run_xcode_tests.lifecycle_command(args, "probe", ["target"])
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
-        self.assertIn("containment cleanup error: launchctl timed out", evidence)
+        self.assertIn("containment teardown warning: launchctl timed out", evidence)
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
@@ -1033,21 +1033,61 @@ class XcodeTestRunnerTests(unittest.TestCase):
             job = launchd_job(Path(directory) / "job")
             job.root.mkdir()
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
-                "launchctl timed out"
+                "launchd bootout exited 1: permission denied"
             )
             with mock.patch.object(
                 run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
                 run_xcode_tests, "wait_for_job_status", return_value=0
             ), mock.patch.object(
-                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
+                run_xcode_tests, "lifecycle_cleanup_error", side_effect=cleanup_error
             ) as cleanup:
                 with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError, "launchctl timed out"
+                    run_xcode_tests.SimulatorLifecycleError, "permission denied"
                 ):
                     run_xcode_tests.lifecycle_process(["target"], 1, None)
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
+
+    def test_lifecycle_cleanup_records_timeout_after_coalition_drain(self) -> None:
+        events: list[str] = []
+        timeout = run_xcode_tests.SimulatorLifecycleError("launchctl timed out")
+
+        def fail_bootout(*_args: object) -> None:
+            events.append("bootout")
+            raise timeout
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "cleanup_coalition_id", return_value=77
+            ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
+                run_xcode_tests,
+                "drain_coalition",
+                side_effect=lambda *_args: events.append("drain"),
+            ), mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=fail_bootout
+            ):
+                warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+        self.assertEqual(warning, "launchctl timed out")
+        self.assertEqual(events, ["drain", "bootout"])
+
+    def test_lifecycle_cleanup_fails_closed_for_unknown_teardown_error(self) -> None:
+        failure = run_xcode_tests.SimulatorLifecycleError("bootout permission denied")
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "cleanup_coalition_id", return_value=77
+            ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
+                run_xcode_tests, "drain_coalition"
+            ) as drain, mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=failure
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError, "permission denied"
+                ):
+                    run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+        drain.assert_called_once()
 
     def test_bootstrap_timeout_always_aborts_possible_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1307,6 +1347,23 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIn("containment cleanup error = launchctl timed out", outcome.process_evidence)
         cleanup.assert_called_once_with(job, args.wall_deadline, False)
         self.assertFalse(job.root.exists())
+
+    def test_run_attempt_keeps_xcodebuild_launchd_contained(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = simulator_args(Path(directory))
+            args.wall_deadline = time.monotonic() + 10
+            job = launchd_job(Path(directory) / "job")
+            job.root.mkdir()
+            with mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ) as contained, mock.patch.object(
+                run_xcode_tests, "observe_attempt", return_value=(0, "passed", None)
+            ), mock.patch.object(run_xcode_tests, "cleanup_contained_job"):
+                outcome = run_xcode_tests.run_attempt(
+                    args, args.command, io.StringIO(), 1, 0.0, []
+                )
+        self.assertEqual(outcome.returncode, 0)
+        contained.assert_called_once_with(args.command, True, args.wall_deadline)
 
     def test_runner_fails_closed_only_for_successful_cleanup_error(self) -> None:
         for expected in (0, 7, 65, 124, 125):
@@ -1660,6 +1717,103 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.SimulatorLifecycleError, "bootout exited 7"
                 ):
                     run_xcode_tests.bootout_job(job, None)
+
+    def test_bootout_accepts_macos_idempotent_absence(self) -> None:
+        result = subprocess.CompletedProcess([], 3, "", "No such process\n")
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_run", return_value=result
+            ):
+                warning = run_xcode_tests.bootout_job(job, None)
+        self.assertIsNone(warning)
+
+    def test_bootout_absence_recognition_is_exact(self) -> None:
+        cases = (
+            ("no newline", "", "No such process", True),
+            ("single newline", "", "No such process\n", True),
+            ("stdout only", "No such process", "", False),
+            ("extra stdout", "permission denied", "No such process", False),
+            ("mixed stderr", "", "No such process; permission denied", False),
+            ("extra stderr line", "", "No such process\npermission denied", False),
+            ("wrong case", "", "no such process", False),
+            ("leading newline", "", "\nNo such process", False),
+            ("double newline", "", "No such process\n\n", False),
+        )
+        for name, stdout, stderr, expected in cases:
+            with self.subTest(name=name):
+                result = subprocess.CompletedProcess([], 3, stdout, stderr)
+                self.assertIs(
+                    run_xcode_tests.bootout_result_is_absent(result), expected
+                )
+
+    def test_bootout_status_113_absence_recognition_is_exact(self) -> None:
+        contextual = (
+            'Bad request.\nCould not find service "com.pomodorough.xcode-tests.unit" '
+            "in domain for user gui: 501"
+        )
+        cases = (
+            ("no newline", "", "Could not find service", True),
+            ("single newline", "", "Could not find service\n", True),
+            ("contextual", "", contextual, True),
+            ("contextual newline", "", f"{contextual}\n", True),
+            ("stdout only", "Could not find service", "", False),
+            ("extra stdout", "permission denied", "Could not find service", False),
+            ("suffix", "", "Could not find service: permission denied", False),
+            ("prefix", "", "permission denied: Could not find service", False),
+            ("mixed stderr", "", "Could not find service\npermission denied", False),
+            ("wrong case", "", "could not find service", False),
+            ("leading newline", "", "\nCould not find service", False),
+            ("double newline", "", "Could not find service\n\n", False),
+            ("context suffix", "", f"{contextual}: permission denied", False),
+            ("context prefix", "", f"permission denied\n{contextual}", False),
+            ("context mixed", "", f"{contextual}\npermission denied", False),
+            ("context case", "", contextual.replace("Could", "could"), False),
+            ("context double newline", "", f"{contextual}\n\n", False),
+            ("empty", "", "", False),
+        )
+        for name, stdout, stderr, expected in cases:
+            with self.subTest(name=name):
+                result = subprocess.CompletedProcess([], 113, stdout, stderr)
+                self.assertIs(
+                    run_xcode_tests.bootout_result_is_absent(result), expected
+                )
+
+    def test_bootout_fails_closed_for_mixed_exit_three_error(self) -> None:
+        result = subprocess.CompletedProcess(
+            [], 3, "", "No such process; permission denied"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_run", return_value=result
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError, "permission denied"
+                ):
+                    run_xcode_tests.bootout_job(job, None)
+
+    def test_lifecycle_cleanup_does_not_warn_for_macos_idempotent_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "cleanup_coalition_id", return_value=77
+            ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
+                run_xcode_tests, "drain_coalition"
+            ), mock.patch.object(
+                run_xcode_tests, "bootout_job", return_value=None
+            ), mock.patch.object(run_xcode_tests, "confirm_job_absent"):
+                warning = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
+        self.assertIsNone(warning)
+
+    def test_confirm_absence_accepts_macos_idempotent_bootout_result(self) -> None:
+        result = subprocess.CompletedProcess([], 3, "", "No such process")
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_retry", return_value=result
+            ):
+                run_xcode_tests.confirm_job_absent(job, time.monotonic() + 1)
 
     def test_launchd_cleanup_fails_when_service_never_disappears(self) -> None:
         result = subprocess.CompletedProcess([], 0, "state = running", "")

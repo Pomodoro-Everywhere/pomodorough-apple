@@ -948,6 +948,22 @@ def service_is_absent(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode == 113 and "Could not find service" in result.stderr
 
 
+def bootout_result_is_absent(result: subprocess.CompletedProcess[str]) -> bool:
+    diagnostic_patterns = {
+        3: r"No such process\n?",
+        113: (
+            r'(?:Could not find service|Bad request\.\nCould not find service "[^"\r\n]+" '
+            r"in domain for user gui: [0-9]+)\n?"
+        ),
+    }
+    pattern = diagnostic_patterns.get(result.returncode)
+    return (
+        result.stdout == ""
+        and pattern is not None
+        and re.fullmatch(pattern, result.stderr) is not None
+    )
+
+
 def launchd_job_evidence(job: LaunchdJob, deadline: float | None) -> str:
     try:
         result = launchctl_run(["print", job.service], deadline)
@@ -978,12 +994,15 @@ def pause_before_cleanup(deadline: float | None, maximum: float) -> None:
         time.sleep(wait)
 
 
-def bootout_job(job: LaunchdJob, deadline: float | None) -> None:
+def bootout_job(job: LaunchdJob, deadline: float | None) -> str | None:
     result = launchctl_run(["bootout", job.service], deadline, 1.5)
-    if result.returncode and not service_is_absent(result):
+    if not result.returncode:
+        return None
+    if not bootout_result_is_absent(result):
         raise SimulatorLifecycleError(
             f"launchd bootout exited {result.returncode}: {result.stderr.strip()}"
         )
+    return None
 
 
 def confirm_job_absent(job: LaunchdJob, deadline: float | None) -> None:
@@ -999,7 +1018,7 @@ def confirm_job_absent(job: LaunchdJob, deadline: float | None) -> None:
                     "launchd containment cleanup incomplete"
                 ) from error
             raise
-        if service_is_absent(result):
+        if bootout_result_is_absent(result):
             return
         elif result.returncode:
             raise SimulatorLifecycleError(
@@ -1084,6 +1103,28 @@ def cleanup_contained_job(
     bootout_job(job, cleanup_by)
     drain_coalition(coalition_id, cleanup_by)
     confirm_job_absent(job, cleanup_by)
+
+
+def lifecycle_cleanup_error(
+    job: LaunchdJob, deadline: float | None, _signal_root: bool
+) -> str | None:
+    cleanup_by = cleanup_deadline(deadline)
+    coalition_id = cleanup_coalition_id(job, cleanup_by)
+    phases = [(signal.SIGINT, 0.05), (signal.SIGTERM, 0.1)]
+    if hasattr(signal, "SIGINFO"):
+        phases.insert(0, (signal.SIGINFO, 0.02))
+    for requested, pause in phases:
+        signal_coalition_members(coalition_id, requested, cleanup_by)
+        pause_before_cleanup(cleanup_by, pause)
+    drain_coalition(coalition_id, cleanup_by)
+    try:
+        warning = bootout_job(job, cleanup_by)
+        confirm_job_absent(job, cleanup_by)
+        return warning
+    except SimulatorLifecycleError as error:
+        if str(error) in {"launchctl timed out", "launchd containment cleanup incomplete"}:
+            return str(error)
+        raise
 
 
 def job_output(path: Path) -> str:
@@ -1370,15 +1411,13 @@ def lifecycle_process(
     try:
         returncode = wait_for_job_status(job, timeout, deadline)
         cleanup_attempted = True
-        cleanup_error = contained_cleanup_error(job, deadline, returncode is None)
+        cleanup_error = lifecycle_cleanup_error(job, deadline, returncode is None)
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
         if cleanup_error is not None:
-            stderr += f"\ncontainment cleanup error: {cleanup_error}\n"
+            stderr += f"\ncontainment teardown warning: {cleanup_error}\n"
         if returncode is None:
             raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
-        if returncode == 0 and cleanup_error is not None:
-            raise cleanup_error
         return LifecycleOutcome(command, returncode, stdout, stderr, job)
     except Exception:
         if not cleanup_attempted and job.root.exists():
