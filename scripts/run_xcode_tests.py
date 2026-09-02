@@ -2548,8 +2548,6 @@ def contained_lifecycle_process(
 def lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
-    if sys.platform == "darwin":
-        return contained_lifecycle_process(command, timeout, deadline)
     return direct_lifecycle_process(command, timeout, deadline)
 
 
