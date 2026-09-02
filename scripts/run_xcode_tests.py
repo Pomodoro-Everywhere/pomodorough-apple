@@ -74,6 +74,9 @@ PROC_PIDTBSDINFO = 3
 PROC_PIDUNIQIDENTIFIERINFO = 17
 PROC_PIDCOALITIONINFO = 20
 COALITION_TYPE_RESOURCE = 0
+PT_TRACE_ME = 0
+PT_CONTINUE = 7
+LIBSYSTEM = ctypes.CDLL(None, use_errno=True)
 LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib") if sys.platform == "darwin" else None
 LIBSANDBOX = (
     ctypes.CDLL("/usr/lib/libsandbox.1.dylib") if sys.platform == "darwin" else None
@@ -127,6 +130,13 @@ class ProcCoalitionInfo(ctypes.Structure):
 
 
 if LIBPROC is not None:
+    LIBSYSTEM.ptrace.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    LIBSYSTEM.ptrace.restype = ctypes.c_int
     LIBPROC.proc_pidinfo.argtypes = [
         ctypes.c_int,
         ctypes.c_int,
@@ -203,10 +213,13 @@ class ProcessIdentity:
 class DirectChannel:
     descriptor: int
     key: bytes
+    target_exec_required: bool = False
     buffer: bytes = b""
     sequence: int = 0
     wrapper: ProcessIdentity | None = None
     target: ProcessIdentity | None = None
+    target_exec_observed: bool = False
+    target_identities: set[ProcessIdentity] = field(default_factory=set)
     descendants: set[ProcessIdentity] = field(default_factory=set)
     returncode: int | None = None
     failure: str | None = None
@@ -451,6 +464,27 @@ def direct_identity_key(identity: ProcessIdentity) -> tuple[int, tuple[int, int]
 
 def same_direct_process(first: ProcessIdentity, second: ProcessIdentity) -> bool:
     return direct_identity_key(first) == direct_identity_key(second)
+
+
+def direct_audit_pid_version(identity: ProcessIdentity) -> int | None:
+    token = identity.audit_token
+    if token is None or token[5] != identity.pid or token[7] <= 0:
+        return None
+    return token[7]
+
+
+def validate_direct_target_transition(
+    previous: ProcessIdentity, current: ProcessIdentity
+) -> None:
+    previous_version = direct_audit_pid_version(previous)
+    current_version = direct_audit_pid_version(current)
+    if (
+        not same_direct_process(previous, current)
+        or previous_version is None
+        or current_version is None
+        or current_version <= previous_version
+    ):
+        raise SimulatorLifecycleError("invalid direct target exec identity")
 
 
 def resource_coalition_id(pid: int) -> int | None:
@@ -814,7 +848,7 @@ def reap_direct_orphans(target_pid: int) -> None:
 
 def spawn_gated_direct_target(
     command: list[str], wrapper: ProcessIdentity, reporter: DirectReporter
-) -> subprocess.Popen[bytes]:
+) -> tuple[subprocess.Popen[bytes], ProcessIdentity]:
     gate_read, gate_write = os.pipe()
     arguments = [
         sys.executable,
@@ -833,20 +867,114 @@ def spawn_gated_direct_target(
             reporter, {"event": "target", "identity": identity_payload(identity)}
         )
         os.write(gate_write, b"1")
-        return process
+        return process, identity
     finally:
         for descriptor in (gate_read, gate_write):
             if descriptor >= 0:
                 os.close(descriptor)
 
 
+def refresh_direct_target_identity(
+    process: subprocess.Popen[bytes],
+    reporter: DirectReporter,
+    previous: ProcessIdentity,
+    unavailable_message: str,
+) -> ProcessIdentity:
+    current = direct_process_identity(process.pid)
+    if current is None:
+        raise SimulatorLifecycleError(unavailable_message)
+    if not same_direct_process(current, previous):
+        raise SimulatorLifecycleError("direct target identity changed")
+    if current == previous:
+        return previous
+    validate_direct_target_transition(previous, current)
+    report_direct_event(
+        reporter, {"event": "target-exec", "identity": identity_payload(current)}
+    )
+    return current
+
+
+def trace_direct_target_execs() -> None:
+    if LIBPROC is None:
+        return
+    ctypes.set_errno(0)
+    if LIBSYSTEM.ptrace(PT_TRACE_ME, 0, None, 0) != 0:
+        detail = os.strerror(ctypes.get_errno())
+        raise SimulatorLifecycleError(f"direct target exec tracing unavailable: {detail}")
+
+
+def continue_direct_target(pid: int, requested: int) -> None:
+    ctypes.set_errno(0)
+    address = ctypes.c_void_p(1)
+    if LIBSYSTEM.ptrace(PT_CONTINUE, pid, address, requested) != 0:
+        detail = os.strerror(ctypes.get_errno())
+        raise SimulatorLifecycleError(f"direct target tracing continuation failed: {detail}")
+
+
+def darwin_direct_target_state(
+    process: subprocess.Popen[bytes],
+) -> tuple[int | None, bool]:
+    flags = os.WSTOPPED | os.WEXITED | os.WNOHANG | os.WNOWAIT
+    event = os.waitid(os.P_PID, process.pid, flags)
+    if event is None:
+        return None, False
+    terminal_codes = (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED)
+    if event.si_code in terminal_codes:
+        return None, True
+    if event.si_code not in (os.CLD_STOPPED, os.CLD_TRAPPED):
+        raise SimulatorLifecycleError("invalid direct target tracing state")
+    waited_pid, status = os.waitpid(process.pid, os.WUNTRACED | os.WNOHANG)
+    if waited_pid != process.pid or not os.WIFSTOPPED(status):
+        raise SimulatorLifecycleError("direct target tracing stop unavailable")
+    return os.WSTOPSIG(status), False
+
+
+def observe_darwin_target_state(
+    process: subprocess.Popen[bytes],
+    reporter: DirectReporter,
+    identity: ProcessIdentity,
+    exec_observed: bool,
+) -> tuple[ProcessIdentity, bool, bool]:
+    stopped_signal, target_exited = darwin_direct_target_state(process)
+    if target_exited and not exec_observed:
+        previous = identity
+        identity = refresh_direct_target_identity(
+            process, reporter, identity, "exited direct target identity unavailable"
+        )
+        exec_observed = identity != previous
+    if target_exited:
+        if not exec_observed:
+            raise SimulatorLifecycleError("direct target exec identity unavailable")
+        return identity, True, exec_observed
+    if stopped_signal is None:
+        return identity, False, exec_observed
+    previous = identity
+    identity = refresh_direct_target_identity(
+        process, reporter, identity, "stopped direct target identity unavailable"
+    )
+    transitioned = identity != previous
+    continue_direct_target(process.pid, 0 if transitioned else stopped_signal)
+    return identity, False, exec_observed or transitioned
+
+
 def monitor_direct_command(
-    process: subprocess.Popen[bytes], wrapper: ProcessIdentity, reporter: DirectReporter
+    process: subprocess.Popen[bytes],
+    wrapper: ProcessIdentity,
+    reporter: DirectReporter,
+    identity: ProcessIdentity,
 ) -> None:
-    identity = direct_target_identity(process, wrapper)
     observed = {wrapper, identity}
+    target_exec_observed = False
     status_sent = False
     while True:
+        target_exited = False
+        if LIBPROC is not None and not status_sent:
+            previous = identity
+            identity, target_exited, target_exec_observed = observe_darwin_target_state(
+                process, reporter, identity, target_exec_observed
+            )
+            if identity != previous:
+                observed.add(identity)
         updated = observe_direct_descendants(observed)
         for descendant in sorted(updated - observed, key=lambda item: item.pid):
             report_direct_event(
@@ -854,7 +982,16 @@ def monitor_direct_command(
                 {"event": "descendant", "identity": identity_payload(descendant)},
             )
         observed = updated
-        returncode = process.poll()
+        if status_sent:
+            returncode = None
+        elif LIBPROC is None:
+            returncode = process.poll()
+        elif target_exited:
+            returncode = process.poll()
+            if returncode is None:
+                raise SimulatorLifecycleError("direct target status unavailable")
+        else:
+            returncode = None
         if returncode is not None and not status_sent:
             report_direct_event(
                 reporter, {"event": "status", "returncode": returncode}
@@ -891,12 +1028,12 @@ def direct_child(
         if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
             raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
         os.close(acknowledgement_descriptor)
-        process = spawn_gated_direct_target(command, identity, reporter)
+        process, target_identity = spawn_gated_direct_target(command, identity, reporter)
         for requested in (signal.SIGINT, signal.SIGTERM):
             signal.signal(requested, signal.SIG_IGN)
         if hasattr(signal, "SIGINFO"):
             signal.signal(signal.SIGINFO, signal.SIG_IGN)
-        monitor_direct_command(process, identity, reporter)
+        monitor_direct_command(process, identity, reporter, target_identity)
     except (OSError, SimulatorLifecycleError) as error:
         if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
             try:
@@ -917,6 +1054,7 @@ def direct_target(gate_descriptor: int, command: list[str]) -> int:
         if not ready or os.read(gate_descriptor, 1) != b"1":
             raise SimulatorLifecycleError("direct target acknowledgement unavailable")
         os.close(gate_descriptor)
+        trace_direct_target_execs()
         os.execvp(command[0], command)
     except (OSError, SimulatorLifecycleError) as error:
         print(error, file=sys.stderr)
@@ -1079,7 +1217,9 @@ def spawn_direct_job(command: list[str], deadline: float | None) -> DirectJob:
         os.write(key_write, key)
         close_direct_descriptor(resources.descriptors, key_write)
         os.set_blocking(event_read, False)
-        channel = DirectChannel(event_read, key)
+        channel = DirectChannel(
+            event_read, key, target_exec_required=LIBPROC is not None
+        )
         identity = await_direct_identity(channel, process, deadline)
         os.write(acknowledgement_write, b"1")
         close_direct_descriptor(resources.descriptors, acknowledgement_write)
@@ -1375,6 +1515,32 @@ def direct_identity_in(
     return any(same_direct_process(identity, candidate) for candidate in candidates)
 
 
+def apply_direct_target_payload(
+    channel: DirectChannel, payload: dict[str, object], event: str
+) -> None:
+    identity = direct_payload_identity(payload, event)
+    if event == "target":
+        if channel.wrapper is None or channel.target is not None or channel.failure:
+            raise SimulatorLifecycleError("duplicate direct target identity")
+        if same_direct_process(identity, channel.wrapper):
+            raise SimulatorLifecycleError("invalid direct target identity")
+        target_version = direct_audit_pid_version(identity)
+        if identity.audit_token is not None and target_version is None:
+            raise SimulatorLifecycleError("invalid direct target identity")
+        if channel.target_exec_required and target_version is None:
+            raise SimulatorLifecycleError("invalid direct target identity")
+        channel.target_exec_required = target_version is not None
+    else:
+        previous = channel.target
+        if previous is None or channel.failure or channel.returncode is not None:
+            raise SimulatorLifecycleError("out-of-order direct target exec identity")
+        validate_direct_target_transition(previous, identity)
+        channel.target_exec_observed = True
+        channel.target_identities.add(previous)
+    channel.target = identity
+    channel.target_identities.add(identity)
+
+
 def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> None:
     event = payload.get("event")
     if event == "wrapper":
@@ -1382,13 +1548,8 @@ def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> 
         if channel.sequence != 0 or channel.wrapper is not None:
             raise SimulatorLifecycleError("duplicate direct wrapper identity")
         channel.wrapper = identity
-    elif event == "target":
-        identity = direct_payload_identity(payload, event)
-        if channel.wrapper is None or channel.target is not None or channel.failure:
-            raise SimulatorLifecycleError("duplicate direct target identity")
-        if same_direct_process(identity, channel.wrapper):
-            raise SimulatorLifecycleError("invalid direct target identity")
-        channel.target = identity
+    elif event in ("target", "target-exec"):
+        apply_direct_target_payload(channel, payload, event)
     elif event == "descendant":
         if channel.target is None or channel.failure:
             raise SimulatorLifecycleError("out-of-order direct descendant identity")
@@ -1403,6 +1564,8 @@ def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> 
         direct_payload_keys(payload, {"event", "returncode"})
         if channel.target is None or channel.returncode is not None or channel.failure:
             raise SimulatorLifecycleError("duplicate direct command status")
+        if channel.target_exec_required and not channel.target_exec_observed:
+            raise SimulatorLifecycleError("direct command status precedes target exec identity")
         returncode = payload["returncode"]
         if isinstance(returncode, bool) or not isinstance(returncode, int):
             raise SimulatorLifecycleError("invalid direct command return code")
@@ -1568,6 +1731,7 @@ def inspect_darwin_direct_descendants(
     ancestors: set[ProcessIdentity], deadline: float
 ) -> set[ProcessIdentity]:
     children_by_parent: dict[int, list[ProcessIdentity]] = {}
+    children_by_original_parent: dict[int, list[ProcessIdentity]] = {}
     process_ids = deadline_call(
         lambda: all_process_ids(deadline),
         deadline,
@@ -1579,27 +1743,26 @@ def inspect_darwin_direct_descendants(
         if info is not None:
             identity = direct_identity(unique_process_identity(pid, info))
             children_by_parent.setdefault(info.p_puniqueid, []).append(identity)
-    known: set[int] = set()
-    pending: list[int] = []
-    for identity in ancestors:
-        require_census_budget(deadline)
-        unique_id = identity.started_at[0]
-        if unique_id not in known:
-            known.add(unique_id)
-            pending.append(unique_id)
+            if info.p_orig_ppidversion > 0:
+                children_by_original_parent.setdefault(
+                    info.p_orig_ppidversion, []
+                ).append(identity)
+    known = set(ancestors)
+    pending = list(ancestors)
     descendants: set[ProcessIdentity] = set()
     while pending:
         require_census_budget(deadline)
-        parent_unique_id = pending.pop()
-        for identity in children_by_parent.get(parent_unique_id, []):
+        parent = pending.pop()
+        candidates = list(children_by_parent.get(parent.started_at[0], []))
+        if parent.audit_token is not None and parent.audit_token[7] > 0:
+            candidates.extend(children_by_original_parent.get(parent.audit_token[7], []))
+        for identity in candidates:
             require_census_budget(deadline)
-            if identity in descendants:
+            if identity in known:
                 continue
+            known.add(identity)
             descendants.add(identity)
-            unique_id = identity.started_at[0]
-            if unique_id not in known:
-                known.add(unique_id)
-                pending.append(unique_id)
+            pending.append(identity)
     return descendants
 
 
@@ -1607,7 +1770,7 @@ def direct_descendant_census(
     job: DirectJob, deadline: float
 ) -> set[ProcessIdentity]:
     observed = set(job.channel.descendants)
-    roots = observed | {job.identity}
+    roots = observed | {job.identity} | set(job.channel.target_identities)
     if job.channel.target is not None:
         roots.add(job.channel.target)
     pending = list(roots)

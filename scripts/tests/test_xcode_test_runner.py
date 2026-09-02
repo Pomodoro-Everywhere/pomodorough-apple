@@ -92,6 +92,21 @@ def direct_frame(
     ).encode() + b"\n"
 
 
+def apply_authenticated_direct_payload(
+    channel: run_xcode_tests.DirectChannel, payload: dict[str, object]
+) -> None:
+    frame = direct_frame(channel.key, channel.sequence + 1, payload)
+    run_xcode_tests.apply_direct_message(channel, frame.removesuffix(b"\n"))
+
+
+def darwin_direct_identity(
+    pid: int, unique_id: int, pid_version: int
+) -> run_xcode_tests.ProcessIdentity:
+    audit_token = [0] * 8
+    audit_token[5], audit_token[7] = pid, pid_version
+    return run_xcode_tests.ProcessIdentity(pid, (unique_id, 0), tuple(audit_token))
+
+
 def darwin_descendant_fixture() -> tuple[
     run_xcode_tests.ProcessIdentity,
     list[int],
@@ -759,6 +774,152 @@ class XcodeTestRunnerTests(unittest.TestCase):
             os.close(write_descriptor)
             run_xcode_tests.close_direct_channel(channel)
 
+    def test_darwin_monitor_reports_exec_identity_before_reaping_status(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        post_exec = darwin_direct_identity(900, 10, 7100840)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = post_exec.pid
+        trace: list[str] = []
+        process.poll.side_effect = lambda: trace.append("poll") or 7
+
+        def record_event(
+            _reporter: run_xcode_tests.DirectReporter, payload: dict[str, object]
+        ) -> None:
+            trace.append(str(payload["event"]))
+
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            return_value=post_exec,
+        ), mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", side_effect=set
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event", side_effect=record_event
+        ), mock.patch.object(
+            run_xcode_tests,
+            "darwin_direct_target_state",
+            side_effect=[(signal.SIGTRAP, False), (None, True)],
+        ), mock.patch.object(
+            run_xcode_tests,
+            "continue_direct_target",
+            side_effect=lambda _pid, _signal: trace.append("continue"),
+        ) as resume, mock.patch.object(
+            run_xcode_tests, "reap_direct_orphans"
+        ), mock.patch.object(
+            run_xcode_tests.time,
+            "sleep",
+            side_effect=[None, RuntimeError("stop monitor")],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop monitor"):
+                run_xcode_tests.monitor_direct_command(
+                    process, wrapper, reporter, pre_exec
+                )
+        self.assertEqual(trace, ["target-exec", "continue", "poll", "status"])
+        resume.assert_called_once_with(process.pid, 0)
+
+    def test_darwin_monitor_rejects_exited_target_when_identity_disappears(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = pre_exec.pid
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "direct_process_identity", return_value=None
+        ) as identity, mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants"
+        ) as observe, mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ) as report, mock.patch.object(
+            run_xcode_tests, "darwin_direct_target_state", return_value=(None, True)
+        ), mock.patch.object(
+            run_xcode_tests, "continue_direct_target"
+        ) as resume, mock.patch.object(
+            run_xcode_tests, "reap_direct_orphans"
+        ) as reap:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "exited direct target identity unavailable",
+            ):
+                run_xcode_tests.monitor_direct_command(
+                    process, wrapper, reporter, pre_exec
+                )
+        identity.assert_called_once_with(process.pid)
+        process.poll.assert_not_called()
+        observe.assert_not_called()
+        report.assert_not_called()
+        resume.assert_not_called()
+        reap.assert_not_called()
+
+    def test_authenticated_darwin_status_requires_exec_transition(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        channel = run_xcode_tests.DirectChannel(-1, b"authenticated")
+        for event, identity in (("wrapper", wrapper), ("target", pre_exec)):
+            apply_authenticated_direct_payload(
+                channel,
+                {"event": event, "identity": run_xcode_tests.identity_payload(identity)},
+            )
+        with self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError,
+            "status precedes target exec identity",
+        ):
+            apply_authenticated_direct_payload(
+                channel, {"event": "status", "returncode": 0}
+            )
+        self.assertEqual(channel.sequence, 2)
+        self.assertIsNone(channel.returncode)
+
+    def test_authenticated_exec_transition_rejects_malformed_versions(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        malformed_token = list(pre_exec.audit_token or ())
+        malformed_token[5] = 901
+        cases = {
+            "duplicate": pre_exec,
+            "reordered": darwin_direct_identity(900, 10, 7100836),
+            "malformed": run_xcode_tests.ProcessIdentity(
+                900, (10, 0), tuple(malformed_token)
+            ),
+        }
+        for name, candidate in cases.items():
+            with self.subTest(name=name):
+                channel = run_xcode_tests.DirectChannel(-1, b"authenticated")
+                for event, identity in (("wrapper", wrapper), ("target", pre_exec)):
+                    apply_authenticated_direct_payload(
+                        channel,
+                        {"event": event, "identity": run_xcode_tests.identity_payload(identity)},
+                    )
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "invalid direct target exec identity",
+                ):
+                    apply_authenticated_direct_payload(
+                        channel,
+                        {"event": "target-exec", "identity": run_xcode_tests.identity_payload(candidate)},
+                    )
+                self.assertEqual(channel.sequence, 2)
+                self.assertEqual(channel.target, pre_exec)
+
+    def test_direct_target_exec_event_rejects_identity_change(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        replacement = darwin_direct_identity(900, 11, 7100840)
+        channel = run_xcode_tests.DirectChannel(
+            -1, b"key", wrapper=wrapper, target=pre_exec
+        )
+        payload = {
+            "event": "target-exec",
+            "identity": run_xcode_tests.identity_payload(replacement),
+        }
+        with self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError,
+            "invalid direct target exec identity",
+        ):
+            run_xcode_tests.apply_direct_payload(channel, payload)
+        self.assertIs(channel.target, pre_exec)
+
     def test_direct_channel_closes_descriptor_on_eof_and_invalid_frames(self) -> None:
         cases = [("eof", b"", None), ("malformed", b"{bad}\n", "invalid"), ("truncated", b"{bad", "truncated")]
         for name, content, expected in cases:
@@ -1101,6 +1262,94 @@ class XcodeTestRunnerTests(unittest.TestCase):
             descendants = run_xcode_tests.inspect_darwin_direct_descendants(
                 {root}, 1.0
             )
+        self.assertEqual(descendants, expected)
+
+    def test_direct_darwin_descendant_closure_keeps_reparented_chain(self) -> None:
+        def process_info(
+            unique_id: int, id_version: int, original_parent_version: int
+        ) -> run_xcode_tests.ProcUniqueIdentifierInfo:
+            info = run_xcode_tests.ProcUniqueIdentifierInfo()
+            info.p_uniqueid = unique_id
+            info.p_puniqueid = 1
+            info.p_idversion = id_version
+            info.p_orig_ppidversion = original_parent_version
+            return info
+
+        root_token = [0] * 8
+        root_token[5], root_token[7] = 900, 77
+        root = run_xcode_tests.ProcessIdentity(900, (10, 0), tuple(root_token))
+        infos = {
+            901: process_info(11, 88, 77),
+            902: process_info(12, 99, 88),
+            903: process_info(13, 111, 66),
+        }
+        expected = {
+            run_xcode_tests.direct_identity(
+                run_xcode_tests.unique_process_identity(pid, infos[pid])
+            )
+            for pid in (901, 902)
+        }
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "all_process_ids", return_value=list(infos)
+        ), mock.patch.object(
+            run_xcode_tests,
+            "bounded_unique_identifier_info",
+            side_effect=lambda pid, _deadline: infos[pid],
+        ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
+            descendants = run_xcode_tests.inspect_darwin_direct_descendants(
+                {root}, 1.0
+            )
+        self.assertEqual(descendants, expected)
+
+    def test_hosted_direct_census_uses_post_exec_target_version(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        post_exec = darwin_direct_identity(900, 10, 7100840)
+        child_info = run_xcode_tests.ProcUniqueIdentifierInfo()
+        child_info.p_uniqueid = 11
+        child_info.p_puniqueid = 1
+        child_info.p_idversion = 88
+        child_info.p_orig_ppidversion = 7100840
+        hosted_info = run_xcode_tests.ProcUniqueIdentifierInfo()
+        hosted_info.p_uniqueid = 12
+        hosted_info.p_puniqueid = 1
+        hosted_info.p_idversion = 99
+        hosted_info.p_orig_ppidversion = 88
+        infos = {901: child_info, 902: hosted_info}
+        channel = run_xcode_tests.DirectChannel(-1, b"key")
+        for event, identity in (
+            ("wrapper", wrapper),
+            ("target", pre_exec),
+            ("target-exec", post_exec),
+        ):
+            apply_authenticated_direct_payload(
+                channel,
+                {"event": event, "identity": run_xcode_tests.identity_payload(identity)},
+            )
+        job = run_xcode_tests.DirectJob(
+            Path("/tmp/hosted-direct"), Path("/dev/null"), Path("/dev/null"),
+            mock.Mock(spec=subprocess.Popen), wrapper, channel,
+        )
+        expected = {
+            run_xcode_tests.direct_identity(
+                run_xcode_tests.unique_process_identity(pid, info)
+            )
+            for pid, info in infos.items()
+        }
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "all_process_ids", return_value=list(infos)
+        ), mock.patch.object(
+            run_xcode_tests, "bounded_unique_identifier_info",
+            side_effect=lambda pid, _deadline: infos[pid],
+        ), mock.patch.object(
+            run_xcode_tests, "bounded_direct_children", return_value=set()
+        ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
+            self.assertEqual(
+                run_xcode_tests.inspect_darwin_direct_descendants({pre_exec}, 1.0),
+                set(),
+            )
+            descendants = run_xcode_tests.direct_descendant_census(job, 1.0)
+        self.assertEqual(channel.target_identities, {pre_exec, post_exec})
         self.assertEqual(descendants, expected)
 
     def test_direct_darwin_descendant_closure_stops_on_expiring_clock(self) -> None:
