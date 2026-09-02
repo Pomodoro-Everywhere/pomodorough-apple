@@ -889,6 +889,41 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIs(raised.exception.__cause__, timeout)
         send.assert_called_once_with(identity, signal.SIGKILL)
         self.assertEqual(process.wait.call_count, 2)
+        self.assertTrue(
+            all(call.kwargs["timeout"] > 0 for call in process.wait.call_args_list)
+        )
+
+    def test_launchctl_start_delay_polls_completed_process_without_zero_wait(self) -> None:
+        process = mock.Mock(pid=2222)
+        process.poll.return_value = 113
+        with mock.patch.object(
+            run_xcode_tests.subprocess, "Popen", return_value=process
+        ), mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=[10.0, 10.0, 10.3]
+        ), mock.patch.object(run_xcode_tests, "terminate_launchctl_process") as terminate:
+            result = run_xcode_tests.launchctl_run([], 10.2, 0.2)
+        self.assertEqual(result.returncode, 113)
+        process.wait.assert_not_called()
+        terminate.assert_not_called()
+
+    def test_launchctl_reap_timeout_accepts_completed_process_poll(self) -> None:
+        token = (0, 0, 0, 0, 0, 2222, 0, 41)
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 41), token)
+        process = mock.Mock(pid=2222)
+        process.poll.side_effect = [None, 0]
+        process.wait.side_effect = subprocess.TimeoutExpired(["launchctl"], 0.1)
+        with mock.patch.object(
+            run_xcode_tests, "process_identity", return_value=identity
+        ), mock.patch.object(
+            run_xcode_tests, "signal_identity", return_value=True
+        ) as send:
+            run_xcode_tests.terminate_launchctl_process(process)
+        send.assert_called_once_with(identity, signal.SIGKILL)
+        self.assertGreater(process.wait.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(
+            process.wait.call_args.kwargs["timeout"],
+            run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
+        )
 
     def test_launchctl_timeout_requires_process_identity_before_signal(self) -> None:
         process = mock.Mock(pid=2222)
@@ -964,6 +999,54 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
         self.assertIn("containment cleanup error: launchctl timed out", evidence)
         cleanup.assert_called_once_with(job, None, True)
+        self.assertFalse(job.root.exists())
+
+    def test_completed_lifecycle_exit_survives_failed_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = simulator_args(root)
+            args.diagnostics_dir.mkdir()
+            job = launchd_job(root / "job")
+            job.root.mkdir()
+            job.stderr_path.write_text("target failed\n", encoding="utf-8")
+            cleanup_error = run_xcode_tests.SimulatorLifecycleError(
+                "launchctl timed out"
+            )
+            with mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_job_status", return_value=7
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
+            ) as cleanup:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError, "probe exited 7"
+                ):
+                    run_xcode_tests.lifecycle_command(args, "probe", ["target"])
+            evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
+        self.assertIn("containment cleanup error: launchctl timed out", evidence)
+        cleanup.assert_called_once_with(job, None, False)
+        self.assertFalse(job.root.exists())
+
+    def test_successful_lifecycle_fails_closed_on_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory) / "job")
+            job.root.mkdir()
+            cleanup_error = run_xcode_tests.SimulatorLifecycleError(
+                "launchctl timed out"
+            )
+            with mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "wait_for_job_status", return_value=0
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
+            ) as cleanup:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError, "launchctl timed out"
+                ):
+                    run_xcode_tests.lifecycle_process(["target"], 1, None)
+        cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
     def test_bootstrap_timeout_always_aborts_possible_job(self) -> None:
@@ -1198,6 +1281,82 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertLessEqual(evidence_deadline, 99.5)
         cleanup.assert_called_once_with(job, 100.0, True)
         final_output.assert_not_called()
+
+    def test_attempt_cleanup_failure_preserves_exit_without_duplicate_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = simulator_args(root)
+            args.wall_deadline = time.monotonic() + 10
+            job = launchd_job(root / "job")
+            job.root.mkdir()
+            cleanup_error = run_xcode_tests.SimulatorLifecycleError(
+                "launchctl timed out"
+            )
+            with mock.patch.object(
+                run_xcode_tests, "spawn_contained_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "observe_attempt", return_value=(65, "failed", None)
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
+            ) as cleanup:
+                outcome = run_xcode_tests.run_attempt(
+                    args, args.command, io.StringIO(), 1, 0.0, []
+                )
+        self.assertEqual(outcome.returncode, 65)
+        self.assertEqual(outcome.cleanup_error, "launchctl timed out")
+        self.assertIn("containment cleanup error = launchctl timed out", outcome.process_evidence)
+        cleanup.assert_called_once_with(job, args.wall_deadline, False)
+        self.assertFalse(job.root.exists())
+
+    def test_runner_fails_closed_only_for_successful_cleanup_error(self) -> None:
+        for expected in (0, 7, 65, 124, 125):
+            with self.subTest(returncode=expected), tempfile.TemporaryDirectory() as directory:
+                args = simulator_args(Path(directory))
+                args.command = ["fake-xcodebuild"]
+                args.simulator_name = None
+                outcome = run_xcode_tests.AttemptOutcome(
+                    expected, "target output", None, "", "launchctl timed out"
+                )
+                stderr = io.StringIO()
+                with mock.patch.object(
+                    run_xcode_tests, "run_attempt", return_value=outcome
+                ) as attempt, mock.patch.object(run_xcode_tests.sys, "stderr", stderr):
+                    actual = run_xcode_tests.run(args)
+            required = (
+                run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE
+                if expected == 0
+                else expected
+            )
+            self.assertEqual(actual, required)
+            self.assertIn("classification=containment-cleanup-failure", stderr.getvalue())
+            attempt.assert_called_once()
+
+    def test_timeout_classification_survives_cleanup_failure(self) -> None:
+        completed = (
+            "Test Suite 'PomodoroughUITests.xctest' passed\n"
+            "Test Suite 'All tests' passed\n"
+            " Executed 1 tests, with 0 failures\n"
+        )
+        for output, expected in (
+            (completed, run_xcode_tests.POST_TEST_TIMEOUT),
+            ("Test Case 'example' started\n", run_xcode_tests.TEST_EXECUTION_TIMEOUT),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                args = simulator_args(Path(directory))
+                args.command = ["fake-xcodebuild"]
+                args.simulator_name = None
+                outcome = run_xcode_tests.AttemptOutcome(
+                    -signal.SIGKILL,
+                    output,
+                    "wall-timeout=1800s",
+                    "process evidence\n",
+                    "launchctl timed out",
+                )
+                with mock.patch.object(
+                    run_xcode_tests, "run_attempt", return_value=outcome
+                ):
+                    actual = run_xcode_tests.run(args)
+            self.assertEqual(actual, expected)
 
     def successful_command_child_pid(self, source: str) -> int:
         with tempfile.TemporaryDirectory() as directory:

@@ -46,7 +46,7 @@ LAUNCH_INFRASTRUCTURE_MARKERS = (
 )
 SIMULATOR_DESTINATION_KEYS = frozenset({"platform", "name", "id", "OS", "arch"})
 SIMULATOR_ARCHITECTURES = frozenset({"arm64", "x86_64"})
-CLEANUP_RESERVE_SECONDS = 0.5
+CLEANUP_RESERVE_SECONDS = 2.0
 TIMEOUT_EVIDENCE_SECONDS = 0.25
 EVIDENCE_WRITE_SECONDS = 0.25
 EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
@@ -58,7 +58,7 @@ CONTAINED_CHILD_ARGUMENT = "--contained-child"
 EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
-LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 0.05
+LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 0.5
 LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
 PROCESS_PATH_BUFFER_BYTES = 4096
 PROC_PIDTBSDINFO = 3
@@ -164,6 +164,7 @@ class AttemptOutcome:
     output: str
     timeout_reason: str | None
     process_evidence: str
+    cleanup_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -605,7 +606,7 @@ def captured_process_output(stream: BinaryIO) -> str:
 
 def terminate_launchctl_process(
     process: subprocess.Popen[bytes],
-    deadline: float,
+    _operation_deadline: float | None = None,
 ) -> None:
     if process.poll() is not None:
         return
@@ -621,11 +622,35 @@ def terminate_launchctl_process(
         if process_identity(process.pid) == identity:
             raise SimulatorLifecycleError("identity-bound launchctl termination failed")
         raise SimulatorLifecycleError("launchctl process identity changed")
-    timeout = bounded_wait(deadline, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
+    cleanup_by = time.monotonic() + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    timeout = bounded_wait(cleanup_by, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
+    if timeout <= 0:
+        if process.poll() is not None:
+            return
+        raise SimulatorLifecycleError("launchctl process cleanup timed out")
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as error:
+        if process.poll() is not None:
+            return
         raise SimulatorLifecycleError("launchctl process cleanup timed out") from error
+
+
+def wait_for_launchctl_process(
+    process: subprocess.Popen[bytes], command: list[str], deadline: float
+) -> int:
+    timeout = deadline - time.monotonic()
+    if timeout > 0:
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            timeout_error = error
+    else:
+        timeout_error = subprocess.TimeoutExpired(command, 0)
+    returncode = process.poll()
+    if returncode is not None:
+        return returncode
+    raise timeout_error
 
 
 def launchctl_run(
@@ -635,7 +660,6 @@ def launchctl_run(
     timeout = bounded_wait(deadline, maximum)
     if timeout <= 0:
         raise SimulatorLifecycleError("launchd containment deadline expired")
-    cleanup_reserve = min(LAUNCHCTL_PROCESS_CLEANUP_SECONDS, timeout / 2)
     finish_by = time.monotonic() + timeout
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         try:
@@ -645,9 +669,7 @@ def launchctl_run(
         except OSError as error:
             raise SimulatorLifecycleError(f"launchctl failed to start: {error}") from error
         try:
-            returncode = process.wait(
-                timeout=bounded_wait(finish_by - cleanup_reserve, timeout)
-            )
+            returncode = wait_for_launchctl_process(process, command, finish_by)
         except subprocess.TimeoutExpired as error:
             try:
                 terminate_launchctl_process(process, finish_by)
@@ -1348,18 +1370,14 @@ def lifecycle_process(
     try:
         returncode = wait_for_job_status(job, timeout, deadline)
         cleanup_attempted = True
-        cleanup_error: SimulatorLifecycleError | None = None
-        try:
-            cleanup_contained_job(job, deadline, returncode is None)
-        except SimulatorLifecycleError as error:
-            cleanup_error = error
+        cleanup_error = contained_cleanup_error(job, deadline, returncode is None)
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
-        if returncode is None:
-            if cleanup_error is not None:
-                stderr += f"\ncontainment cleanup error: {cleanup_error}\n"
-            raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
         if cleanup_error is not None:
+            stderr += f"\ncontainment cleanup error: {cleanup_error}\n"
+        if returncode is None:
+            raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+        if returncode == 0 and cleanup_error is not None:
             raise cleanup_error
         return LifecycleOutcome(command, returncode, stdout, stderr, job)
     except Exception:
@@ -1371,6 +1389,25 @@ def lifecycle_process(
         raise
     finally:
         shutil.rmtree(job.root, ignore_errors=True)
+
+
+def contained_cleanup_error(
+    job: LaunchdJob, deadline: float | None, signal_root: bool
+) -> SimulatorLifecycleError | None:
+    try:
+        cleanup_contained_job(job, deadline, signal_root)
+    except SimulatorLifecycleError as error:
+        return error
+    return None
+
+
+def cleanup_process_evidence(
+    evidence: str, cleanup_error: SimulatorLifecycleError | None
+) -> str:
+    if cleanup_error is None:
+        return evidence
+    separator = "" if not evidence or evidence.endswith("\n") else "\n"
+    return f"{evidence}{separator}containment cleanup error = {cleanup_error}\n"
 
 
 def lifecycle_command(
@@ -1748,6 +1785,7 @@ def run_attempt(
         raise SimulatorLifecycleError("wall timeout exhausted before xcodebuild")
     deadline = getattr(args, "wall_deadline", None)
     job = spawn_contained_job(command, True, deadline)
+    cleanup_attempted = False
     try:
         returncode, output, timeout_reason = observe_attempt(
             job, args, run_started, log, evidence_errors
@@ -1756,15 +1794,20 @@ def run_attempt(
         if timeout_reason:
             evidence_deadline = process_evidence_deadline(deadline)
             process_evidence = launchd_job_evidence(job, evidence_deadline)
-        cleanup_contained_job(job, deadline, timeout_reason is not None)
+        cleanup_attempted = True
+        cleanup_error = contained_cleanup_error(
+            job, deadline, timeout_reason is not None
+        )
+        process_evidence = cleanup_process_evidence(process_evidence, cleanup_error)
         return AttemptOutcome(
             returncode if returncode is not None else -signal.SIGKILL,
             output,
             timeout_reason,
             process_evidence,
+            None if cleanup_error is None else str(cleanup_error),
         )
     except Exception:
-        if job.root.exists():
+        if not cleanup_attempted and job.root.exists():
             try:
                 cleanup_contained_job(job, deadline, True)
             except SimulatorLifecycleError:
@@ -1852,6 +1895,14 @@ def run(args: argparse.Namespace) -> int:
                 )
                 if evidence_failed(evidence_errors):
                     return EVIDENCE_FAILURE
+                if outcome.cleanup_error is not None:
+                    print(
+                        "classification=containment-cleanup-failure; "
+                        f"{outcome.cleanup_error}",
+                        file=sys.stderr,
+                    )
+                    if outcome.returncode == 0 and outcome.timeout_reason is None:
+                        return PRETEST_INFRASTRUCTURE_FAILURE
                 if not recoverable_launch_failure(outcome):
                     return timeout_code if timeout_code is not None else outcome.returncode
                 if recovery_used or simulator_udid is None:
