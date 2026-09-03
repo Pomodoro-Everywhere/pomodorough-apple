@@ -1044,6 +1044,80 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 self.assertEqual(channel.sequence, 2)
                 self.assertEqual(channel.target, pre_exec)
 
+    def test_hosted_exec_reports_accept_authenticated_later_peer_generation(
+        self,
+    ) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        pre_exec = darwin_direct_identity(900, 10, 7100837)
+        latest = darwin_direct_identity(900, 10, 7100867)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"authenticated",
+            wrapper=wrapper,
+            target=pre_exec,
+            target_peer=91,
+            peer_identity_required=True,
+        )
+        with mock.patch.object(
+            run_xcode_tests,
+            "bounded_peer_process_identity",
+            return_value=latest,
+        ) as inspect_peer:
+            for version in range(7100838, 7100868):
+                apply_authenticated_direct_payload(
+                    channel,
+                    {
+                        "event": "target-exec",
+                        "identity": run_xcode_tests.identity_payload(
+                            darwin_direct_identity(900, 10, version)
+                        ),
+                    },
+                )
+        self.assertEqual(channel.target, latest)
+        self.assertTrue(channel.target_exec_observed)
+        self.assertEqual(inspect_peer.call_count, 30)
+        self.assertEqual(len(channel.target_identities), 31)
+
+    def test_target_exec_peer_rejects_reuse_regression_and_substitution(
+        self,
+    ) -> None:
+        reported = darwin_direct_identity(900, 10, 7100838)
+        substituted_token = list(
+            darwin_direct_identity(900, 10, 7100839).audit_token or ()
+        )
+        substituted_token[1] = 1
+        rejected = (
+            darwin_direct_identity(900, 10, 7100837),
+            darwin_direct_identity(900, 11, 7100839),
+            run_xcode_tests.ProcessIdentity(900, (10, 0), tuple(substituted_token)),
+            run_xcode_tests.ProcessIdentity(900, (10, 0), None),
+        )
+        for current in rejected:
+            with self.subTest(current=current):
+                channel = run_xcode_tests.DirectChannel(
+                    -1,
+                    b"authenticated",
+                    wrapper=darwin_direct_identity(800, 8, 7000000),
+                    target=darwin_direct_identity(900, 10, 7100837),
+                    target_peer=91,
+                    peer_identity_required=True,
+                )
+                with mock.patch.object(
+                    run_xcode_tests,
+                    "bounded_peer_process_identity",
+                    return_value=current,
+                ), self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "forged direct target exec identity",
+                ):
+                    apply_authenticated_direct_payload(
+                        channel,
+                        {
+                            "event": "target-exec",
+                            "identity": run_xcode_tests.identity_payload(reported),
+                        },
+                    )
+
     def test_direct_target_exec_event_rejects_identity_change(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
         pre_exec = darwin_direct_identity(900, 10, 7100837)
@@ -1466,6 +1540,26 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with mock.patch.object(run_xcode_tests, "LIBSYSTEM", library):
             observed = run_xcode_tests.darwin_task_audit_token(99, 2222)
         self.assertEqual(observed, darwin_direct_identity(2222, 10, 20).audit_token)
+
+    def test_darwin_self_identity_survives_peer_token_unavailability(self) -> None:
+        expected = darwin_direct_identity(os.getpid(), 8, 20).audit_token
+        library = mock.Mock()
+        library.mach_task_self.return_value = 99
+        with mock.patch.object(
+            run_xcode_tests, "LIBSYSTEM", library
+        ), mock.patch.object(
+            run_xcode_tests,
+            "darwin_task_audit_token",
+            return_value=expected,
+        ) as task_token, mock.patch.object(
+            run_xcode_tests.socket,
+            "socketpair",
+            side_effect=OSError("direct wrapper identity unavailable"),
+        ) as socketpair:
+            observed = run_xcode_tests.darwin_process_audit_token(os.getpid())
+        self.assertEqual(observed, expected)
+        task_token.assert_called_once_with(99, os.getpid())
+        socketpair.assert_not_called()
 
     def test_darwin_task_audit_token_rejects_malformed_identity(self) -> None:
         cases = ((2223, 20, 8, 0), (2222, 0, 8, 0), (2222, 20, 7, 0), (2222, 20, 8, 5))

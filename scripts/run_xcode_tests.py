@@ -530,12 +530,7 @@ def darwin_peer_audit_token(descriptor: int, pid: int) -> tuple[int, ...] | None
 
 
 def darwin_self_audit_token(pid: int) -> tuple[int, ...] | None:
-    first, second = socket.socketpair()
-    try:
-        return darwin_peer_audit_token(first.fileno(), pid)
-    finally:
-        first.close()
-        second.close()
+    return darwin_task_audit_token(LIBSYSTEM.mach_task_self(), pid)
 
 
 def darwin_process_audit_token(pid: int) -> tuple[int, ...] | None:
@@ -832,6 +827,22 @@ def direct_audit_pid_version(identity: ProcessIdentity) -> int | None:
     if token is None or token[5] != identity.pid or token[7] <= 0:
         return None
     return token[7]
+
+
+def peer_identity_covers_exec_report(
+    reported: ProcessIdentity, current: ProcessIdentity
+) -> bool:
+    reported_version = direct_audit_pid_version(reported)
+    current_version = direct_audit_pid_version(current)
+    return (
+        same_direct_process(reported, current)
+        and reported.audit_token is not None
+        and current.audit_token is not None
+        and reported.audit_token[:-1] == current.audit_token[:-1]
+        and reported_version is not None
+        and current_version is not None
+        and current_version >= reported_version
+    )
 
 
 def validate_direct_target_transition(
@@ -2334,7 +2345,9 @@ def apply_direct_target_payload(
                 direct_message_deadline(deadline),
                 "direct target identity",
             )
-            if current != identity:
+            if current is None or not peer_identity_covers_exec_report(
+                identity, current
+            ):
                 raise SimulatorLifecycleError("forged direct target exec identity")
         channel.target_exec_observed = True
         channel.target_identities.add(previous)
