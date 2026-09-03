@@ -18,6 +18,7 @@ import secrets
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -105,6 +106,9 @@ PROC_PIDCOALITIONINFO = 20
 RUSAGE_INFO_V0 = 0
 TASK_AUDIT_TOKEN = 15
 TASK_AUDIT_TOKEN_COUNT = 8
+SOL_LOCAL = 0
+LOCAL_PEERTOKEN = 0x006
+DARWIN_PEER_IDENTITY_SAMPLES = 3
 COALITION_TYPE_RESOURCE = 0
 PT_TRACE_ME = 0
 PT_CONTINUE = 7
@@ -321,6 +325,13 @@ class DirectChannel:
     returncode: int | None = None
     failure: str | None = None
     closed: bool = False
+    wrapper_listener: int = -1
+    wrapper_peer: int = -1
+    target_listener: int = -1
+    target_peer: int = -1
+    wrapper_socket_path: Path | None = None
+    target_socket_path: Path | None = None
+    peer_identity_required: bool = False
 
 
 @dataclass
@@ -357,6 +368,25 @@ class DirectSpawnResources:
     root: Path | None = None
     descriptors: set[int] = field(default_factory=set)
     process: subprocess.Popen[bytes] | None = None
+
+
+@dataclass(frozen=True)
+class DirectPeerEndpoints:
+    wrapper_path: Path
+    parent_target_path: Path
+    wrapper_target_path: Path
+    wrapper_listener: int
+    target_listener: int
+
+
+@dataclass(frozen=True)
+class PendingDirectJob:
+    root: Path
+    stdout_path: Path
+    stderr_path: Path
+    process: subprocess.Popen[bytes]
+    channel: DirectChannel
+    acknowledgement_write: int
 
 
 @dataclass(frozen=True)
@@ -483,10 +513,35 @@ def darwin_task_audit_token(task: int, pid: int) -> tuple[int, ...] | None:
     return token_values
 
 
+def darwin_peer_audit_token(descriptor: int, pid: int) -> tuple[int, ...] | None:
+    peer = socket.socket(fileno=descriptor)
+    try:
+        content = peer.getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN, ctypes.sizeof(AuditToken))
+    except OSError:
+        return None
+    finally:
+        peer.detach()
+    if len(content) != ctypes.sizeof(AuditToken):
+        return None
+    token_values = tuple(AuditToken.from_buffer_copy(content).values)
+    if token_values[5] != pid or token_values[7] <= 0:
+        return None
+    return token_values
+
+
+def darwin_self_audit_token(pid: int) -> tuple[int, ...] | None:
+    first, second = socket.socketpair()
+    try:
+        return darwin_peer_audit_token(first.fileno(), pid)
+    finally:
+        first.close()
+        second.close()
+
+
 def darwin_process_audit_token(pid: int) -> tuple[int, ...] | None:
-    self_task = LIBSYSTEM.mach_task_self()
     if pid == os.getpid():
-        return darwin_task_audit_token(self_task, pid)
+        return darwin_self_audit_token(pid)
+    self_task = LIBSYSTEM.mach_task_self()
     task = ctypes.c_uint32()
     if LIBSYSTEM.task_name_for_pid(self_task, pid, ctypes.byref(task)) != 0:
         return None
@@ -513,6 +568,35 @@ def stable_darwin_process_identity(pid: int) -> ProcessIdentity | None:
     ):
         return None
     return ProcessIdentity(pid, (first_start, 0), first_token)
+
+
+def darwin_peer_identity_sample(
+    descriptor: int, pid: int
+) -> tuple[int, tuple[int, ...]] | None:
+    first_start = darwin_process_start_abstime(pid)
+    token = darwin_peer_audit_token(descriptor, pid)
+    second_start = darwin_process_start_abstime(pid)
+    if token is None or first_start is None or first_start != second_start:
+        return None
+    return first_start, token
+
+
+def stable_darwin_peer_identity(
+    descriptor: int, pid: int
+) -> ProcessIdentity | None:
+    if descriptor < 0:
+        raise SimulatorLifecycleError("direct peer descriptor unavailable")
+    previous = darwin_peer_identity_sample(descriptor, pid)
+    if previous is None:
+        return None
+    for _ in range(DARWIN_PEER_IDENTITY_SAMPLES - 1):
+        current = darwin_peer_identity_sample(descriptor, pid)
+        if current is None or current[0] != previous[0]:
+            return None
+        if current[1] == previous[1]:
+            return ProcessIdentity(pid, (current[0], 0), current[1])
+        previous = current
+    return None
 
 
 def stable_darwin_direct_ancestry(pid: int) -> DarwinDirectAncestry | None:
@@ -1132,10 +1216,15 @@ def observed_direct_children(parent: ProcessIdentity) -> set[ProcessIdentity]:
 
 
 def direct_target_identity(
-    process: subprocess.Popen[bytes], wrapper: ProcessIdentity
+    process: subprocess.Popen[bytes],
+    wrapper: ProcessIdentity,
+    peer_descriptor: int,
+    deadline: float | None = None,
 ) -> ProcessIdentity:
     if LIBPROC is not None:
-        return darwin_direct_target_identity(process, wrapper)
+        return darwin_direct_target_identity(
+            process, wrapper, peer_descriptor, deadline
+        )
     current = direct_process_identity(wrapper.pid)
     if current is None or not same_direct_process(current, wrapper):
         raise SimulatorLifecycleError("direct wrapper identity changed")
@@ -1150,21 +1239,25 @@ def direct_target_identity(
 
 
 def darwin_direct_target_identity(
-    process: subprocess.Popen[bytes], wrapper: ProcessIdentity
+    process: subprocess.Popen[bytes],
+    wrapper: ProcessIdentity,
+    peer_descriptor: int,
+    deadline: float | None,
 ) -> ProcessIdentity:
     current = direct_process_identity(wrapper.pid)
     if current is None or current != wrapper:
         raise SimulatorLifecycleError("direct wrapper identity changed")
     if process.poll() is not None:
         raise SimulatorLifecycleError("direct target ancestry unavailable")
-    first = direct_process_identity(process.pid)
-    second = direct_process_identity(process.pid)
-    if first is None or first != second or process.poll() is not None:
+    identity = bounded_peer_process_identity(
+        peer_descriptor, process.pid, deadline
+    )
+    if identity is None or process.poll() is not None:
         raise SimulatorLifecycleError("direct target ancestry unavailable")
     current = direct_process_identity(wrapper.pid)
     if current is None or current != wrapper:
         raise SimulatorLifecycleError("direct wrapper identity changed")
-    return second
+    return identity
 
 
 def observe_direct_descendants(
@@ -1195,22 +1288,40 @@ def reap_direct_orphans(target_pid: int) -> None:
             raise SimulatorLifecycleError("direct target reaped outside Popen")
 
 
+def direct_target_arguments(
+    gate_descriptor: int,
+    parent_socket_path: str,
+    wrapper_socket_path: str,
+    command: list[str],
+) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        DIRECT_TARGET_ARGUMENT,
+        str(gate_descriptor),
+        parent_socket_path,
+        wrapper_socket_path,
+        "--",
+        *command,
+    ]
+
+
 def spawn_gated_direct_target(
     command: list[str],
     wrapper: ProcessIdentity,
     reporter: DirectReporter,
+    parent_socket_path: str,
+    wrapper_socket_path: str,
     marker: str | None = None,
-) -> tuple[subprocess.Popen[bytes], ProcessIdentity]:
+) -> tuple[subprocess.Popen[bytes], ProcessIdentity, int]:
     gate_read, gate_write = os.pipe()
-    arguments = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        DIRECT_TARGET_ARGUMENT,
-        str(gate_read),
-        "--",
-        *command,
-    ]
+    listener = open_direct_listener(Path(wrapper_socket_path))
+    peer_descriptor = -1
+    arguments = direct_target_arguments(
+        gate_read, parent_socket_path, wrapper_socket_path, command
+    )
     environment = None
+    completed = False
     if marker is not None:
         environment = os.environ.copy()
         environment[DIRECT_JOB_ENVIRONMENT] = marker
@@ -1223,16 +1334,27 @@ def spawn_gated_direct_target(
         )
         os.close(gate_read)
         gate_read = -1
-        identity = direct_target_identity(process, wrapper)
+        handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+        peer_descriptor = accept_direct_peer(listener.fileno(), handshake_by)
+        listener.close()
+        identity = direct_target_identity(
+            process, wrapper, peer_descriptor, handshake_by
+        )
         report_direct_event(
             reporter, {"event": "target", "identity": identity_payload(identity)}
         )
         os.write(gate_write, b"1")
-        return process, identity
+        os.close(gate_write)
+        gate_write = -1
+        completed = True
+        return process, identity, peer_descriptor
     finally:
+        listener.close()
         for descriptor in (gate_read, gate_write):
             if descriptor >= 0:
                 os.close(descriptor)
+        if not completed and peer_descriptor >= 0:
+            os.close(peer_descriptor)
 
 
 def refresh_direct_target_identity(
@@ -1240,8 +1362,13 @@ def refresh_direct_target_identity(
     reporter: DirectReporter,
     previous: ProcessIdentity,
     unavailable_message: str,
+    peer_descriptor: int,
 ) -> ProcessIdentity:
-    current = direct_process_identity(process.pid)
+    current = (
+        stable_darwin_peer_identity(peer_descriptor, process.pid)
+        if LIBPROC is not None
+        else direct_process_identity(process.pid)
+    )
     if current is None:
         raise SimulatorLifecycleError(unavailable_message)
     if not same_direct_process(current, previous):
@@ -1295,12 +1422,17 @@ def observe_darwin_target_state(
     reporter: DirectReporter,
     identity: ProcessIdentity,
     exec_observed: bool,
+    peer_descriptor: int,
 ) -> tuple[ProcessIdentity, bool, bool]:
     stopped_signal, target_exited = darwin_direct_target_state(process)
     if target_exited and not exec_observed:
         previous = identity
         identity = refresh_direct_target_identity(
-            process, reporter, identity, "exited direct target identity unavailable"
+            process,
+            reporter,
+            identity,
+            "exited direct target identity unavailable",
+            peer_descriptor,
         )
         exec_observed = identity != previous
     if target_exited:
@@ -1311,7 +1443,11 @@ def observe_darwin_target_state(
         return identity, False, exec_observed
     previous = identity
     identity = refresh_direct_target_identity(
-        process, reporter, identity, "stopped direct target identity unavailable"
+        process,
+        reporter,
+        identity,
+        "stopped direct target identity unavailable",
+        peer_descriptor,
     )
     transitioned = identity != previous
     continue_direct_target(process.pid, 0 if transitioned else stopped_signal)
@@ -1323,7 +1459,8 @@ def monitor_direct_command(
     wrapper: ProcessIdentity,
     reporter: DirectReporter,
     identity: ProcessIdentity,
-    marker: str | None = None,
+    marker: str | None,
+    peer_descriptor: int,
 ) -> None:
     observed = {wrapper, identity}
     target_exec_observed = False
@@ -1333,7 +1470,11 @@ def monitor_direct_command(
         if LIBPROC is not None and not status_sent:
             previous = identity
             identity, target_exited, target_exec_observed = observe_darwin_target_state(
-                process, reporter, identity, target_exec_observed
+                process,
+                reporter,
+                identity,
+                target_exec_observed,
+                peer_descriptor,
             )
             if identity != previous:
                 observed.add(identity)
@@ -1395,40 +1536,86 @@ def report_observed_direct_descendants(
     return updated
 
 
-def direct_child(
-    event_descriptor: int,
-    key_descriptor: int,
-    acknowledgement_descriptor: int,
-    command: list[str],
-) -> int:
-    key = b""
-    reporter: DirectReporter | None = None
+def run_gated_direct_target(
+    process: subprocess.Popen[bytes],
+    wrapper: ProcessIdentity,
+    reporter: DirectReporter,
+    target: ProcessIdentity,
+    marker: str | None,
+    peer_descriptor: int,
+) -> None:
     try:
-        key = read_direct_key(key_descriptor)
-        reporter = DirectReporter(event_descriptor, key)
-        os.close(key_descriptor)
-        configure_direct_subreaper()
-        identity_deadline = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS / 2
-        identity = await_direct_process_identity(os.getpid(), identity_deadline)
-        report_direct_event(
-            reporter,
-            {"event": "wrapper", "identity": identity_payload(identity)},
-        )
-        ready, _, _ = select.select(
-            [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
-        )
-        if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
-            raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
-        os.close(acknowledgement_descriptor)
-        marker = direct_job_marker(key) if LIBPROC is not None else None
-        process, target_identity = spawn_gated_direct_target(
-            command, identity, reporter, marker
-        )
         for requested in (signal.SIGINT, signal.SIGTERM):
             signal.signal(requested, signal.SIG_IGN)
         if hasattr(signal, "SIGINFO"):
             signal.signal(signal.SIGINFO, signal.SIG_IGN)
-        monitor_direct_command(process, identity, reporter, target_identity, marker)
+        monitor_direct_command(
+            process, wrapper, reporter, target, marker, peer_descriptor
+        )
+    except Exception as error:
+        cleanup_errors: list[str] = []
+        record_cleanup_failure(
+            cleanup_errors, "peer close failed", lambda: os.close(peer_descriptor)
+        )
+        append_cleanup_errors(error, "direct target identity cleanup error", cleanup_errors)
+        raise
+    os.close(peer_descriptor)
+
+
+def authenticate_direct_wrapper(
+    reporter: DirectReporter, acknowledgement_descriptor: int
+) -> ProcessIdentity:
+    configure_direct_subreaper()
+    identity_deadline = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS / 2
+    identity = await_direct_process_identity(os.getpid(), identity_deadline)
+    report_direct_event(
+        reporter,
+        {"event": "wrapper", "identity": identity_payload(identity)},
+    )
+    ready, _, _ = select.select(
+        [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
+    )
+    if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
+        raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
+    os.close(acknowledgement_descriptor)
+    return identity
+
+
+def direct_child(
+    event_descriptor: int,
+    key_descriptor: int,
+    acknowledgement_descriptor: int,
+    wrapper_socket_path: str,
+    parent_target_socket_path: str,
+    wrapper_target_socket_path: str,
+    command: list[str],
+) -> int:
+    key = b""
+    reporter: DirectReporter | None = None
+    wrapper_peer = -1
+    try:
+        wrapper_peer = connect_direct_peer(Path(wrapper_socket_path))
+        key = read_direct_key(key_descriptor)
+        reporter = DirectReporter(event_descriptor, key)
+        os.close(key_descriptor)
+        identity = authenticate_direct_wrapper(reporter, acknowledgement_descriptor)
+        marker = direct_job_marker(key) if LIBPROC is not None else None
+        process, target_identity, target_peer_descriptor = spawn_gated_direct_target(
+            command,
+            identity,
+            reporter,
+            parent_target_socket_path,
+            wrapper_target_socket_path,
+            marker,
+        )
+        run_gated_direct_target(
+            process,
+            identity,
+            reporter,
+            target_identity,
+            marker,
+            target_peer_descriptor,
+        )
     except (OSError, SimulatorLifecycleError) as error:
         if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
             try:
@@ -1441,8 +1628,20 @@ def direct_child(
             signal.pause()
 
 
-def direct_target(gate_descriptor: int, command: list[str]) -> int:
+def direct_target(
+    gate_descriptor: int,
+    parent_socket_path: str,
+    wrapper_socket_path: str,
+    command: list[str],
+) -> int:
+    peers: list[int] = []
     try:
+        peers = [
+            connect_direct_peer(Path(parent_socket_path)),
+            connect_direct_peer(Path(wrapper_socket_path)),
+        ]
+        for descriptor in peers:
+            os.set_inheritable(descriptor, True)
         ready, _, _ = select.select(
             [gate_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
         )
@@ -1452,6 +1651,8 @@ def direct_target(gate_descriptor: int, command: list[str]) -> int:
         trace_direct_target_execs()
         os.execvp(command[0], command)
     except (OSError, SimulatorLifecycleError) as error:
+        for descriptor in peers:
+            os.close(descriptor)
         print(error, file=sys.stderr)
         return PRETEST_INFRASTRUCTURE_FAILURE
 
@@ -1504,6 +1705,50 @@ def acquire_direct_pipe(resources: DirectSpawnResources) -> tuple[int, int]:
     descriptors = os.pipe()
     resources.descriptors.update(descriptors)
     return descriptors
+
+
+def open_direct_listener(path: Path) -> socket.socket:
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(path))
+        listener.listen(1)
+        listener.setblocking(False)
+        return listener
+    except Exception:
+        listener.close()
+        raise
+
+
+def acquire_direct_listener(resources: DirectSpawnResources, path: Path) -> int:
+    listener = open_direct_listener(path)
+    descriptor = listener.detach()
+    resources.descriptors.add(descriptor)
+    return descriptor
+
+
+def connect_direct_peer(path: Path) -> int:
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        peer.connect(str(path))
+        return peer.detach()
+    except Exception:
+        peer.close()
+        raise
+
+
+def accept_direct_peer(listener_descriptor: int, deadline: float) -> int:
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select(
+            [listener_descriptor], [], [], bounded_wait(deadline, DESCENDANT_POLL_SECONDS)
+        )
+        if ready:
+            listener = socket.socket(fileno=listener_descriptor)
+            try:
+                peer, _ = listener.accept()
+                return peer.detach()
+            finally:
+                listener.detach()
+    raise SimulatorLifecycleError("direct peer identity unavailable")
 
 
 def cleanup_direct_spawn(
@@ -1572,6 +1817,9 @@ def direct_child_arguments(
     event_descriptor: int,
     key_descriptor: int,
     acknowledgement_descriptor: int,
+    wrapper_socket_path: Path,
+    parent_target_socket_path: Path,
+    wrapper_target_socket_path: Path,
 ) -> list[str]:
     return [
         sys.executable,
@@ -1580,6 +1828,9 @@ def direct_child_arguments(
         str(event_descriptor),
         str(key_descriptor),
         str(acknowledgement_descriptor),
+        str(wrapper_socket_path),
+        str(parent_target_socket_path),
+        str(wrapper_target_socket_path),
         "--",
         *command,
     ]
@@ -1589,7 +1840,7 @@ def start_direct_wrapper(
     resources: DirectSpawnResources,
     root: Path,
     arguments: list[str],
-    inherited_descriptors: tuple[int, int, int],
+    inherited_descriptors: tuple[int, ...],
 ) -> tuple[subprocess.Popen[bytes], Path, Path]:
     stdout_path, stderr_path = root / "stdout.log", root / "stderr.log"
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
@@ -1604,6 +1855,88 @@ def start_direct_wrapper(
     return wrapper, stdout_path, stderr_path
 
 
+def acquire_direct_peer_endpoints(
+    resources: DirectSpawnResources, root: Path
+) -> DirectPeerEndpoints:
+    wrapper_path = root / "w.sock"
+    parent_target_path = root / "tp.sock"
+    wrapper_target_path = root / "tw.sock"
+    return DirectPeerEndpoints(
+        wrapper_path,
+        parent_target_path,
+        wrapper_target_path,
+        acquire_direct_listener(resources, wrapper_path),
+        acquire_direct_listener(resources, parent_target_path),
+    )
+
+
+def adopt_direct_channel(
+    resources: DirectSpawnResources,
+    event_descriptor: int,
+    key: bytes,
+    endpoints: DirectPeerEndpoints,
+) -> DirectChannel:
+    os.set_blocking(event_descriptor, False)
+    channel = DirectChannel(
+        event_descriptor,
+        key,
+        target_exec_required=LIBPROC is not None,
+        wrapper_listener=endpoints.wrapper_listener,
+        target_listener=endpoints.target_listener,
+        wrapper_socket_path=endpoints.wrapper_path,
+        target_socket_path=endpoints.parent_target_path,
+        peer_identity_required=LIBPROC is not None,
+    )
+    owned = (
+        event_descriptor,
+        endpoints.wrapper_listener,
+        endpoints.target_listener,
+    )
+    for descriptor in owned:
+        resources.descriptors.remove(descriptor)
+    return channel
+
+
+def prepare_direct_job(
+    resources: DirectSpawnResources, command: list[str]
+) -> PendingDirectJob:
+    resources.root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-lifecycle-"))
+    root = resources.root
+    event_read, event_write = acquire_direct_pipe(resources)
+    key_read, key_write = acquire_direct_pipe(resources)
+    acknowledgement_read, acknowledgement_write = acquire_direct_pipe(resources)
+    endpoints = acquire_direct_peer_endpoints(resources, root)
+    key = secrets.token_bytes(DIRECT_CHANNEL_KEY_BYTES)
+    arguments = direct_child_arguments(
+        command,
+        event_write,
+        key_read,
+        acknowledgement_read,
+        endpoints.wrapper_path,
+        endpoints.parent_target_path,
+        endpoints.wrapper_target_path,
+    )
+    process, stdout_path, stderr_path = start_direct_wrapper(
+        resources,
+        root,
+        arguments,
+        (event_write, key_read, acknowledgement_read),
+    )
+    for descriptor in (event_write, key_read, acknowledgement_read):
+        close_direct_descriptor(resources.descriptors, descriptor)
+    os.write(key_write, key)
+    close_direct_descriptor(resources.descriptors, key_write)
+    channel = adopt_direct_channel(resources, event_read, key, endpoints)
+    return PendingDirectJob(
+        root,
+        stdout_path,
+        stderr_path,
+        process,
+        channel,
+        acknowledgement_write,
+    )
+
+
 def spawn_direct_job(
     command: list[str],
     deadline: float | None,
@@ -1612,47 +1945,37 @@ def spawn_direct_job(
     authenticated: Callable[[], None] | None = None,
 ) -> DirectJob:
     resources = DirectSpawnResources()
+    channel: DirectChannel | None = None
     try:
-        resources.root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-lifecycle-"))
-        root = resources.root
-        event_read, event_write = acquire_direct_pipe(resources)
-        key_read, key_write = acquire_direct_pipe(resources)
-        acknowledgement_read, acknowledgement_write = acquire_direct_pipe(resources)
-        key = secrets.token_bytes(DIRECT_CHANNEL_KEY_BYTES)
-        marker = direct_job_marker(key) if LIBPROC is not None else None
-        arguments = direct_child_arguments(
-            command, event_write, key_read, acknowledgement_read
+        pending = prepare_direct_job(resources, command)
+        channel = pending.channel
+        marker = direct_job_marker(channel.key) if LIBPROC is not None else None
+        identity = await_direct_identity(
+            channel, pending.process, deadline, cleanup_reserve
         )
-        process, stdout_path, stderr_path = start_direct_wrapper(
-            resources,
-            root,
-            arguments,
-            (event_write, key_read, acknowledgement_read),
-        )
-        for descriptor in (event_write, key_read, acknowledgement_read):
-            close_direct_descriptor(resources.descriptors, descriptor)
-        os.write(key_write, key)
-        close_direct_descriptor(resources.descriptors, key_write)
-        os.set_blocking(event_read, False)
-        channel = DirectChannel(event_read, key, target_exec_required=LIBPROC is not None)
-        identity = await_direct_identity(channel, process, deadline, cleanup_reserve)
         if authenticated is not None:
             authenticated()
-        os.write(acknowledgement_write, b"1")
-        close_direct_descriptor(resources.descriptors, acknowledgement_write)
-        resources.descriptors.remove(event_read)
+        os.write(pending.acknowledgement_write, b"1")
+        close_direct_descriptor(
+            resources.descriptors, pending.acknowledgement_write
+        )
         wrapper_reap_seconds = min(wrapper_reap_seconds, cleanup_reserve)
         return DirectJob(
-            root,
-            stdout_path,
-            stderr_path,
-            process,
+            pending.root,
+            pending.stdout_path,
+            pending.stderr_path,
+            pending.process,
             identity,
             channel,
-            wrapper_reap_seconds, marker,
+            wrapper_reap_seconds,
+            marker,
         )
     except Exception as error:
-        append_direct_spawn_cleanup(error, cleanup_direct_spawn(resources, deadline))
+        errors: list[str] = []
+        if channel is not None:
+            record_cleanup_failure(errors, "channel close failed", lambda: close_direct_channel(channel))
+        errors.extend(cleanup_direct_spawn(resources, deadline))
+        append_direct_spawn_cleanup(error, errors)
         raise
 
 
@@ -1974,7 +2297,10 @@ def direct_identity_in(
 
 
 def apply_direct_target_payload(
-    channel: DirectChannel, payload: dict[str, object], event: str
+    channel: DirectChannel,
+    payload: dict[str, object],
+    event: str,
+    deadline: float | None,
 ) -> None:
     identity = direct_payload_identity(payload, event)
     if event == "target":
@@ -1987,19 +2313,38 @@ def apply_direct_target_payload(
             raise SimulatorLifecycleError("invalid direct target identity")
         if channel.target_exec_required and target_version is None:
             raise SimulatorLifecycleError("invalid direct target identity")
+        if channel.peer_identity_required:
+            channel.target_peer = bind_direct_peer_identity(
+                channel.target_listener,
+                channel.target_socket_path,
+                identity,
+                deadline,
+            )
+            channel.target_listener = -1
         channel.target_exec_required = target_version is not None
     else:
         previous = channel.target
         if previous is None or channel.failure or channel.returncode is not None:
             raise SimulatorLifecycleError("out-of-order direct target exec identity")
         validate_direct_target_transition(previous, identity)
+        if channel.peer_identity_required:
+            current = bounded_peer_process_identity(
+                channel.target_peer,
+                identity.pid,
+                direct_message_deadline(deadline),
+                "direct target identity",
+            )
+            if current != identity:
+                raise SimulatorLifecycleError("forged direct target exec identity")
         channel.target_exec_observed = True
         channel.target_identities.add(previous)
     channel.target = identity
     channel.target_identities.add(identity)
 
 
-def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> None:
+def apply_direct_payload(
+    channel: DirectChannel, payload: dict[str, object], deadline: float | None = None
+) -> None:
     event = payload.get("event")
     if event == "wrapper":
         identity = direct_payload_identity(payload, event)
@@ -2007,7 +2352,7 @@ def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> 
             raise SimulatorLifecycleError("duplicate direct wrapper identity")
         channel.wrapper = identity
     elif event in ("target", "target-exec"):
-        apply_direct_target_payload(channel, payload, event)
+        apply_direct_target_payload(channel, payload, event, deadline)
     elif event == "descendant":
         if channel.target is None or channel.failure:
             raise SimulatorLifecycleError("out-of-order direct descendant identity")
@@ -2039,7 +2384,9 @@ def apply_direct_payload(channel: DirectChannel, payload: dict[str, object]) -> 
         raise SimulatorLifecycleError("invalid direct channel event")
 
 
-def apply_direct_message(channel: DirectChannel, content: bytes) -> None:
+def apply_direct_message(
+    channel: DirectChannel, content: bytes, deadline: float | None = None
+) -> None:
     try:
         message = json.loads(content)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -2056,16 +2403,37 @@ def apply_direct_message(channel: DirectChannel, content: bytes) -> None:
     ).hexdigest()
     if not hmac.compare_digest(received, expected):
         raise SimulatorLifecycleError("unauthenticated direct channel message")
-    apply_direct_payload(channel, payload)
+    apply_direct_payload(channel, payload, deadline)
     channel.sequence = sequence
 
 
 def close_direct_channel(channel: DirectChannel) -> None:
-    descriptor = channel.descriptor
+    descriptors = (
+        channel.descriptor,
+        channel.wrapper_listener,
+        channel.wrapper_peer,
+        channel.target_listener,
+        channel.target_peer,
+    )
     channel.descriptor = -1
+    channel.wrapper_listener = -1
+    channel.wrapper_peer = -1
+    channel.target_listener = -1
+    channel.target_peer = -1
     channel.closed = True
-    if descriptor >= 0:
-        os.close(descriptor)
+    first_error: OSError | None = None
+    for descriptor in descriptors:
+        if descriptor < 0:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if first_error is None:
+                first_error = error
+            else:
+                first_error.add_note(str(error))
+    if first_error is not None:
+        raise first_error
 
 
 def pump_direct_channel(channel: DirectChannel, deadline: float | None) -> None:
@@ -2082,7 +2450,7 @@ def pump_direct_channel(channel: DirectChannel, deadline: float | None) -> None:
                 content, channel.buffer = channel.buffer.split(b"\n", 1)
                 if len(content) > DIRECT_CHANNEL_LIMIT_BYTES:
                     raise SimulatorLifecycleError("direct channel frame exceeds limit")
-                apply_direct_message(channel, content)
+                apply_direct_message(channel, content, deadline)
                 work += 1
             if work >= DIRECT_CHANNEL_WORK_PER_PUMP:
                 return
@@ -2113,6 +2481,51 @@ def bounded_process_identity(
     return deadline_call(
         lambda: direct_process_identity(pid), deadline, f"{label} deadline expired"
     )
+
+
+def bounded_peer_process_identity(
+    descriptor: int,
+    pid: int,
+    deadline: float | None,
+    label: str = "direct process identity",
+) -> ProcessIdentity | None:
+    return deadline_call(
+        lambda: stable_darwin_peer_identity(descriptor, pid),
+        deadline,
+        f"{label} deadline expired",
+    )
+
+
+def direct_message_deadline(deadline: float | None) -> float:
+    handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+    return min(handshake_by, deadline) if deadline is not None else handshake_by
+
+
+def bind_direct_peer_identity(
+    listener_descriptor: int,
+    socket_path: Path | None,
+    identity: ProcessIdentity,
+    deadline: float | None,
+) -> int:
+    if listener_descriptor < 0 or socket_path is None:
+        raise SimulatorLifecycleError("direct peer identity unavailable")
+    peer_deadline = direct_message_deadline(deadline)
+    peer_descriptor = accept_direct_peer(listener_descriptor, peer_deadline)
+    try:
+        current = bounded_peer_process_identity(
+            peer_descriptor, identity.pid, peer_deadline
+        )
+        if current is None or not same_direct_process(current, identity):
+            raise SimulatorLifecycleError("forged direct peer identity")
+        os.close(listener_descriptor)
+    except Exception as error:
+        cleanup_errors: list[str] = []
+        record_cleanup_failure(
+            cleanup_errors, "peer close failed", lambda: os.close(peer_descriptor)
+        )
+        append_cleanup_errors(error, "direct peer cleanup error", cleanup_errors)
+        raise
+    return peer_descriptor
 
 
 def bounded_direct_child_identity(
@@ -2164,7 +2577,19 @@ def await_direct_identity(
             raise SimulatorLifecycleError(f"direct wrapper failed: {channel.failure}")
         identity = channel.wrapper
         if identity is not None:
-            current = bounded_process_identity(process.pid, handshake_by)
+            if channel.peer_identity_required:
+                channel.wrapper_peer = bind_direct_peer_identity(
+                    channel.wrapper_listener,
+                    channel.wrapper_socket_path,
+                    identity,
+                    handshake_by,
+                )
+                channel.wrapper_listener = -1
+                current = bounded_peer_process_identity(
+                    channel.wrapper_peer, process.pid, handshake_by
+                )
+            else:
+                current = bounded_process_identity(process.pid, handshake_by)
             if (
                 identity.pid != process.pid
                 or current is None
@@ -2281,9 +2706,13 @@ def direct_descendants(job: DirectJob, deadline: float) -> set[ProcessIdentity]:
 
 
 def current_direct_identity(
-    identity: ProcessIdentity, deadline: float
+    identity: ProcessIdentity, deadline: float, peer_descriptor: int = -1
 ) -> ProcessIdentity | None:
-    current = bounded_process_identity(identity.pid, deadline)
+    current = (
+        bounded_peer_process_identity(peer_descriptor, identity.pid, deadline)
+        if LIBPROC is not None and peer_descriptor >= 0
+        else bounded_process_identity(identity.pid, deadline)
+    )
     if current is None or not same_direct_process(current, identity):
         return None
     return current
@@ -2769,7 +3198,10 @@ def wait_for_direct_status(
 
 
 def signal_direct_identity(
-    identity: ProcessIdentity, requested: signal.Signals, deadline: float
+    identity: ProcessIdentity,
+    requested: signal.Signals,
+    deadline: float,
+    peer_descriptor: int = -1,
 ) -> bool:
     if LIBPROC is None:
         return signal_linux_direct_identity(identity, requested, deadline)
@@ -2777,7 +3209,7 @@ def signal_direct_identity(
         identity.audit_token, requested
     ):
         return True
-    current = current_direct_identity(identity, deadline)
+    current = current_direct_identity(identity, deadline, peer_descriptor)
     if current is None:
         return False
     return (
@@ -2831,9 +3263,10 @@ def signal_direct_target(
     job: DirectJob, requested: signal.Signals, deadline: float
 ) -> None:
     target = job.channel.target
-    if target is None or signal_direct_identity(target, requested, deadline):
+    peer = job.channel.target_peer
+    if target is None or signal_direct_identity(target, requested, deadline, peer):
         return
-    if current_direct_identity(target, deadline) is not None:
+    if current_direct_identity(target, deadline, peer) is not None:
         raise SimulatorLifecycleError("identity-bound direct target signal failed")
 
 
@@ -2852,9 +3285,10 @@ def signal_direct_descendants(
 def force_direct_wrapper_exit(job: DirectJob, deadline: float) -> None:
     if job.process.poll() is not None:
         return
-    if signal_direct_identity(job.identity, signal.SIGKILL, deadline):
+    peer = job.channel.wrapper_peer
+    if signal_direct_identity(job.identity, signal.SIGKILL, deadline, peer):
         return
-    if current_direct_identity(job.identity, deadline) is not None:
+    if current_direct_identity(job.identity, deadline, peer) is not None:
         raise SimulatorLifecycleError("identity-bound direct wrapper signal failed")
 
 
@@ -2901,7 +3335,10 @@ def direct_cleanup_observation(
 
 def direct_target_is_live(job: DirectJob, deadline: float) -> bool:
     target = job.channel.target
-    return target is not None and current_direct_identity(target, deadline) is not None
+    return (
+        target is not None
+        and current_direct_identity(target, deadline, job.channel.target_peer) is not None
+    )
 
 
 def drain_direct_job(job: DirectJob, deadline: float, errors: list[str]) -> None:
@@ -3925,22 +4362,25 @@ def run_contained_child(arguments: list[str]) -> int:
 
 
 def run_direct_child(arguments: list[str]) -> int:
-    if len(arguments) < 6 or arguments[4] != "--":
+    if len(arguments) < 9 or arguments[7] != "--":
         print("invalid direct-child arguments", file=sys.stderr)
         return PRETEST_INFRASTRUCTURE_FAILURE
     return direct_child(
         int(arguments[1]),
         int(arguments[2]),
         int(arguments[3]),
-        arguments[5:],
+        arguments[4],
+        arguments[5],
+        arguments[6],
+        arguments[8:],
     )
 
 
 def run_direct_target(arguments: list[str]) -> int:
-    if len(arguments) < 4 or arguments[2] != "--":
+    if len(arguments) < 6 or arguments[4] != "--":
         print("invalid direct-target arguments", file=sys.stderr)
         return PRETEST_INFRASTRUCTURE_FAILURE
-    return direct_target(int(arguments[1]), arguments[3:])
+    return direct_target(int(arguments[1]), arguments[2], arguments[3], arguments[5:])
 
 
 def run_evidence_writer(arguments: list[str]) -> int:

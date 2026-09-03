@@ -7,7 +7,9 @@ import hashlib
 import io
 import json
 import re
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -17,6 +19,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import capture_completed_native_log as capture
 
+REAL_SUBPROCESS_RUN = subprocess.run
 TOKEN = "fake-secret-never-retained"
 BASE = "https://api.github.com/repos/example/apple"
 SIGNED = "https://production.blob.core.windows.net/logs/job?signature=fake"
@@ -460,6 +463,37 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
             capture.capture(client, self.context, self.names, self.root / "alarm")
         self.assertEqual(capture.signal.getsignal(capture.signal.SIGALRM), prior)
         self.assertEqual(capture.signal.getitimer(capture.signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_repeated_expired_deadline_survives_alarm_teardown(self):
+        source = textwrap.dedent(
+            f"""
+            import sys
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+
+            class Client:
+                deadline = 0
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+
+            for _ in range(100):
+                try:
+                    with capture.capture_deadline(Client()):
+                        raise AssertionError("expired deadline entered")
+                except capture.CaptureError:
+                    pass
+            assert capture.signal.getsignal(capture.signal.SIGALRM) == capture.signal.SIG_DFL
+            assert capture.signal.getitimer(capture.signal.ITIMER_REAL) == (0.0, 0.0)
+            print("survived")
+            """
+        )
+        result = REAL_SUBPROCESS_RUN(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "survived\n")
 
     def test_main_errors_never_print_secret_or_signed_url(self):
         client, _ = self.client([OSError(TOKEN + " " + SIGNED)])

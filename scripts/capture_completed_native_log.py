@@ -24,6 +24,7 @@ MAX_JSON_BYTES = 16 * 1024**2
 MAX_LOG_BYTES = 512 * 1024**2
 MAX_JOBS = 1000
 CHUNK_BYTES = 64 * 1024
+ALARM_DRAIN_SECONDS = 0.01
 
 
 class CaptureError(RuntimeError):
@@ -220,21 +221,60 @@ def redirect_url(value: str) -> str:
     return value
 
 
+def restore_capture_alarm(previous, previous_mask: set[signal.Signals]) -> None:
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    try:
+        signal.signal(signal.SIGALRM, signal.SIG_IGN)
+        remaining, _ = signal.setitimer(signal.ITIMER_REAL, 0)
+        if remaining == 0.0:
+            time.sleep(ALARM_DRAIN_SECONDS)
+        signal.signal(signal.SIGALRM, previous)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
 @contextlib.contextmanager
 def capture_deadline(client: CaptureHTTP):
-    require(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "existing process deadline")
-    previous = signal.getsignal(signal.SIGALRM)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    previous = None
+    failure: BaseException | None = None
     def expired(signum, frame):
         raise CaptureError("capture deadline expired")
-    signal.signal(signal.SIGALRM, expired)
     try:
-        signal.setitimer(signal.ITIMER_REAL, max(0.000001, client.deadline - time.monotonic()))
+        require(signal.SIGALRM not in previous_mask
+                and signal.SIGALRM not in signal.sigpending()
+                and signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0),
+                "existing process deadline")
+        previous = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, expired)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        remaining = client.deadline - time.monotonic()
+        require(remaining > 0, "capture deadline expired")
+        signal.setitimer(signal.ITIMER_REAL, remaining)
         client.check()
         yield
         client.check()
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        try:
+            if previous is None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            else:
+                alarm_failure = None
+                for _ in range(2):
+                    try:
+                        restore_capture_alarm(previous, previous_mask)
+                        break
+                    except CaptureError as error:
+                        alarm_failure = error
+                if alarm_failure is not None:
+                    raise alarm_failure
+        except BaseException as error:
+            if failure is None:
+                raise
+            failure.add_note(f"capture alarm cleanup failed: {error}")
 
 
 def attempt_jobs(client: CaptureHTTP, base: str, run_id: int) -> list[dict]:
