@@ -64,7 +64,7 @@ def launchd_job(
     )
 
 
-def direct_job(root: Path) -> run_xcode_tests.DirectJob:
+def direct_job(root: Path, marker: str | None = None) -> run_xcode_tests.DirectJob:
     process = mock.Mock(spec=subprocess.Popen)
     process.poll.return_value = None
     return run_xcode_tests.DirectJob(
@@ -74,6 +74,7 @@ def direct_job(root: Path) -> run_xcode_tests.DirectJob:
         process,
         run_xcode_tests.ProcessIdentity(123, (456, 789)),
         run_xcode_tests.DirectChannel(-1, b"test-key"),
+        marker=marker,
     )
 
 
@@ -859,6 +860,84 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(trace, ["target-exec", "continue", "poll", "status"])
         resume.assert_called_once_with(process.pid, 0)
 
+    def test_darwin_monitor_reports_marked_descendant_before_status(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        target = darwin_direct_identity(900, 10, 7100840)
+        descendant = darwin_direct_identity(901, 11, 7100841)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        trace: list[str] = []
+        process.poll.side_effect = lambda: trace.append("poll") or 0
+
+        def record_event(
+            _reporter: run_xcode_tests.DirectReporter, payload: dict[str, object]
+        ) -> None:
+            trace.append(str(payload["event"]))
+
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "observe_darwin_target_state",
+            return_value=(target, True, True),
+        ), mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", side_effect=set
+        ), mock.patch.object(
+            run_xcode_tests,
+            "inspect_marked_darwin_processes",
+            return_value={descendant},
+        ) as inspect, mock.patch.object(
+            run_xcode_tests, "report_direct_event", side_effect=record_event
+        ), mock.patch.object(
+            run_xcode_tests, "reap_direct_orphans"
+        ), mock.patch.object(
+            run_xcode_tests.time, "sleep", side_effect=RuntimeError("stop monitor")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop monitor"):
+                run_xcode_tests.monitor_direct_command(
+                    process, wrapper, reporter, target, "marker"
+                )
+        self.assertEqual(trace, ["descendant", "poll", "status"])
+        self.assertGreater(inspect.call_args.args[1], 0)
+
+    def test_darwin_monitor_reports_partial_marker_census_before_timeout(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        target = darwin_direct_identity(900, 10, 7100840)
+        descendant = darwin_direct_identity(901, 11, 7100841)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        trace: list[str] = []
+
+        def partial_census(
+            _marker: str,
+            _deadline: float,
+            observed: set[run_xcode_tests.ProcessIdentity],
+        ) -> set[run_xcode_tests.ProcessIdentity]:
+            observed.add(descendant)
+            raise run_xcode_tests.OperationDeadlineExpired("marker census expired")
+
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "observe_darwin_target_state",
+            return_value=(target, True, True),
+        ), mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", side_effect=set
+        ), mock.patch.object(
+            run_xcode_tests, "inspect_marked_darwin_processes", side_effect=partial_census
+        ), mock.patch.object(
+            run_xcode_tests,
+            "report_direct_event",
+            side_effect=lambda _reporter, payload: trace.append(str(payload["event"])),
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.OperationDeadlineExpired, "marker census expired"
+            ):
+                run_xcode_tests.monitor_direct_command(
+                    process, wrapper, reporter, target, "marker"
+                )
+        self.assertEqual(trace, ["descendant"])
+        process.poll.assert_not_called()
+
     def test_darwin_monitor_rejects_exited_target_when_identity_disappears(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
         pre_exec = darwin_direct_identity(900, 10, 7100837)
@@ -1367,6 +1446,189 @@ class XcodeTestRunnerTests(unittest.TestCase):
             self.assertTrue(entered.is_set())
         finally:
             release.set()
+
+    def test_direct_darwin_marker_census_has_hard_deadline(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def stalled_census(*_args: object) -> list[int]:
+            entered.set()
+            release.wait(1)
+            return []
+
+        deadline = time.monotonic() + 0.02
+        try:
+            with mock.patch.object(
+                run_xcode_tests, "all_process_ids", side_effect=stalled_census
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.OperationDeadlineExpired,
+                    "direct Darwin marker census deadline expired",
+                ):
+                    run_xcode_tests.inspect_marked_darwin_processes("marker", deadline)
+            self.assertTrue(entered.is_set())
+        finally:
+            release.set()
+
+    def test_darwin_marker_census_retains_hit_before_later_stall(self) -> None:
+        descendant = darwin_direct_identity(901, 11, 7100841)
+        observed: set[run_xcode_tests.ProcessIdentity] = set()
+        entered = threading.Event()
+        release = threading.Event()
+
+        def inspect(pid: int, _marker: bytes) -> run_xcode_tests.ProcessIdentity | None:
+            if pid == descendant.pid:
+                return descendant
+            entered.set()
+            release.wait(1)
+            return None
+
+        deadline = time.monotonic() + 0.02
+        try:
+            with mock.patch.object(
+                run_xcode_tests, "all_process_ids", return_value=[descendant.pid, 902]
+            ), mock.patch.object(
+                run_xcode_tests, "marked_darwin_process_identity", side_effect=inspect
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.OperationDeadlineExpired,
+                    "direct Darwin marker census deadline expired",
+                ):
+                    run_xcode_tests.inspect_marked_darwin_processes(
+                        "marker", deadline, observed
+                    )
+            self.assertTrue(entered.is_set())
+            self.assertEqual(observed, {descendant})
+        finally:
+            release.set()
+
+    def test_partial_marker_cleanup_census_retains_and_signals_hit(self) -> None:
+        job = direct_job(Path("/tmp/partial-marker-cleanup"), "marker")
+        descendant = darwin_direct_identity(901, 11, 7100841)
+        errors: list[str] = []
+        clock = [0.0]
+
+        def partial_census(
+            marker: str,
+            deadline: float,
+            observed: set[run_xcode_tests.ProcessIdentity],
+        ) -> set[run_xcode_tests.ProcessIdentity]:
+            self.assertEqual((marker, deadline), ("marker", 1.0))
+            observed.add(descendant)
+            raise run_xcode_tests.OperationDeadlineExpired("marker census expired")
+
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "bounded_direct_children", return_value=set()
+        ), mock.patch.object(
+            run_xcode_tests, "inspect_marked_darwin_processes", side_effect=partial_census
+        ), mock.patch.object(
+            run_xcode_tests, "signal_direct_identity", return_value=True
+        ) as send, mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(
+            run_xcode_tests.time,
+            "sleep",
+            side_effect=lambda _duration: clock.__setitem__(0, 1.0),
+        ):
+            run_xcode_tests.drain_direct_job(job, 1.0, errors)
+        self.assertIn(descendant, job.channel.descendants)
+        send.assert_called_once_with(descendant, signal.SIGKILL, 1.0)
+        self.assertEqual(
+            errors, ["marker census expired", "direct process cleanup incomplete"]
+        )
+
+    def test_darwin_environment_marker_requires_exact_entry(self) -> None:
+        integer_size = ctypes.sizeof(ctypes.c_int)
+        arguments = (
+            (2).to_bytes(integer_size, sys.byteorder, signed=True)
+            + b"/bin/tool\0\0tool\0argument\0A=1\0"
+            + b"POMODOROUGH_DIRECT_JOB=marker\0"
+            + b"LOOK=POMODOROUGH_DIRECT_JOB=marker\0\0"
+        )
+        entries = run_xcode_tests.darwin_environment_entries(arguments)
+        self.assertEqual(
+            entries,
+            {
+                b"A=1",
+                b"POMODOROUGH_DIRECT_JOB=marker",
+                b"LOOK=POMODOROUGH_DIRECT_JOB=marker",
+            },
+        )
+        self.assertNotIn(b"POMODOROUGH_DIRECT_JOB=missing", entries or set())
+
+    def test_darwin_marker_requires_stable_process_identity(self) -> None:
+        identity = darwin_direct_identity(900, 10, 7100840)
+        marker = b"POMODOROUGH_DIRECT_JOB=marker"
+        arguments = (
+            (1).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder, signed=True)
+            + b"/bin/tool\0\0tool\0"
+            + marker
+            + b"\0\0"
+        )
+        with mock.patch.object(
+            run_xcode_tests, "direct_process_identity", side_effect=[identity, identity]
+        ), mock.patch.object(
+            run_xcode_tests, "darwin_process_arguments", return_value=arguments
+        ):
+            observed = run_xcode_tests.marked_darwin_process_identity(900, marker)
+        self.assertEqual(observed, identity)
+
+    def test_darwin_marker_accepts_same_process_after_exec(self) -> None:
+        before_exec = darwin_direct_identity(900, 10, 7100837)
+        after_exec = darwin_direct_identity(900, 10, 7100840)
+        marker = b"POMODOROUGH_DIRECT_JOB=marker"
+        arguments = (
+            (1).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder, signed=True)
+            + b"/bin/tool\0\0tool\0"
+            + marker
+            + b"\0\0"
+        )
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[before_exec, after_exec],
+        ), mock.patch.object(
+            run_xcode_tests, "darwin_process_arguments", return_value=arguments
+        ):
+            observed = run_xcode_tests.marked_darwin_process_identity(900, marker)
+        self.assertEqual(observed, after_exec)
+
+    def test_darwin_marker_rejects_process_identity_churn(self) -> None:
+        original = darwin_direct_identity(900, 10, 7100840)
+        replacement = darwin_direct_identity(900, 11, 7100841)
+        marker = b"POMODOROUGH_DIRECT_JOB=marker"
+        arguments = (
+            (1).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder, signed=True)
+            + b"/bin/tool\0\0tool\0"
+            + marker
+            + b"\0\0"
+        )
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[original, replacement],
+        ), mock.patch.object(
+            run_xcode_tests, "darwin_process_arguments", return_value=arguments
+        ):
+            observed = run_xcode_tests.marked_darwin_process_identity(900, marker)
+        self.assertIsNone(observed)
+
+    def test_darwin_marker_rejects_environment_value_lookalike(self) -> None:
+        identity = darwin_direct_identity(900, 10, 7100840)
+        marker = b"POMODOROUGH_DIRECT_JOB=marker"
+        arguments = (
+            (1).to_bytes(ctypes.sizeof(ctypes.c_int), sys.byteorder, signed=True)
+            + b"/bin/tool\0\0tool\0"
+            + b"LOOK=POMODOROUGH_DIRECT_JOB=marker\0\0"
+        )
+        with mock.patch.object(
+            run_xcode_tests, "direct_process_identity", return_value=identity
+        ) as inspect, mock.patch.object(
+            run_xcode_tests, "darwin_process_arguments", return_value=arguments
+        ):
+            observed = run_xcode_tests.marked_darwin_process_identity(900, marker)
+        self.assertIsNone(observed)
+        inspect.assert_called_once_with(900)
 
     def test_direct_darwin_identity_lookup_has_hard_deadline(self) -> None:
         entered = threading.Event()
@@ -2168,12 +2430,12 @@ class XcodeTestRunnerTests(unittest.TestCase):
             result = run_xcode_tests.launchctl_run([], time.monotonic() + 1, 0.2)
         self.assertEqual(result.returncode, 0)
 
-    def test_launchctl_command_budget_starts_after_authentication(self) -> None:
+    def test_launchctl_accepts_slow_authentication_before_command_budget(self) -> None:
         job = direct_job(Path("/tmp/ap12-launchctl-authentication"))
         clock = [10.0]
 
         def spawn(*_arguments: object, **options: object) -> run_xcode_tests.DirectJob:
-            clock[0] = 10.75
+            clock[0] = 12.25
             callback = options["authenticated"]
             assert callable(callback)
             callback()
@@ -2187,8 +2449,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "complete_direct_job", return_value=completion
         ) as complete:
-            run_xcode_tests.launchctl_run([], 12.0, 1.0, 14.0)
-        complete.assert_called_once_with(job, 1.0, 13.75, 2.0)
+            run_xcode_tests.launchctl_run([], 15.0, 1.0, 17.0)
+        complete.assert_called_once_with(job, 1.0, 15.25, 2.0)
 
     def test_launchctl_fails_closed_on_direct_identity_setup_error(self) -> None:
         failure = run_xcode_tests.SimulatorLifecycleError(

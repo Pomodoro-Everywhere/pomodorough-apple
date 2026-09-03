@@ -76,10 +76,15 @@ EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
 LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 2.0
-LAUNCHCTL_AUTHENTICATION_SECONDS = 1.0
+LAUNCHCTL_AUTHENTICATION_SECONDS = CONTAINMENT_HANDSHAKE_SECONDS
 LAUNCHCTL_RETRY_SECONDS = 1.0
 LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
 PROCESS_PATH_BUFFER_BYTES = 4096
+PROCESS_ARGUMENTS_LIMIT_BYTES = 2 * 1024 * 1024
+DIRECT_MARKER_CENSUS_SECONDS = 0.5
+DIRECT_JOB_ENVIRONMENT = "POMODOROUGH_DIRECT_JOB"
+CTL_KERN = 1
+KERN_PROCARGS2 = 49
 PROC_PIDTBSDINFO = 3
 PROC_PIDUNIQIDENTIFIERINFO = 17
 PROC_PIDCOALITIONINFO = 20
@@ -166,6 +171,15 @@ if LIBPROC is not None:
     LIBPROC.proc_listchildpids.restype = ctypes.c_int
     LIBPROC.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     LIBPROC.proc_pidpath.restype = ctypes.c_int
+    LIBSYSTEM.sysctl.argtypes = [
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    LIBSYSTEM.sysctl.restype = ctypes.c_int
 
 if LIBSANDBOX is not None:
     LIBSANDBOX.sandbox_init.argtypes = [
@@ -263,6 +277,7 @@ class DirectJob:
     identity: ProcessIdentity
     channel: DirectChannel
     wrapper_reap_seconds: float = DIRECT_WRAPPER_REAP_SECONDS
+    marker: str | None = None
 
 
 @dataclass(frozen=True)
@@ -416,6 +431,91 @@ def darwin_process_path(pid: int) -> str:
     if size <= 0:
         return ""
     return buffer.value.decode("utf-8", errors="replace")
+
+
+def darwin_process_arguments(pid: int) -> bytes | None:
+    mib = (ctypes.c_int * 3)(CTL_KERN, KERN_PROCARGS2, pid)
+    size = ctypes.c_size_t()
+    if LIBSYSTEM.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        return None
+    if size.value <= ctypes.sizeof(ctypes.c_int) or size.value > PROCESS_ARGUMENTS_LIMIT_BYTES:
+        return None
+    buffer = ctypes.create_string_buffer(size.value)
+    if LIBSYSTEM.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
+        return None
+    return bytes(buffer.raw[: size.value])
+
+
+def darwin_environment_entries(arguments: bytes) -> set[bytes] | None:
+    integer_size = ctypes.sizeof(ctypes.c_int)
+    if len(arguments) <= integer_size:
+        return None
+    argument_count = int.from_bytes(arguments[:integer_size], sys.byteorder, signed=True)
+    if argument_count < 0:
+        return None
+    cursor = arguments.find(b"\0", integer_size)
+    if cursor < 0:
+        return None
+    cursor += 1
+    while cursor < len(arguments) and arguments[cursor] == 0:
+        cursor += 1
+    for _ in range(argument_count):
+        cursor = arguments.find(b"\0", cursor)
+        if cursor < 0:
+            return None
+        cursor += 1
+    entries: set[bytes] = set()
+    while cursor < len(arguments):
+        end = arguments.find(b"\0", cursor)
+        if end < 0:
+            return None
+        if end == cursor:
+            return entries
+        entries.add(arguments[cursor:end])
+        cursor = end + 1
+    return entries
+
+
+def marked_darwin_process_identity(
+    pid: int, marker_entry: bytes
+) -> ProcessIdentity | None:
+    first = direct_process_identity(pid)
+    arguments = darwin_process_arguments(pid) if first is not None else None
+    entries = darwin_environment_entries(arguments) if arguments is not None else None
+    if entries is None or marker_entry not in entries:
+        return None
+    second = direct_process_identity(pid)
+    return second if second is not None and same_direct_process(first, second) else None
+
+
+def collect_marked_darwin_processes(
+    marker: str,
+    deadline: float,
+    identities: set[ProcessIdentity] | None = None,
+) -> set[ProcessIdentity]:
+    timeout_message = "direct Darwin marker census deadline expired"
+    marker_entry = f"{DIRECT_JOB_ENVIRONMENT}={marker}".encode()
+    observed = identities if identities is not None else set()
+    for pid in all_process_ids(deadline, timeout_message):
+        require_census_budget(deadline, timeout_message)
+        identity = marked_darwin_process_identity(pid, marker_entry)
+        if identity is not None:
+            observed.add(identity)
+        require_census_budget(deadline, timeout_message)
+    return observed
+
+
+def inspect_marked_darwin_processes(
+    marker: str,
+    deadline: float,
+    identities: set[ProcessIdentity] | None = None,
+) -> set[ProcessIdentity]:
+    observed = identities if identities is not None else set()
+    return deadline_call(
+        lambda: collect_marked_darwin_processes(marker, deadline, observed),
+        deadline,
+        "direct Darwin marker census deadline expired",
+    )
 
 
 def darwin_process_snapshot(pid: int) -> dict[str, object] | None:
@@ -761,6 +861,10 @@ def direct_message_bytes(sequence: int, payload: dict[str, object]) -> bytes:
     ).encode("utf-8")
 
 
+def direct_job_marker(key: bytes) -> str:
+    return hmac.new(key, DIRECT_JOB_ENVIRONMENT.encode(), hashlib.sha256).hexdigest()
+
+
 def write_direct_message(
     descriptor: int, key: bytes, sequence: int, payload: dict[str, object]
 ) -> None:
@@ -898,7 +1002,10 @@ def reap_direct_orphans(target_pid: int) -> None:
 
 
 def spawn_gated_direct_target(
-    command: list[str], wrapper: ProcessIdentity, reporter: DirectReporter
+    command: list[str],
+    wrapper: ProcessIdentity,
+    reporter: DirectReporter,
+    marker: str | None = None,
 ) -> tuple[subprocess.Popen[bytes], ProcessIdentity]:
     gate_read, gate_write = os.pipe()
     arguments = [
@@ -909,8 +1016,17 @@ def spawn_gated_direct_target(
         "--",
         *command,
     ]
+    environment = None
+    if marker is not None:
+        environment = os.environ.copy()
+        environment[DIRECT_JOB_ENVIRONMENT] = marker
     try:
-        process = subprocess.Popen(arguments, pass_fds=(gate_read,), start_new_session=True)
+        process = subprocess.Popen(
+            arguments,
+            env=environment,
+            pass_fds=(gate_read,),
+            start_new_session=True,
+        )
         os.close(gate_read)
         gate_read = -1
         identity = direct_target_identity(process, wrapper)
@@ -1013,6 +1129,7 @@ def monitor_direct_command(
     wrapper: ProcessIdentity,
     reporter: DirectReporter,
     identity: ProcessIdentity,
+    marker: str | None = None,
 ) -> None:
     observed = {wrapper, identity}
     target_exec_observed = False
@@ -1026,13 +1143,9 @@ def monitor_direct_command(
             )
             if identity != previous:
                 observed.add(identity)
-        updated = observe_direct_descendants(observed)
-        for descendant in sorted(updated - observed, key=lambda item: item.pid):
-            report_direct_event(
-                reporter,
-                {"event": "descendant", "identity": identity_payload(descendant)},
-            )
-        observed = updated
+        observed = report_observed_direct_descendants(
+            observed, target_exited, marker, reporter
+        )
         if status_sent:
             returncode = None
         elif LIBPROC is None:
@@ -1051,6 +1164,41 @@ def monitor_direct_command(
         if status_sent:
             reap_direct_orphans(process.pid)
         time.sleep(DESCENDANT_POLL_SECONDS)
+
+
+def report_new_direct_descendants(
+    reporter: DirectReporter,
+    observed: set[ProcessIdentity],
+    updated: set[ProcessIdentity],
+) -> None:
+    for descendant in sorted(updated - observed, key=lambda item: item.pid):
+        report_direct_event(
+            reporter,
+            {"event": "descendant", "identity": identity_payload(descendant)},
+        )
+
+
+def report_observed_direct_descendants(
+    observed: set[ProcessIdentity],
+    target_exited: bool,
+    marker: str | None,
+    reporter: DirectReporter,
+) -> set[ProcessIdentity]:
+    updated = observe_direct_descendants(observed)
+    marked: set[ProcessIdentity] = set()
+    try:
+        if target_exited and marker is not None:
+            deadline = time.monotonic() + DIRECT_MARKER_CENSUS_SECONDS
+            updated |= inspect_marked_darwin_processes(marker, deadline, marked)
+    except Exception as error:
+        updated |= marked.copy()
+        try:
+            report_new_direct_descendants(reporter, observed, updated)
+        except Exception as report_error:
+            error.add_note(f"partial marker report failed: {report_error}")
+        raise
+    report_new_direct_descendants(reporter, observed, updated)
+    return updated
 
 
 def direct_child(
@@ -1078,12 +1226,15 @@ def direct_child(
         if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
             raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
         os.close(acknowledgement_descriptor)
-        process, target_identity = spawn_gated_direct_target(command, identity, reporter)
+        marker = direct_job_marker(key) if LIBPROC is not None else None
+        process, target_identity = spawn_gated_direct_target(
+            command, identity, reporter, marker
+        )
         for requested in (signal.SIGINT, signal.SIGTERM):
             signal.signal(requested, signal.SIG_IGN)
         if hasattr(signal, "SIGINFO"):
             signal.signal(signal.SIGINFO, signal.SIG_IGN)
-        monitor_direct_command(process, identity, reporter, target_identity)
+        monitor_direct_command(process, identity, reporter, target_identity, marker)
     except (OSError, SimulatorLifecycleError) as error:
         if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
             try:
@@ -1274,6 +1425,7 @@ def spawn_direct_job(
         key_read, key_write = acquire_direct_pipe(resources)
         acknowledgement_read, acknowledgement_write = acquire_direct_pipe(resources)
         key = secrets.token_bytes(DIRECT_CHANNEL_KEY_BYTES)
+        marker = direct_job_marker(key) if LIBPROC is not None else None
         arguments = direct_child_arguments(
             command, event_write, key_read, acknowledgement_read
         )
@@ -1303,7 +1455,7 @@ def spawn_direct_job(
             process,
             identity,
             channel,
-            wrapper_reap_seconds,
+            wrapper_reap_seconds, marker,
         )
     except Exception as error:
         append_direct_spawn_cleanup(error, cleanup_direct_spawn(resources, deadline))
@@ -1333,7 +1485,8 @@ def launchctl_deadlines(
             cleanup_by - LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
         )
     available = command_by - started_at
-    authentication = min(LAUNCHCTL_AUTHENTICATION_SECONDS, available / 2)
+    command_seconds = min(maximum, available / 2)
+    authentication = min(LAUNCHCTL_AUTHENTICATION_SECONDS, available - command_seconds)
     command_seconds = min(maximum, available - authentication)
     if authentication <= 0 or command_seconds <= 0:
         raise SimulatorLifecycleError("launchd containment deadline expired")
@@ -1891,6 +2044,12 @@ def direct_descendant_census(
             observed.add(identity)
             pending.append(identity)
     if LIBPROC is not None:
+        if job.marker is not None:
+            inspect_marked_darwin_processes(
+                job.marker, deadline, job.channel.descendants
+            )
+            observed.update(job.channel.descendants)
+            roots.update(observed)
         observed |= inspect_darwin_direct_descendants(roots, deadline)
     excluded = {direct_identity_key(job.identity)}
     if job.channel.target is not None:
@@ -2524,7 +2683,7 @@ def direct_cleanup_observation(
         return live, True
     except Exception as error:
         errors.append(str(error))
-        return set(), False
+        return job.channel.descendants.copy(), False
 
 
 def direct_target_is_live(job: DirectJob, deadline: float) -> bool:
