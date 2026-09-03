@@ -102,6 +102,9 @@ KERN_PROCARGS2 = 49
 PROC_PIDTBSDINFO = 3
 PROC_PIDUNIQIDENTIFIERINFO = 17
 PROC_PIDCOALITIONINFO = 20
+RUSAGE_INFO_V0 = 0
+TASK_AUDIT_TOKEN = 15
+TASK_AUDIT_TOKEN_COUNT = 8
 COALITION_TYPE_RESOURCE = 0
 PT_TRACE_ME = 0
 PT_CONTINUE = 7
@@ -135,6 +138,22 @@ class ProcBSDInfo(ctypes.Structure):
 
 class AuditToken(ctypes.Structure):
     _fields_ = [("values", ctypes.c_uint32 * 8)]
+
+
+class RusageInfoV0(ctypes.Structure):
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        ("ri_user_time", ctypes.c_uint64),
+        ("ri_system_time", ctypes.c_uint64),
+        ("ri_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_interrupt_wkups", ctypes.c_uint64),
+        ("ri_pageins", ctypes.c_uint64),
+        ("ri_wired_size", ctypes.c_uint64),
+        ("ri_resident_size", ctypes.c_uint64),
+        ("ri_phys_footprint", ctypes.c_uint64),
+        ("ri_proc_start_abstime", ctypes.c_uint64),
+        ("ri_proc_exit_abstime", ctypes.c_uint64),
+    ]
 
 
 class ProcUniqueIdentifierInfo(ctypes.Structure):
@@ -174,6 +193,12 @@ if LIBPROC is not None:
         ctypes.c_int,
     ]
     LIBPROC.proc_pidinfo.restype = ctypes.c_int
+    LIBPROC.proc_pid_rusage.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.POINTER(RusageInfoV0),
+    ]
+    LIBPROC.proc_pid_rusage.restype = ctypes.c_int
     LIBPROC.proc_signal_with_audittoken.argtypes = [
         ctypes.POINTER(AuditToken),
         ctypes.c_int,
@@ -185,6 +210,23 @@ if LIBPROC is not None:
     LIBPROC.proc_listchildpids.restype = ctypes.c_int
     LIBPROC.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     LIBPROC.proc_pidpath.restype = ctypes.c_int
+    LIBSYSTEM.mach_task_self.argtypes = []
+    LIBSYSTEM.mach_task_self.restype = ctypes.c_uint32
+    LIBSYSTEM.task_name_for_pid.argtypes = [
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    LIBSYSTEM.task_name_for_pid.restype = ctypes.c_int
+    LIBSYSTEM.task_info.argtypes = [
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    LIBSYSTEM.task_info.restype = ctypes.c_int
+    LIBSYSTEM.mach_port_deallocate.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    LIBSYSTEM.mach_port_deallocate.restype = ctypes.c_int
     LIBSYSTEM.sysctl.argtypes = [
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_uint,
@@ -254,6 +296,14 @@ class ProcessIdentity:
     pid: int
     started_at: tuple[int, int]
     audit_token: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
+class DarwinDirectAncestry:
+    identity: ProcessIdentity
+    unique_id: int
+    parent_unique_id: int
+    original_parent_version: int
 
 
 @dataclass
@@ -408,17 +458,87 @@ def unique_process_identity(pid: int, info: ProcUniqueIdentifierInfo) -> Process
     return ProcessIdentity(pid, (info.p_uniqueid, info.p_idversion), tuple(values))
 
 
-def stable_darwin_process_identity(pid: int) -> ProcessIdentity | None:
-    first = unique_identifier_info(pid)
-    second = unique_identifier_info(pid)
+def darwin_process_start_abstime(pid: int) -> int | None:
+    assert LIBPROC is not None
+    info = RusageInfoV0()
+    result = LIBPROC.proc_pid_rusage(pid, RUSAGE_INFO_V0, ctypes.byref(info))
+    if result != 0 or not info.ri_proc_start_abstime:
+        return None
+    return int(info.ri_proc_start_abstime)
+
+
+def darwin_task_audit_token(task: int, pid: int) -> tuple[int, ...] | None:
+    token = AuditToken()
+    count = ctypes.c_uint32(TASK_AUDIT_TOKEN_COUNT)
+    values = ctypes.cast(ctypes.byref(token), ctypes.POINTER(ctypes.c_int))
+    result = LIBSYSTEM.task_info(task, TASK_AUDIT_TOKEN, values, ctypes.byref(count))
+    token_values = tuple(token.values)
     if (
-        first is None
-        or second is None
-        or first.p_uniqueid != second.p_uniqueid
-        or first.p_idversion != second.p_idversion
+        result != 0
+        or count.value != TASK_AUDIT_TOKEN_COUNT
+        or token_values[5] != pid
+        or token_values[7] <= 0
     ):
         return None
-    return direct_identity(unique_process_identity(pid, first))
+    return token_values
+
+
+def darwin_process_audit_token(pid: int) -> tuple[int, ...] | None:
+    self_task = LIBSYSTEM.mach_task_self()
+    if pid == os.getpid():
+        return darwin_task_audit_token(self_task, pid)
+    task = ctypes.c_uint32()
+    if LIBSYSTEM.task_name_for_pid(self_task, pid, ctypes.byref(task)) != 0:
+        return None
+    if not task.value:
+        return None
+    try:
+        token = darwin_task_audit_token(task.value, pid)
+    finally:
+        released = LIBSYSTEM.mach_port_deallocate(self_task, task.value) == 0
+    return token if released else None
+
+
+def stable_darwin_process_identity(pid: int) -> ProcessIdentity | None:
+    first_token = darwin_process_audit_token(pid)
+    first_start = darwin_process_start_abstime(pid)
+    second_start = darwin_process_start_abstime(pid)
+    second_token = darwin_process_audit_token(pid)
+    if (
+        first_token is None
+        or first_start is None
+        or second_token is None
+        or first_start != second_start
+        or first_token != second_token
+    ):
+        return None
+    return ProcessIdentity(pid, (first_start, 0), first_token)
+
+
+def stable_darwin_direct_ancestry(pid: int) -> DarwinDirectAncestry | None:
+    first_info = unique_identifier_info(pid)
+    first = stable_darwin_process_identity(pid) if first_info is not None else None
+    second = stable_darwin_process_identity(pid) if first is not None else None
+    second_info = unique_identifier_info(pid) if second is not None else None
+    if (
+        first_info is None
+        or first is None
+        or first != second
+        or second_info is None
+        or first_info.p_uniqueid != second_info.p_uniqueid
+        or first_info.p_puniqueid != second_info.p_puniqueid
+        or first_info.p_idversion != second_info.p_idversion
+        or first_info.p_orig_ppidversion != second_info.p_orig_ppidversion
+        or direct_audit_pid_version(first) != first_info.p_idversion
+        or first_info.p_uniqueid <= 0
+    ):
+        return None
+    return DarwinDirectAncestry(
+        first,
+        first_info.p_uniqueid,
+        first_info.p_puniqueid,
+        first_info.p_orig_ppidversion,
+    )
 
 
 def stable_darwin_process_info(
@@ -960,6 +1080,8 @@ def await_direct_process_identity(pid: int, deadline: float) -> ProcessIdentity:
 def direct_child_identity(
     parent: ProcessIdentity, pid: int
 ) -> ProcessIdentity | None:
+    if LIBPROC is not None:
+        return darwin_direct_child_identity(parent, pid)
     first = direct_process_record(pid)
     if first is None or first[1] != parent.pid:
         return None
@@ -967,6 +1089,29 @@ def direct_child_identity(
     if second is None or second[1] != parent.pid:
         return None
     return second[0] if same_direct_process(first[0], second[0]) else None
+
+
+def darwin_direct_child_identity(
+    parent: ProcessIdentity, pid: int
+) -> ProcessIdentity | None:
+    current = direct_process_identity(parent.pid)
+    first = direct_process_identity(pid)
+    first_children = direct_child_process_ids(parent.pid)
+    second_children = direct_child_process_ids(parent.pid)
+    second = direct_process_identity(pid)
+    final_parent = direct_process_identity(parent.pid)
+    if (
+        current is None
+        or final_parent is None
+        or current != parent
+        or final_parent != parent
+        or pid not in first_children
+        or pid not in second_children
+        or first is None
+        or first != second
+    ):
+        return None
+    return second
 
 
 def observed_direct_children(parent: ProcessIdentity) -> set[ProcessIdentity]:
@@ -989,6 +1134,8 @@ def observed_direct_children(parent: ProcessIdentity) -> set[ProcessIdentity]:
 def direct_target_identity(
     process: subprocess.Popen[bytes], wrapper: ProcessIdentity
 ) -> ProcessIdentity:
+    if LIBPROC is not None:
+        return darwin_direct_target_identity(process, wrapper)
     current = direct_process_identity(wrapper.pid)
     if current is None or not same_direct_process(current, wrapper):
         raise SimulatorLifecycleError("direct wrapper identity changed")
@@ -1000,6 +1147,24 @@ def direct_target_identity(
     if current is None or not same_direct_process(current, wrapper):
         raise SimulatorLifecycleError("direct wrapper identity changed")
     return identity
+
+
+def darwin_direct_target_identity(
+    process: subprocess.Popen[bytes], wrapper: ProcessIdentity
+) -> ProcessIdentity:
+    current = direct_process_identity(wrapper.pid)
+    if current is None or current != wrapper:
+        raise SimulatorLifecycleError("direct wrapper identity changed")
+    if process.poll() is not None:
+        raise SimulatorLifecycleError("direct target ancestry unavailable")
+    first = direct_process_identity(process.pid)
+    second = direct_process_identity(process.pid)
+    if first is None or first != second or process.poll() is not None:
+        raise SimulatorLifecycleError("direct target ancestry unavailable")
+    current = direct_process_identity(wrapper.pid)
+    if current is None or current != wrapper:
+        raise SimulatorLifecycleError("direct wrapper identity changed")
+    return second
 
 
 def observe_direct_descendants(
@@ -2003,7 +2168,7 @@ def await_direct_identity(
             if (
                 identity.pid != process.pid
                 or current is None
-                or not same_direct_process(current, identity)
+                or current != identity
             ):
                 raise SimulatorLifecycleError("forged direct wrapper identity")
             return identity
@@ -2013,39 +2178,58 @@ def await_direct_identity(
     raise SimulatorLifecycleError("direct wrapper identity unavailable")
 
 
+def darwin_direct_ancestry_maps(
+    deadline: float, timeout_message: str
+) -> tuple[
+    dict[int, list[DarwinDirectAncestry]],
+    dict[int, list[DarwinDirectAncestry]],
+    dict[tuple[int, tuple[int, int]], int],
+]:
+    children_by_parent: dict[int, list[DarwinDirectAncestry]] = {}
+    children_by_original_parent: dict[int, list[DarwinDirectAncestry]] = {}
+    unique_ids: dict[tuple[int, tuple[int, int]], int] = {}
+    for pid in all_process_ids(deadline, timeout_message):
+        require_census_budget(deadline, timeout_message)
+        record = stable_darwin_direct_ancestry(pid)
+        require_census_budget(deadline, timeout_message)
+        if record is not None:
+            unique_ids[direct_identity_key(record.identity)] = record.unique_id
+            children_by_parent.setdefault(record.parent_unique_id, []).append(record)
+            if record.original_parent_version > 0:
+                children_by_original_parent.setdefault(
+                    record.original_parent_version, []
+                ).append(record)
+    return children_by_parent, children_by_original_parent, unique_ids
+
+
 def collect_darwin_direct_descendants(
     ancestors: set[ProcessIdentity], deadline: float
 ) -> set[ProcessIdentity]:
     timeout_message = "direct Darwin process census deadline expired"
-    children_by_parent: dict[int, list[ProcessIdentity]] = {}
-    children_by_original_parent: dict[int, list[ProcessIdentity]] = {}
-    for pid in all_process_ids(deadline, timeout_message):
-        require_census_budget(deadline, timeout_message)
-        info = unique_identifier_info(pid)
-        require_census_budget(deadline, timeout_message)
-        if info is not None:
-            identity = direct_identity(unique_process_identity(pid, info))
-            children_by_parent.setdefault(info.p_puniqueid, []).append(identity)
-            if info.p_orig_ppidversion > 0:
-                children_by_original_parent.setdefault(
-                    info.p_orig_ppidversion, []
-                ).append(identity)
-    known = set(ancestors)
-    pending = list(ancestors)
+    by_parent, by_original_parent, unique_ids = darwin_direct_ancestry_maps(
+        deadline, timeout_message
+    )
+    known = {direct_identity_key(identity) for identity in ancestors}
+    pending = [
+        (identity, unique_ids.get(direct_identity_key(identity)))
+        for identity in ancestors
+    ]
     descendants: set[ProcessIdentity] = set()
     while pending:
         require_census_budget(deadline, timeout_message)
-        parent = pending.pop()
-        candidates = list(children_by_parent.get(parent.started_at[0], []))
-        if parent.audit_token is not None and parent.audit_token[7] > 0:
-            candidates.extend(children_by_original_parent.get(parent.audit_token[7], []))
-        for identity in candidates:
+        parent, parent_unique_id = pending.pop()
+        candidates = list(by_parent.get(parent_unique_id, []))
+        parent_version = direct_audit_pid_version(parent)
+        if parent_version is not None:
+            candidates.extend(by_original_parent.get(parent_version, []))
+        for record in candidates:
             require_census_budget(deadline, timeout_message)
-            if identity in known:
+            key = direct_identity_key(record.identity)
+            if key in known:
                 continue
-            known.add(identity)
-            descendants.add(identity)
-            pending.append(identity)
+            known.add(key)
+            descendants.add(record.identity)
+            pending.append((record.identity, record.unique_id))
     return descendants
 
 

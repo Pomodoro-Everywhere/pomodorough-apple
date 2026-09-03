@@ -123,38 +123,35 @@ def apply_authenticated_direct_payload(
 
 
 def darwin_direct_identity(
-    pid: int, unique_id: int, pid_version: int
+    pid: int, start_abstime: int, pid_version: int
 ) -> run_xcode_tests.ProcessIdentity:
     audit_token = [0] * 8
     audit_token[5], audit_token[7] = pid, pid_version
-    return run_xcode_tests.ProcessIdentity(pid, (unique_id, 0), tuple(audit_token))
+    return run_xcode_tests.ProcessIdentity(pid, (start_abstime, 0), tuple(audit_token))
 
 
 def darwin_descendant_fixture() -> tuple[
     run_xcode_tests.ProcessIdentity,
     list[int],
-    dict[int, run_xcode_tests.ProcUniqueIdentifierInfo],
+    dict[int, run_xcode_tests.DarwinDirectAncestry],
     set[run_xcode_tests.ProcessIdentity],
 ]:
-    root = run_xcode_tests.ProcessIdentity(900, (1, 0))
-    process_ids: list[int] = []
-    infos: dict[int, run_xcode_tests.ProcUniqueIdentifierInfo] = {}
+    root = darwin_direct_identity(900, 90_000, 77)
+    process_ids = [root.pid]
+    records = {
+        root.pid: run_xcode_tests.DarwinDirectAncestry(root, 1, 0, 0)
+    }
     expected: set[run_xcode_tests.ProcessIdentity] = set()
 
     def add_identity(pid: int, unique_id: int, parent_unique_id: int) -> None:
-        info = run_xcode_tests.ProcUniqueIdentifierInfo()
-        info.p_uniqueid = unique_id
-        info.p_puniqueid = parent_unique_id
-        info.p_idversion = 1
+        identity = darwin_direct_identity(pid, pid * 10, pid + 1_000_000)
         process_ids.append(pid)
-        infos[pid] = info
-        audit_token = [0] * 8
-        audit_token[5], audit_token[7] = pid, 1
-        expected.add(
-            run_xcode_tests.ProcessIdentity(pid, (unique_id, 0), tuple(audit_token))
+        records[pid] = run_xcode_tests.DarwinDirectAncestry(
+            identity, unique_id, parent_unique_id, 0
         )
+        expected.add(identity)
 
-    parent_unique_id = root.started_at[0]
+    parent_unique_id = records[root.pid].unique_id
     for level in range(40):
         for branch in range(3):
             leaf_id = 10_000 + level * 3 + branch
@@ -162,7 +159,7 @@ def darwin_descendant_fixture() -> tuple[
         chain_id = level + 2
         add_identity(1_000 + level, chain_id, parent_unique_id)
         parent_unique_id = chain_id
-    return root, process_ids, infos, expected
+    return root, process_ids, records, expected
 
 
 def launchd_service_pid(label: str) -> int | None:
@@ -1197,9 +1194,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "direct_child_process_ids", return_value=[replacement.pid]
         ), mock.patch.object(
-            run_xcode_tests,
-            "direct_process_record",
-            return_value=(replacement, 9999),
+            run_xcode_tests, "direct_child_identity", return_value=None
         ):
             children = run_xcode_tests.observed_direct_children(parent)
         self.assertEqual(children, set())
@@ -1208,7 +1203,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         parent = run_xcode_tests.ProcessIdentity(1111, (10, 20))
         departed = run_xcode_tests.ProcessIdentity(2222, (30, 40))
         replacement = run_xcode_tests.ProcessIdentity(2222, (50, 60))
-        with mock.patch.object(
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
             run_xcode_tests,
             "direct_process_record",
             side_effect=[
@@ -1217,6 +1212,55 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ],
         ):
             identity = run_xcode_tests.direct_child_identity(parent, departed.pid)
+        self.assertIsNone(identity)
+
+    def test_darwin_child_identity_rejects_public_identity_churn(self) -> None:
+        parent = darwin_direct_identity(1111, 10, 20)
+        departed = darwin_direct_identity(2222, 30, 40)
+        replacement = darwin_direct_identity(2222, 50, 60)
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[parent, departed, replacement, parent],
+        ), mock.patch.object(
+            run_xcode_tests,
+            "direct_child_process_ids",
+            side_effect=[[departed.pid], [departed.pid]],
+        ):
+            identity = run_xcode_tests.darwin_direct_child_identity(
+                parent, departed.pid
+            )
+        self.assertIsNone(identity)
+
+    def test_darwin_child_identity_accepts_stable_public_identity(self) -> None:
+        parent = darwin_direct_identity(1111, 10, 20)
+        child = darwin_direct_identity(2222, 30, 40)
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[parent, child, child, parent],
+        ), mock.patch.object(
+            run_xcode_tests,
+            "direct_child_process_ids",
+            side_effect=[[child.pid], [child.pid]],
+        ):
+            identity = run_xcode_tests.darwin_direct_child_identity(parent, child.pid)
+        self.assertEqual(identity, child)
+
+    def test_darwin_child_identity_rejects_parent_exec_churn(self) -> None:
+        parent = darwin_direct_identity(1111, 10, 20)
+        exec_parent = darwin_direct_identity(1111, 10, 21)
+        child = darwin_direct_identity(2222, 30, 40)
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[parent, child, child, exec_parent],
+        ), mock.patch.object(
+            run_xcode_tests,
+            "direct_child_process_ids",
+            side_effect=[[child.pid], [child.pid]],
+        ):
+            identity = run_xcode_tests.darwin_direct_child_identity(parent, child.pid)
         self.assertIsNone(identity)
 
     def test_direct_wrapper_identity_retries_transient_lookup_failures(self) -> None:
@@ -1331,41 +1375,215 @@ class XcodeTestRunnerTests(unittest.TestCase):
             record = run_xcode_tests.stable_darwin_process_info(2222)
         self.assertIsNone(record)
 
-    def test_darwin_direct_identity_does_not_require_bsd_record(self) -> None:
-        first = run_xcode_tests.ProcUniqueIdentifierInfo()
-        first.p_uniqueid = 10
-        first.p_idversion = 20
-        second = run_xcode_tests.ProcUniqueIdentifierInfo()
-        second.p_uniqueid = 10
-        second.p_idversion = 20
+    def test_darwin_direct_identity_uses_only_public_process_apis(self) -> None:
+        token = darwin_direct_identity(2222, 10, 20).audit_token
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests,
-            "unique_identifier_info",
-            side_effect=[first, second],
-        ), mock.patch.object(run_xcode_tests, "direct_process_record") as record:
+            "darwin_process_audit_token",
+            side_effect=[token, token],
+        ), mock.patch.object(
+            run_xcode_tests,
+            "darwin_process_start_abstime",
+            side_effect=[10, 10],
+        ), mock.patch.object(
+            run_xcode_tests, "unique_identifier_info"
+        ) as unique, mock.patch.object(
+            run_xcode_tests, "direct_process_record"
+        ) as record:
             identity = run_xcode_tests.direct_process_identity(2222)
         self.assertEqual(identity, darwin_direct_identity(2222, 10, 20))
         record.assert_not_called()
+        unique.assert_not_called()
+
+    def test_darwin_start_identity_uses_public_rusage_v0(self) -> None:
+        library = mock.Mock()
+
+        def read_rusage(pid: int, flavor: int, pointer: object) -> int:
+            self.assertEqual((pid, flavor), (2222, run_xcode_tests.RUSAGE_INFO_V0))
+            pointer._obj.ri_proc_start_abstime = 123  # type: ignore[attr-defined]
+            return 0
+
+        library.proc_pid_rusage.side_effect = read_rusage
+        with mock.patch.object(run_xcode_tests, "LIBPROC", library):
+            observed = run_xcode_tests.darwin_process_start_abstime(2222)
+        self.assertEqual(observed, 123)
+
+    def test_darwin_start_identity_rejects_failed_or_zero_rusage(self) -> None:
+        library = mock.Mock()
+        with mock.patch.object(run_xcode_tests, "LIBPROC", library):
+            library.proc_pid_rusage.return_value = 1
+            self.assertIsNone(run_xcode_tests.darwin_process_start_abstime(2222))
+            library.proc_pid_rusage.return_value = 0
+            self.assertIsNone(run_xcode_tests.darwin_process_start_abstime(2222))
+
+    def test_darwin_task_audit_token_uses_public_task_info(self) -> None:
+        library = mock.Mock()
+
+        def read_token(
+            task: int, flavor: int, values: object, count: object
+        ) -> int:
+            self.assertEqual((task, flavor), (99, run_xcode_tests.TASK_AUDIT_TOKEN))
+            observed_count = count._obj.value  # type: ignore[attr-defined]
+            self.assertEqual(observed_count, run_xcode_tests.TASK_AUDIT_TOKEN_COUNT)
+            token = ctypes.cast(
+                values, ctypes.POINTER(run_xcode_tests.AuditToken)
+            ).contents
+            token.values[5], token.values[7] = 2222, 20
+            return 0
+
+        library.task_info.side_effect = read_token
+        with mock.patch.object(run_xcode_tests, "LIBSYSTEM", library):
+            observed = run_xcode_tests.darwin_task_audit_token(99, 2222)
+        self.assertEqual(observed, darwin_direct_identity(2222, 10, 20).audit_token)
+
+    def test_darwin_task_audit_token_rejects_malformed_identity(self) -> None:
+        cases = ((2223, 20, 8, 0), (2222, 0, 8, 0), (2222, 20, 7, 0), (2222, 20, 8, 5))
+        for observed_pid, version, count, result in cases:
+            library = mock.Mock()
+
+            def read_token(_task: int, _flavor: int, values: object, size: object) -> int:
+                token = ctypes.cast(
+                    values, ctypes.POINTER(run_xcode_tests.AuditToken)
+                ).contents
+                token.values[5], token.values[7] = observed_pid, version
+                size._obj.value = count  # type: ignore[attr-defined]
+                return result
+
+            library.task_info.side_effect = read_token
+            with self.subTest(case=(observed_pid, version, count, result)), mock.patch.object(
+                run_xcode_tests, "LIBSYSTEM", library
+            ):
+                self.assertIsNone(run_xcode_tests.darwin_task_audit_token(99, 2222))
 
     def test_stable_darwin_identity_rejects_process_or_exec_churn(self) -> None:
-        cases = ((10, 20, 11, 20), (10, 20, 10, 21))
-        for first_unique, first_version, second_unique, second_version in cases:
-            first = run_xcode_tests.ProcUniqueIdentifierInfo()
-            first.p_uniqueid = first_unique
-            first.p_idversion = first_version
-            second = run_xcode_tests.ProcUniqueIdentifierInfo()
-            second.p_uniqueid = second_unique
-            second.p_idversion = second_version
-            with self.subTest(
-                first=(first_unique, first_version),
-                second=(second_unique, second_version),
-            ), mock.patch.object(
+        original_token = darwin_direct_identity(2222, 10, 20).audit_token
+        exec_token = darwin_direct_identity(2222, 10, 21).audit_token
+        cases = (
+            ("PID reuse", [10, 11], [original_token, original_token]),
+            ("exec", [10, 10], [original_token, exec_token]),
+        )
+        for name, starts, tokens in cases:
+            with self.subTest(name=name), mock.patch.object(
                 run_xcode_tests,
-                "unique_identifier_info",
-                side_effect=[first, second],
+                "darwin_process_start_abstime",
+                side_effect=starts,
+            ), mock.patch.object(
+                run_xcode_tests, "darwin_process_audit_token", side_effect=tokens
             ):
                 identity = run_xcode_tests.stable_darwin_process_identity(2222)
             self.assertIsNone(identity)
+
+    def test_darwin_process_audit_token_rejects_port_cleanup_failure(self) -> None:
+        token = darwin_direct_identity(2222, 10, 20).audit_token
+        library = mock.Mock()
+        library.mach_task_self.return_value = 7
+
+        def name_task(_self: int, _pid: int, pointer: object) -> int:
+            pointer._obj.value = 99  # type: ignore[attr-defined]
+            return 0
+
+        library.task_name_for_pid.side_effect = name_task
+        library.mach_port_deallocate.return_value = 5
+        with mock.patch.object(run_xcode_tests, "LIBSYSTEM", library), mock.patch.object(
+            run_xcode_tests, "darwin_task_audit_token", return_value=token
+        ):
+            observed = run_xcode_tests.darwin_process_audit_token(2222)
+        self.assertIsNone(observed)
+        library.mach_port_deallocate.assert_called_once_with(7, 99)
+
+    def test_darwin_process_audit_token_cleans_up_after_query_error(self) -> None:
+        library = mock.Mock()
+        library.mach_task_self.return_value = 7
+
+        def name_task(_self: int, _pid: int, pointer: object) -> int:
+            pointer._obj.value = 99  # type: ignore[attr-defined]
+            return 0
+
+        library.task_name_for_pid.side_effect = name_task
+        library.mach_port_deallocate.return_value = 0
+        with mock.patch.object(run_xcode_tests, "LIBSYSTEM", library), mock.patch.object(
+            run_xcode_tests, "darwin_task_audit_token", side_effect=RuntimeError("query")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "query"):
+                run_xcode_tests.darwin_process_audit_token(2222)
+        library.mach_port_deallocate.assert_called_once_with(7, 99)
+
+    def test_darwin_ancestry_rejects_stale_private_exec_version(self) -> None:
+        info = run_xcode_tests.ProcUniqueIdentifierInfo()
+        info.p_uniqueid = 77
+        info.p_idversion = 20
+        current = darwin_direct_identity(2222, 10, 21)
+        with mock.patch.object(
+            run_xcode_tests, "unique_identifier_info", return_value=info
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_process_identity", return_value=current
+        ):
+            record = run_xcode_tests.stable_darwin_direct_ancestry(2222)
+        self.assertIsNone(record)
+
+    def test_darwin_ancestry_rejects_private_pid_reuse(self) -> None:
+        first = run_xcode_tests.ProcUniqueIdentifierInfo()
+        first.p_uniqueid, first.p_idversion = 77, 20
+        second = run_xcode_tests.ProcUniqueIdentifierInfo()
+        second.p_uniqueid, second.p_idversion = 78, 20
+        current = darwin_direct_identity(2222, 10, 20)
+        with mock.patch.object(
+            run_xcode_tests, "unique_identifier_info", side_effect=[first, second]
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_process_identity", return_value=current
+        ):
+            record = run_xcode_tests.stable_darwin_direct_ancestry(2222)
+        self.assertIsNone(record)
+
+    def test_darwin_target_identity_uses_owned_process_not_private_record(self) -> None:
+        wrapper = darwin_direct_identity(1111, 10, 20)
+        target = darwin_direct_identity(2222, 30, 40)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        process.poll.return_value = None
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[wrapper, target, target, wrapper],
+        ), mock.patch.object(run_xcode_tests, "direct_process_record") as private:
+            observed = run_xcode_tests.direct_target_identity(process, wrapper)
+        self.assertEqual(observed, target)
+        private.assert_not_called()
+
+    def test_darwin_target_identity_rejects_exec_during_binding(self) -> None:
+        wrapper = darwin_direct_identity(1111, 10, 20)
+        before_exec = darwin_direct_identity(2222, 30, 40)
+        after_exec = darwin_direct_identity(2222, 30, 41)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = before_exec.pid
+        process.poll.return_value = None
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[wrapper, before_exec, after_exec],
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "direct target ancestry unavailable",
+            ):
+                run_xcode_tests.direct_target_identity(process, wrapper)
+
+    def test_wrapper_handshake_rejects_same_process_exec_generation(self) -> None:
+        reported = darwin_direct_identity(2222, 10, 20)
+        current = darwin_direct_identity(2222, 10, 21)
+        channel = run_xcode_tests.DirectChannel(-1, b"key", wrapper=reported)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = reported.pid
+        with mock.patch.object(
+            run_xcode_tests, "pump_direct_channel"
+        ), mock.patch.object(
+            run_xcode_tests, "bounded_process_identity", return_value=current
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "forged direct wrapper identity",
+            ):
+                run_xcode_tests.await_direct_identity(channel, process, None)
 
     def test_launchd_containment_rejects_identity_or_coalition_churn(self) -> None:
         original = run_xcode_tests.ProcessIdentity(2222, (10, 20))
@@ -1399,7 +1617,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ) -> run_xcode_tests.ProcessIdentity:
             return parent if pid == parent.pid else replacement
 
-        with mock.patch.object(
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
             run_xcode_tests, "bounded_process_identity", side_effect=bounded_identity
         ), mock.patch.object(
             run_xcode_tests, "direct_child_process_ids", return_value=[replacement.pid]
@@ -1679,7 +1897,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
             with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
                 run_xcode_tests, "all_process_ids", return_value=[42]
             ), mock.patch.object(
-                run_xcode_tests, "unique_identifier_info", side_effect=stalled_identity
+                run_xcode_tests,
+                "stable_darwin_direct_ancestry",
+                side_effect=stalled_identity,
             ):
                 with self.assertRaisesRegex(
                     run_xcode_tests.OperationDeadlineExpired,
@@ -1701,7 +1921,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests, "all_process_ids", return_value=process_ids
         ), mock.patch.object(
-            run_xcode_tests, "unique_identifier_info", return_value=None
+            run_xcode_tests, "stable_darwin_direct_ancestry", return_value=None
         ) as inspect, mock.patch.object(
             run_xcode_tests, "deadline_call", side_effect=bounded
         ) as deadline_call, mock.patch.object(
@@ -1713,13 +1933,13 @@ class XcodeTestRunnerTests(unittest.TestCase):
         deadline_call.assert_called_once()
 
     def test_direct_darwin_descendant_closure_is_complete_with_budget(self) -> None:
-        root, process_ids, infos, expected = darwin_descendant_fixture()
+        root, process_ids, records, expected = darwin_descendant_fixture()
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests, "all_process_ids", return_value=process_ids
         ), mock.patch.object(
             run_xcode_tests,
-            "unique_identifier_info",
-            side_effect=lambda pid: infos[pid],
+            "stable_darwin_direct_ancestry",
+            side_effect=lambda pid: records[pid],
         ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
             descendants = run_xcode_tests.inspect_darwin_direct_descendants(
                 {root}, 1.0
@@ -1745,18 +1965,22 @@ class XcodeTestRunnerTests(unittest.TestCase):
             902: process_info(12, 99, 88),
             903: process_info(13, 111, 66),
         }
-        expected = {
-            run_xcode_tests.direct_identity(
-                run_xcode_tests.unique_process_identity(pid, infos[pid])
+        records = {
+            pid: run_xcode_tests.DarwinDirectAncestry(
+                darwin_direct_identity(pid, pid * 10, info.p_idversion),
+                info.p_uniqueid,
+                info.p_puniqueid,
+                info.p_orig_ppidversion,
             )
-            for pid in (901, 902)
+            for pid, info in infos.items()
         }
+        expected = {records[pid].identity for pid in (901, 902)}
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests, "all_process_ids", return_value=list(infos)
         ), mock.patch.object(
             run_xcode_tests,
-            "unique_identifier_info",
-            side_effect=lambda pid: infos[pid],
+            "stable_darwin_direct_ancestry",
+            side_effect=lambda pid: records[pid],
         ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
             descendants = run_xcode_tests.inspect_darwin_direct_descendants(
                 {root}, 1.0
@@ -1792,18 +2016,22 @@ class XcodeTestRunnerTests(unittest.TestCase):
             Path("/tmp/hosted-direct"), Path("/dev/null"), Path("/dev/null"),
             mock.Mock(spec=subprocess.Popen), wrapper, channel,
         )
-        expected = {
-            run_xcode_tests.direct_identity(
-                run_xcode_tests.unique_process_identity(pid, info)
+        records = {
+            pid: run_xcode_tests.DarwinDirectAncestry(
+                darwin_direct_identity(pid, pid * 10, info.p_idversion),
+                info.p_uniqueid,
+                info.p_puniqueid,
+                info.p_orig_ppidversion,
             )
             for pid, info in infos.items()
         }
+        expected = {record.identity for record in records.values()}
         with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
             run_xcode_tests, "all_process_ids", return_value=list(infos)
         ), mock.patch.object(
             run_xcode_tests,
-            "unique_identifier_info",
-            side_effect=lambda pid: infos[pid],
+            "stable_darwin_direct_ancestry",
+            side_effect=lambda pid: records[pid],
         ), mock.patch.object(
             run_xcode_tests, "bounded_direct_children", return_value=set()
         ), mock.patch.object(run_xcode_tests.time, "monotonic", return_value=0.0):
@@ -1816,7 +2044,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(descendants, expected)
 
     def test_direct_darwin_descendant_closure_stops_on_expiring_clock(self) -> None:
-        root, process_ids, infos, _expected = darwin_descendant_fixture()
+        root, process_ids, records, _expected = darwin_descendant_fixture()
         clock_calls = 0
 
         def expiring_clock() -> float:
@@ -1828,8 +2056,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "all_process_ids", return_value=process_ids
         ), mock.patch.object(
             run_xcode_tests,
-            "unique_identifier_info",
-            side_effect=lambda pid: infos[pid],
+            "stable_darwin_direct_ancestry",
+            side_effect=lambda pid: records[pid],
         ), mock.patch.object(run_xcode_tests.time, "monotonic", expiring_clock):
             with self.assertRaisesRegex(
                 run_xcode_tests.SimulatorLifecycleError,
