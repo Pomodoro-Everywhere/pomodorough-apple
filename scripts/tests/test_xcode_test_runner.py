@@ -3052,7 +3052,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.bootout_job(job, None)
 
     def test_bootout_accepts_macos_idempotent_absence(self) -> None:
-        result = subprocess.CompletedProcess([], 3, "", "No such process\n")
+        result = subprocess.CompletedProcess(
+            [], 3, "", "Boot-out failed: 3: No such process\n"
+        )
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
             with mock.patch.object(
@@ -3065,9 +3067,22 @@ class XcodeTestRunnerTests(unittest.TestCase):
         cases = (
             ("no newline", "", "No such process", True),
             ("single newline", "", "No such process\n", True),
+            ("bootout prefix", "", "Boot-out failed: 3: No such process", True),
+            (
+                "bootout prefix newline",
+                "",
+                "Boot-out failed: 3: No such process\n",
+                True,
+            ),
             ("stdout only", "No such process", "", False),
             ("extra stdout", "permission denied", "No such process", False),
             ("mixed stderr", "", "No such process; permission denied", False),
+            (
+                "bootout prefix mixed",
+                "",
+                "Boot-out failed: 3: No such process; permission denied",
+                False,
+            ),
             ("extra stderr line", "", "No such process\npermission denied", False),
             ("wrong case", "", "no such process", False),
             ("leading newline", "", "\nNo such process", False),
@@ -3079,6 +3094,58 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 self.assertIs(
                     run_xcode_tests.bootout_result_is_absent(result), expected
                 )
+
+    def test_service_absence_rejects_bootout_only_diagnostic(self) -> None:
+        result = subprocess.CompletedProcess(
+            [], 3, "", "Boot-out failed: 3: No such process\n"
+        )
+        self.assertFalse(run_xcode_tests.service_is_absent(result))
+
+    def test_bootout_uses_bootstrap_domain_and_plist(self) -> None:
+        result = subprocess.CompletedProcess([], 0, "", "")
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_run", return_value=result
+            ) as launchctl:
+                run_xcode_tests.bootout_job(job, None)
+        launchctl.assert_called_once_with(
+            [
+                "bootout",
+                f"gui/{os.getuid()}",
+                str(job.root / "job.plist"),
+            ],
+            None,
+            1.5,
+        )
+
+    def test_bootout_removes_inactive_definition_before_absence_proof(self) -> None:
+        loaded = True
+
+        def launchctl(
+            arguments: list[str], *_args: object
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal loaded
+            if arguments[0] == "bootout":
+                self.assertEqual(arguments[1], f"gui/{os.getuid()}")
+                self.assertTrue(arguments[2].endswith("/job.plist"))
+                loaded = False
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+            self.assertFalse(loaded)
+            return subprocess.CompletedProcess(
+                arguments, 113, "", "Could not find service\n"
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_run", side_effect=launchctl
+            ), mock.patch.object(
+                run_xcode_tests, "launchctl_retry", side_effect=launchctl
+            ):
+                run_xcode_tests.bootout_job(job, None)
+                run_xcode_tests.confirm_job_absent(job, time.monotonic() + 1)
+        self.assertFalse(loaded)
 
     def test_bootout_status_113_absence_recognition_is_exact(self) -> None:
         contextual = (

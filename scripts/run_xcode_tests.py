@@ -1970,10 +1970,6 @@ def signal_job_root(job: LaunchdJob, requested: signal.Signals) -> bool:
 
 
 def service_is_absent(result: subprocess.CompletedProcess[str]) -> bool:
-    return result.returncode == 113 and "Could not find service" in result.stderr
-
-
-def bootout_result_is_absent(result: subprocess.CompletedProcess[str]) -> bool:
     diagnostic_patterns = {
         3: r"No such process\n?",
         113: (
@@ -1987,6 +1983,24 @@ def bootout_result_is_absent(result: subprocess.CompletedProcess[str]) -> bool:
         and pattern is not None
         and re.fullmatch(pattern, result.stderr) is not None
     )
+
+
+def bootout_result_is_absent(result: subprocess.CompletedProcess[str]) -> bool:
+    return service_is_absent(result) or (
+        result.returncode == 3
+        and result.stdout == ""
+        and re.fullmatch(
+            r"Boot-out failed: 3: No such process\n?", result.stderr
+        )
+        is not None
+    )
+
+
+def launchd_job_domain(job: LaunchdJob) -> str:
+    domain, separator, label = job.service.rpartition("/")
+    if not separator or not domain or label != job.label:
+        raise SimulatorLifecycleError("invalid launchd containment service")
+    return domain
 
 
 def launchd_job_evidence(job: LaunchdJob, deadline: float | None) -> str:
@@ -2020,7 +2034,11 @@ def pause_before_cleanup(deadline: float | None, maximum: float) -> None:
 
 
 def bootout_job(job: LaunchdJob, deadline: float | None) -> str | None:
-    result = launchctl_run(["bootout", job.service], deadline, 1.5)
+    result = launchctl_run(
+        ["bootout", launchd_job_domain(job), str(job.root / "job.plist")],
+        deadline,
+        1.5,
+    )
     if not result.returncode:
         return None
     if not bootout_result_is_absent(result):
@@ -2043,7 +2061,7 @@ def confirm_job_absent(job: LaunchdJob, deadline: float | None) -> None:
                     "launchd containment cleanup incomplete"
                 ) from error
             raise
-        if bootout_result_is_absent(result):
+        if service_is_absent(result):
             return
         elif result.returncode:
             raise SimulatorLifecycleError(
