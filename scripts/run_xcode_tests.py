@@ -845,6 +845,22 @@ def peer_identity_covers_exec_report(
     )
 
 
+def peer_identity_precedes_exec_report(
+    reported: ProcessIdentity, current: ProcessIdentity
+) -> bool:
+    reported_version = direct_audit_pid_version(reported)
+    current_version = direct_audit_pid_version(current)
+    return (
+        same_direct_process(reported, current)
+        and reported.audit_token is not None
+        and current.audit_token is not None
+        and reported.audit_token[:-1] == current.audit_token[:-1]
+        and reported_version is not None
+        and current_version is not None
+        and current_version < reported_version
+    )
+
+
 def validate_direct_target_transition(
     previous: ProcessIdentity, current: ProcessIdentity
 ) -> None:
@@ -2339,15 +2355,12 @@ def apply_direct_target_payload(
             raise SimulatorLifecycleError("out-of-order direct target exec identity")
         validate_direct_target_transition(previous, identity)
         if channel.peer_identity_required:
-            current = bounded_peer_process_identity(
+            current = await_peer_identity_covering_exec_report(
                 channel.target_peer,
-                identity.pid,
+                identity,
                 direct_message_deadline(deadline),
-                "direct target identity",
             )
-            if current is None or not peer_identity_covers_exec_report(
-                identity, current
-            ):
+            if current is None:
                 raise SimulatorLifecycleError("forged direct target exec identity")
         channel.target_exec_observed = True
         channel.target_identities.add(previous)
@@ -2506,6 +2519,27 @@ def bounded_peer_process_identity(
         lambda: stable_darwin_peer_identity(descriptor, pid),
         deadline,
         f"{label} deadline expired",
+    )
+
+
+def await_peer_identity_covering_exec_report(
+    descriptor: int, reported: ProcessIdentity, deadline: float
+) -> ProcessIdentity | None:
+    retry_deadline = deadline - DESCENDANT_POLL_SECONDS
+
+    def inspect() -> ProcessIdentity | None:
+        while time.monotonic() < retry_deadline:
+            current = stable_darwin_peer_identity(descriptor, reported.pid)
+            if current is not None:
+                if peer_identity_covers_exec_report(reported, current):
+                    return current
+                if not peer_identity_precedes_exec_report(reported, current):
+                    return None
+            time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
+        return None
+
+    return deadline_call(
+        inspect, deadline, "direct target identity deadline expired"
     )
 
 

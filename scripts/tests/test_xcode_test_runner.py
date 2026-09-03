@@ -118,10 +118,14 @@ def direct_frame(
 
 
 def apply_authenticated_direct_payload(
-    channel: run_xcode_tests.DirectChannel, payload: dict[str, object]
+    channel: run_xcode_tests.DirectChannel,
+    payload: dict[str, object],
+    deadline: float | None = None,
 ) -> None:
     frame = direct_frame(channel.key, channel.sequence + 1, payload)
-    run_xcode_tests.apply_direct_message(channel, frame.removesuffix(b"\n"))
+    run_xcode_tests.apply_direct_message(
+        channel, frame.removesuffix(b"\n"), deadline
+    )
 
 
 def darwin_direct_identity(
@@ -1060,7 +1064,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         )
         with mock.patch.object(
             run_xcode_tests,
-            "bounded_peer_process_identity",
+            "stable_darwin_peer_identity",
             return_value=latest,
         ) as inspect_peer:
             for version in range(7100838, 7100868):
@@ -1078,6 +1082,34 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(inspect_peer.call_count, 30)
         self.assertEqual(len(channel.target_identities), 31)
 
+    def test_hosted_exec_report_waits_for_parent_peer_generation(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        before_exec = darwin_direct_identity(900, 10, 7100837)
+        reported = darwin_direct_identity(900, 10, 7100838)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"authenticated",
+            wrapper=wrapper,
+            target=before_exec,
+            target_peer=91,
+            peer_identity_required=True,
+        )
+        with mock.patch.object(
+            run_xcode_tests,
+            "stable_darwin_peer_identity",
+            side_effect=[before_exec, None, reported],
+        ) as inspect_peer:
+            apply_authenticated_direct_payload(
+                channel,
+                {
+                    "event": "target-exec",
+                    "identity": run_xcode_tests.identity_payload(reported),
+                },
+                time.monotonic() + 1,
+            )
+        self.assertEqual(channel.target, reported)
+        self.assertEqual(inspect_peer.call_count, 3)
+
     def test_target_exec_peer_rejects_reuse_regression_and_substitution(
         self,
     ) -> None:
@@ -1091,6 +1123,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             darwin_direct_identity(900, 11, 7100839),
             run_xcode_tests.ProcessIdentity(900, (10, 0), tuple(substituted_token)),
             run_xcode_tests.ProcessIdentity(900, (10, 0), None),
+            None,
         )
         for current in rejected:
             with self.subTest(current=current):
@@ -1104,9 +1137,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 )
                 with mock.patch.object(
                     run_xcode_tests,
-                    "bounded_peer_process_identity",
+                    "stable_darwin_peer_identity",
                     return_value=current,
-                ), self.assertRaisesRegex(
+                ) as inspect_peer, self.assertRaisesRegex(
                     run_xcode_tests.SimulatorLifecycleError,
                     "forged direct target exec identity",
                 ):
@@ -1116,7 +1149,14 @@ class XcodeTestRunnerTests(unittest.TestCase):
                             "event": "target-exec",
                             "identity": run_xcode_tests.identity_payload(reported),
                         },
+                        time.monotonic() + 0.1,
                     )
+                self.assertGreaterEqual(inspect_peer.call_count, 1)
+                self.assertEqual(channel.sequence, 0)
+                self.assertEqual(
+                    channel.target,
+                    darwin_direct_identity(900, 10, 7100837),
+                )
 
     def test_direct_target_exec_event_rejects_identity_change(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
@@ -1861,6 +1901,22 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                 process.wait(timeout=5)
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_direct_protocol_accepts_rapid_exec_generations(self) -> None:
+        source = (
+            "import os,sys; source=sys.argv[1]; remaining=int(sys.argv[2]); "
+            "os.execv(sys.executable,[sys.executable,'-c',source,source,"
+            "str(remaining-1)]) if remaining else print('DONE')"
+        )
+        command = [sys.executable, "-c", source, source, "40"]
+        deadline = time.monotonic() + 15
+        outcome = run_xcode_tests.direct_lifecycle_process(command, 10, deadline)
+        self.assertEqual(outcome.returncode, 0)
+        self.assertEqual(outcome.stdout, "DONE\n")
 
     def test_wrapper_handshake_rejects_same_process_exec_generation(self) -> None:
         reported = darwin_direct_identity(2222, 10, 20)
