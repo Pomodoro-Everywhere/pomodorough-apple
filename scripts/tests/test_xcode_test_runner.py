@@ -1522,7 +1522,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         substituted_token = list(
             darwin_direct_identity(900, 10, 7100839).audit_token or ()
         )
-        substituted_token[1] = 1
+        substituted_token[5] = 901
         rejected = (
             darwin_direct_identity(900, 10, 7100837),
             darwin_direct_identity(900, 11, 7100839),
@@ -1562,6 +1562,61 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     channel.target,
                     darwin_direct_identity(900, 10, 7100837),
                 )
+
+    def test_target_exec_peer_accepts_same_process_credential_change(self) -> None:
+        before_exec = darwin_direct_identity(900, 10, 7100837)
+        reported = darwin_direct_identity(900, 10, 7100838)
+        current_token = list(darwin_direct_identity(900, 10, 7100839).audit_token or ())
+        current_token[1] = 501
+        current = run_xcode_tests.ProcessIdentity(900, (10, 0), tuple(current_token))
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"authenticated",
+            wrapper=darwin_direct_identity(800, 8, 7000000),
+            target=before_exec,
+            target_peer=91,
+            peer_identity_required=True,
+        )
+        with mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity", return_value=current
+        ):
+            apply_authenticated_direct_payload(
+                channel,
+                {
+                    "event": "target-exec",
+                    "identity": run_xcode_tests.identity_payload(reported),
+                },
+            )
+        self.assertEqual(channel.target, reported)
+
+    def test_target_exec_peer_accepts_authenticated_report_after_peer_exit(self) -> None:
+        parent, target = socket.socketpair()
+        try:
+            before_exec = darwin_direct_identity(900, 10, 7100837)
+            reported = darwin_direct_identity(900, 10, 7100838)
+            channel = run_xcode_tests.DirectChannel(
+                -1,
+                b"authenticated",
+                wrapper=darwin_direct_identity(800, 8, 7000000),
+                target=before_exec,
+                target_peer=parent.fileno(),
+                peer_identity_required=True,
+            )
+            target.close()
+            with mock.patch.object(
+                run_xcode_tests, "stable_darwin_peer_identity", return_value=None
+            ):
+                apply_authenticated_direct_payload(
+                    channel,
+                    {
+                        "event": "target-exec",
+                        "identity": run_xcode_tests.identity_payload(reported),
+                    },
+                )
+            self.assertEqual(channel.target, reported)
+        finally:
+            parent.close()
+            target.close()
 
     def test_direct_target_exec_event_rejects_identity_change(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
@@ -2322,6 +2377,19 @@ class XcodeTestRunnerTests(unittest.TestCase):
         outcome = run_xcode_tests.direct_lifecycle_process(command, 10, deadline)
         self.assertEqual(outcome.returncode, 0)
         self.assertEqual(outcome.stdout, "DONE\n")
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_short_lived_launchctl_helpers_converge_repeatedly(self) -> None:
+        with mock.patch.object(run_xcode_tests, "LAUNCHCTL", sys.executable):
+            for iteration in range(40):
+                with self.subTest(iteration=iteration):
+                    result = run_xcode_tests.launchctl_run(
+                        ["-c", "raise SystemExit(7)"], launchctl_test_deadline(4), 2
+                    )
+                    self.assertEqual(result.returncode, 7)
 
     def test_wrapper_handshake_rejects_same_process_exec_generation(self) -> None:
         reported = darwin_direct_identity(2222, 10, 20)

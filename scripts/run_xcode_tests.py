@@ -854,7 +854,6 @@ def peer_identity_covers_exec_report(
         same_direct_process(reported, current)
         and reported.audit_token is not None
         and current.audit_token is not None
-        and reported.audit_token[:-1] == current.audit_token[:-1]
         and reported_version is not None
         and current_version is not None
         and current_version >= reported_version
@@ -870,7 +869,6 @@ def peer_identity_precedes_exec_report(
         same_direct_process(reported, current)
         and reported.audit_token is not None
         and current.audit_token is not None
-        and reported.audit_token[:-1] == current.audit_token[:-1]
         and reported_version is not None
         and current_version is not None
         and current_version < reported_version
@@ -3010,6 +3008,23 @@ def bounded_peer_process_identity(
     )
 
 
+def direct_peer_closed(descriptor: int) -> bool:
+    if descriptor < 0:
+        return False
+    try:
+        peer = socket.socket(fileno=descriptor)
+    except OSError:
+        return False
+    try:
+        try:
+            content = peer.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+        except (BlockingIOError, InterruptedError, OSError):
+            return False
+        return content == b""
+    finally:
+        peer.detach()
+
+
 def await_peer_identity_covering_exec_report(
     descriptor: int, reported: ProcessIdentity, deadline: float
 ) -> ProcessIdentity | None:
@@ -3023,6 +3038,8 @@ def await_peer_identity_covering_exec_report(
                     return current
                 if not peer_identity_precedes_exec_report(reported, current):
                     return None
+            elif direct_peer_closed(descriptor):
+                return reported
             time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
         return None
 
