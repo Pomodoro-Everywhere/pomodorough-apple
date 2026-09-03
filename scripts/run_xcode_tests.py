@@ -53,15 +53,15 @@ CLEANUP_RESERVE_SECONDS = 2.0
 CONTAINED_JOB_CLEANUP_SECONDS = 6.0
 CONTAINMENT_DRAIN_RESERVE_SECONDS = 0.25
 CONTAINMENT_BOOTOUT_RESERVE_SECONDS = 0.5
-CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS = 0.5
-CONTAINMENT_ABSENCE_RESERVE_SECONDS = 0.5
+CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS = 2.0
+CONTAINMENT_ABSENCE_RESERVE_SECONDS = 2.5
 TIMEOUT_EVIDENCE_SECONDS = 0.25
 EVIDENCE_WRITE_SECONDS = 1.0
 EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
 DESCENDANT_POLL_SECONDS = 0.001
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
-CONTAINMENT_HANDSHAKE_SECONDS = 2.0
+CONTAINMENT_HANDSHAKE_SECONDS = 4.0
 LIFECYCLE_BOOTSTRAP_SECONDS = 10.0
 LIFECYCLE_CLEANUP_SECONDS = 6.0
 DIRECT_CHANNEL_KEY_BYTES = 32
@@ -75,7 +75,9 @@ DIRECT_TARGET_ARGUMENT = "--direct-target"
 EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
-LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 0.5
+LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 2.0
+LAUNCHCTL_AUTHENTICATION_SECONDS = 1.0
+LAUNCHCTL_RETRY_SECONDS = 1.0
 LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
 PROCESS_PATH_BUFFER_BYTES = 4096
 PROC_PIDTBSDINFO = 3
@@ -1222,16 +1224,36 @@ def direct_child_arguments(
     ]
 
 
+def start_direct_wrapper(
+    resources: DirectSpawnResources,
+    root: Path,
+    arguments: list[str],
+    inherited_descriptors: tuple[int, int, int],
+) -> tuple[subprocess.Popen[bytes], Path, Path]:
+    stdout_path, stderr_path = root / "stdout.log", root / "stderr.log"
+    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+        wrapper = subprocess.Popen(
+            arguments,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+            pass_fds=inherited_descriptors,
+        )
+    resources.process = wrapper
+    return wrapper, stdout_path, stderr_path
+
+
 def spawn_direct_job(
     command: list[str],
     deadline: float | None,
     cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
+    wrapper_reap_seconds: float = DIRECT_WRAPPER_REAP_SECONDS,
+    authenticated: Callable[[], None] | None = None,
 ) -> DirectJob:
     resources = DirectSpawnResources()
     try:
         resources.root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-lifecycle-"))
         root = resources.root
-        stdout_path, stderr_path = root / "stdout.log", root / "stderr.log"
         event_read, event_write = acquire_direct_pipe(resources)
         key_read, key_write = acquire_direct_pipe(resources)
         acknowledgement_read, acknowledgement_write = acquire_direct_pipe(resources)
@@ -1239,35 +1261,25 @@ def spawn_direct_job(
         arguments = direct_child_arguments(
             command, event_write, key_read, acknowledgement_read
         )
-        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            process = subprocess.Popen(
-                arguments,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-                pass_fds=(event_write, key_read, acknowledgement_read),
-            )
-            resources.process = process
+        process, stdout_path, stderr_path = start_direct_wrapper(
+            resources,
+            root,
+            arguments,
+            (event_write, key_read, acknowledgement_read),
+        )
         for descriptor in (event_write, key_read, acknowledgement_read):
             close_direct_descriptor(resources.descriptors, descriptor)
         os.write(key_write, key)
         close_direct_descriptor(resources.descriptors, key_write)
         os.set_blocking(event_read, False)
-        channel = DirectChannel(
-            event_read, key, target_exec_required=LIBPROC is not None
-        )
-        identity = await_direct_identity(
-            channel, process, deadline, cleanup_reserve
-        )
+        channel = DirectChannel(event_read, key, target_exec_required=LIBPROC is not None)
+        identity = await_direct_identity(channel, process, deadline, cleanup_reserve)
+        if authenticated is not None:
+            authenticated()
         os.write(acknowledgement_write, b"1")
         close_direct_descriptor(resources.descriptors, acknowledgement_write)
         resources.descriptors.remove(event_read)
-        wrapper_reap_seconds = min(
-            DIRECT_WRAPPER_REAP_SECONDS,
-            cleanup_reserve
-            * LAUNCHCTL_WRAPPER_REAP_SECONDS
-            / LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
-        )
+        wrapper_reap_seconds = min(wrapper_reap_seconds, cleanup_reserve)
         return DirectJob(
             root,
             stdout_path,
@@ -1293,26 +1305,53 @@ def launchctl_deadlines(
     deadline: float | None,
     maximum: float,
     process_cleanup_deadline: float | None,
-) -> tuple[float, float]:
-    finish_by = started_at + maximum
+) -> tuple[float, float, float]:
+    command_by = started_at + LAUNCHCTL_AUTHENTICATION_SECONDS + maximum
     if deadline is not None:
-        finish_by = min(finish_by, deadline)
-    if finish_by <= started_at:
+        command_by = min(command_by, deadline)
+    cleanup_by = command_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    if process_cleanup_deadline is not None:
+        cleanup_by = process_cleanup_deadline
+        command_by = min(
+            command_by,
+            cleanup_by - LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
+        )
+    available = command_by - started_at
+    authentication = min(LAUNCHCTL_AUTHENTICATION_SECONDS, available / 2)
+    command_seconds = min(maximum, available - authentication)
+    if authentication <= 0 or command_seconds <= 0:
         raise SimulatorLifecycleError("launchd containment deadline expired")
-    if process_cleanup_deadline is None:
-        return finish_by, finish_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
-    if process_cleanup_deadline <= finish_by:
-        raise SimulatorLifecycleError("launchctl process cleanup deadline expired")
-    return finish_by, process_cleanup_deadline
+    return started_at + authentication, command_seconds, cleanup_by
 
 
 def launchctl_result(
     command: list[str],
-    finish_by: float,
-    cleanup_by: float,
+    authenticate_by: float,
+    command_seconds: float,
+    cleanup_cap: float,
 ) -> subprocess.CompletedProcess[str]:
+    deadlines: tuple[float, float] | None = None
+
+    def begin_command() -> None:
+        nonlocal deadlines
+        finish_by = time.monotonic() + command_seconds
+        cleanup_by = finish_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+        if cleanup_by > cleanup_cap:
+            raise SimulatorLifecycleError("launchd containment deadline expired")
+        deadlines = finish_by, cleanup_by
+
+    setup_reserve = command_seconds + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    job = spawn_direct_job(
+        command,
+        authenticate_by + setup_reserve,
+        setup_reserve,
+        LAUNCHCTL_WRAPPER_REAP_SECONDS,
+        authenticated=begin_command,
+    )
+    if deadlines is None:
+        raise SimulatorLifecycleError("direct wrapper authentication unavailable")
+    finish_by, cleanup_by = deadlines
     cleanup_reserve = cleanup_by - finish_by
-    job = spawn_direct_job(command, cleanup_by, cleanup_reserve)
     timeout = max(0.0, finish_by - time.monotonic())
     completion = complete_direct_job(job, timeout, cleanup_by, cleanup_reserve)
     if completion.cleanup_error is not None:
@@ -1342,25 +1381,26 @@ def launchctl_run(
 ) -> subprocess.CompletedProcess[str]:
     command = [LAUNCHCTL, *arguments]
     started_at = time.monotonic()
-    finish_by, cleanup_by = launchctl_deadlines(
+    authenticate_by, command_seconds, cleanup_by = launchctl_deadlines(
         started_at, deadline, maximum, process_cleanup_deadline
     )
     try:
-        return launchctl_result(command, finish_by, cleanup_by)
+        return launchctl_result(command, authenticate_by, command_seconds, cleanup_by)
     except subprocess.TimeoutExpired as error:
         raise SimulatorLifecycleError("launchctl timed out") from error
 
 
 def launchctl_retry(
-    arguments: list[str], deadline: float, maximum: float = 0.25
+    arguments: list[str], deadline: float, maximum: float = LAUNCHCTL_RETRY_SECONDS
 ) -> subprocess.CompletedProcess[str]:
     last_timeout: SimulatorLifecycleError | None = None
     while True:
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        command_budget = remaining - LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+        if command_budget <= 0:
             break
-        attempt_maximum = min(maximum, remaining / 2)
-        command_deadline = time.monotonic() + attempt_maximum
+        attempt_maximum = min(maximum, command_budget)
+        command_deadline = deadline - LAUNCHCTL_PROCESS_CLEANUP_SECONDS
         try:
             return launchctl_run(
                 arguments, command_deadline, attempt_maximum, deadline
@@ -2089,14 +2129,19 @@ def confirm_job_absent(
 ) -> None:
     if bootout_confirmed:
         return
-    cleanup_by = cleanup_deadline(deadline)
+    cleanup_by = cleanup_deadline(
+        deadline, CONTAINMENT_ABSENCE_RESERVE_SECONDS
+    )
     while True:
         if time.monotonic() >= cleanup_by:
             raise SimulatorLifecycleError("launchd containment cleanup incomplete")
         try:
             result = launchctl_retry(["print", job.service], cleanup_by)
         except SimulatorLifecycleError as error:
-            if time.monotonic() >= cleanup_by:
+            if (
+                time.monotonic() >= cleanup_by
+                or str(error) == "launchd containment deadline expired"
+            ):
                 raise SimulatorLifecycleError(
                     "launchd containment cleanup incomplete"
                 ) from error
@@ -2709,6 +2754,11 @@ def publish_attempt_output(
     return True
 
 
+def attempt_stop_deadline(args: argparse.Namespace, run_started: float) -> float:
+    wall_deadline = getattr(args, "wall_deadline", run_started + args.wall_timeout)
+    return wall_deadline - CONTAINED_JOB_CLEANUP_SECONDS - TIMEOUT_EVIDENCE_SECONDS
+
+
 def observe_attempt(
     job: LaunchdJob,
     args: argparse.Namespace,
@@ -2720,8 +2770,7 @@ def observe_attempt(
     raw_output = bytearray()
     offset = 0
     last_output = time.monotonic()
-    wall_deadline = getattr(args, "wall_deadline", run_started + args.wall_timeout)
-    stop_deadline = wall_deadline - CLEANUP_RESERVE_SECONDS - TIMEOUT_EVIDENCE_SECONDS
+    stop_deadline = attempt_stop_deadline(args, run_started)
     returncode: int | None = None
     timeout_reason: str | None = None
     while True:
@@ -2777,7 +2826,7 @@ def process_evidence_deadline(wall_deadline: float | None) -> float:
     evidence_deadline = time.monotonic() + TIMEOUT_EVIDENCE_SECONDS
     if wall_deadline is None:
         return evidence_deadline
-    return min(evidence_deadline, wall_deadline - CLEANUP_RESERVE_SECONDS)
+    return min(evidence_deadline, wall_deadline - CONTAINED_JOB_CLEANUP_SECONDS)
 
 
 def evidence_write_deadline() -> float:
@@ -3307,11 +3356,13 @@ def run_attempt(
 ) -> AttemptOutcome:
     write_log_header(log, attempt, evidence_errors)
     remaining = remaining_wall_budget(args)
-    required_reserve = CLEANUP_RESERVE_SECONDS + TIMEOUT_EVIDENCE_SECONDS
+    required_reserve = CONTAINED_JOB_CLEANUP_SECONDS + TIMEOUT_EVIDENCE_SECONDS
     if remaining is not None and remaining <= required_reserve:
         raise SimulatorLifecycleError("wall timeout exhausted before xcodebuild")
     deadline = getattr(args, "wall_deadline", None)
-    job = spawn_contained_job(command, True, deadline)
+    job = spawn_contained_job(
+        command, True, deadline, cleanup_reserve=CONTAINED_JOB_CLEANUP_SECONDS
+    )
     cleanup_attempted = False
     try:
         returncode, output, timeout_reason = observe_attempt(
