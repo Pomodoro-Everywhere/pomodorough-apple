@@ -7,6 +7,7 @@ import argparse
 import codecs
 import ctypes
 from dataclasses import dataclass, field, replace
+import errno
 import hashlib
 import hmac
 import json
@@ -19,6 +20,7 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -91,6 +93,8 @@ CONTAINED_CHILD_ARGUMENT = "--contained-child"
 DIRECT_CHILD_ARGUMENT = "--direct-child"
 DIRECT_TARGET_ARGUMENT = "--direct-target"
 EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
+ATOMIC_WRITER_ARGUMENT = "--atomic-writer"
+DIRECTORY_SYNC_ARGUMENT = "--directory-sync"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
 LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
@@ -117,6 +121,18 @@ LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib") if sys.platform == "darwin" else
 LIBSANDBOX = (
     ctypes.CDLL("/usr/lib/libsandbox.1.dylib") if sys.platform == "darwin" else None
 )
+RENAME_SWAP = 0x00000002
+RENAME_EXCL = 0x00000004
+RENAME_NOFOLLOW_ANY = 0x00000010
+if sys.platform == "darwin":
+    LIBSYSTEM.renameatx_np.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    LIBSYSTEM.renameatx_np.restype = ctypes.c_int
 
 
 class ProcBSDInfo(ctypes.Structure):
@@ -1003,13 +1019,458 @@ def signal_identity(identity: ProcessIdentity, requested: signal.Signals) -> boo
     return identity_is_live(identity) and signal_pid(identity.pid, requested)
 
 
-def write_atomic_json(path: Path, value: object) -> None:
-    temporary = path.with_suffix(f".{secrets.token_hex(8)}.tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        json.dump(value, stream, sort_keys=True)
+def atomic_temporary_path(path: Path) -> Path:
+    return path.with_suffix(f".{secrets.token_hex(8)}.tmp")
+
+
+@dataclass
+class AtomicWrite:
+    destination: Path
+    temporary: Path
+    descriptor: int
+    directory_descriptor: int
+    directory_identity: tuple[int, int]
+    destination_name: str
+    temporary_name: str
+    destination_identity: tuple[int, int] | None
+    temporary_identity: tuple[int, int]
+    cleanup_identity: tuple[int, int] | None
+
+
+def atomic_file_identity(status: os.stat_result) -> tuple[int, int]:
+    return status.st_dev, status.st_ino
+
+
+def canonical_atomic_path(path: Path) -> Path:
+    if ".." in path.parts:
+        raise OSError("invalid atomic path")
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) > 1 and parts[1] in {"tmp", "var"}:
+        return Path("/private", *parts[1:])
+    return absolute
+
+
+def validated_atomic_paths(path: Path, temporary: Path) -> tuple[Path, Path]:
+    destination = canonical_atomic_path(path)
+    candidate = canonical_atomic_path(temporary)
+    prefix = f"{destination.with_suffix('').name}."
+    if candidate.parent != destination.parent:
+        raise OSError("invalid atomic temporary path")
+    if not candidate.name.startswith(prefix) or not candidate.name.endswith(".tmp"):
+        raise OSError("invalid atomic temporary path")
+    token = candidate.name[len(prefix) : -len(".tmp")]
+    expected = destination.with_suffix(f".{token}.tmp")
+    if not re.fullmatch(r"[0-9a-f]{16}", token) or candidate != expected:
+        raise OSError("invalid atomic temporary path")
+    return destination, candidate
+
+
+def close_atomic_descriptors(
+    descriptors: Iterable[int], primary_error: BaseException | None
+) -> None:
+    first_error = primary_error
+    for descriptor in descriptors:
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+            else:
+                append_error_detail(first_error, f"atomic descriptor close failed: {error}")
+    if primary_error is None and first_error is not None:
+        raise first_error
+
+
+def open_atomic_directory(path: Path) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptors = [os.open("/", flags)]
+    try:
+        for component in path.parts[1:]:
+            descriptors.append(os.open(component, flags, dir_fd=descriptors[-1]))
+    except BaseException as error:
+        close_atomic_descriptors(reversed(descriptors), error)
+        raise
+    directory_descriptor = descriptors.pop()
+    try:
+        close_atomic_descriptors(reversed(descriptors), None)
+    except BaseException as error:
+        close_atomic_descriptors((directory_descriptor,), error)
+        raise
+    return directory_descriptor
+
+
+def validate_atomic_directory(write: AtomicWrite) -> None:
+    descriptor = open_atomic_directory(write.destination.parent)
+    primary_error: BaseException | None = None
+    try:
+        identity = atomic_file_identity(os.fstat(descriptor))
+        if identity != write.directory_identity:
+            raise OSError("atomic destination directory changed")
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        close_atomic_descriptors((descriptor,), primary_error)
+
+
+def sync_atomic_directory(
+    write: AtomicWrite,
+    deadline: float | None = None,
+    label: str = "atomic directory synchronization",
+) -> None:
+    if deadline is None:
+        os.fsync(write.directory_descriptor)
+        return
+    sync_atomic_directory_bounded(write, deadline, label)
+
+
+def acknowledge_atomic_namespace(
+    write: AtomicWrite,
+    primary_error: BaseException,
+    label: str,
+    deadline: float | None = None,
+) -> None:
+    try:
+        sync_atomic_directory(write, deadline, label)
+    except BaseException as sync_error:
+        append_error_detail(primary_error, f"{label} durability failed: {sync_error}")
+
+
+def atomic_entry_identity(
+    write: AtomicWrite, name: str, label: str, missing: bool = False
+) -> tuple[int, int] | None:
+    try:
+        status = os.stat(
+            name, dir_fd=write.directory_descriptor, follow_symlinks=False
+        )
+    except FileNotFoundError:
+        if missing:
+            return None
+        raise OSError(f"{label} unavailable") from None
+    if not stat.S_ISREG(status.st_mode):
+        raise OSError(f"{label} is not a regular file")
+    if status.st_uid != os.geteuid() or status.st_nlink != 1:
+        raise OSError(f"untrusted {label} file")
+    return atomic_file_identity(status)
+
+
+def atomic_destination_identity(write: AtomicWrite) -> tuple[int, int] | None:
+    return atomic_entry_identity(
+        write, write.destination_name, "atomic destination", missing=True
+    )
+
+
+def atomic_entry_exists(write: AtomicWrite, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=write.directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def atomic_raw_identity(write: AtomicWrite, name: str) -> tuple[int, int] | None:
+    try:
+        status = os.stat(
+            name, dir_fd=write.directory_descriptor, follow_symlinks=False
+        )
+    except FileNotFoundError:
+        return None
+    return atomic_file_identity(status)
+
+
+def validate_atomic_temporary_file(write: AtomicWrite) -> None:
+    try:
+        descriptor_status = os.fstat(write.descriptor)
+        path_identity = atomic_entry_identity(
+            write, write.temporary_name, "atomic temporary file"
+        )
+    except OSError as error:
+        raise OSError("untrusted atomic temporary file") from error
+    trusted = (
+        stat.S_ISREG(descriptor_status.st_mode)
+        and descriptor_status.st_uid == os.geteuid()
+        and descriptor_status.st_nlink == 1
+        and atomic_file_identity(descriptor_status) == path_identity
+        and path_identity == write.temporary_identity
+    )
+    if not trusted:
+        raise OSError("untrusted atomic temporary file")
+
+
+def remove_atomic_temporary(
+    write: AtomicWrite,
+    primary_error: BaseException | None,
+    deadline: float | None = None,
+    label: str = "atomic temporary cleanup",
+) -> None:
+    try:
+        identity = atomic_entry_identity(
+            write, write.temporary_name, "atomic temporary file", missing=True
+        )
+    except OSError as error:
+        identity_error = OSError("atomic temporary cleanup identity changed")
+        if primary_error is None:
+            raise identity_error from error
+        append_error_detail(primary_error, str(identity_error))
+        return
+    if identity is None or write.cleanup_identity is None:
+        return
+    if identity != write.cleanup_identity:
+        cleanup_error = OSError("atomic temporary cleanup identity changed")
+        if primary_error is None:
+            raise cleanup_error
+        append_error_detail(primary_error, str(cleanup_error))
+        return
+    try:
+        os.unlink(write.temporary_name, dir_fd=write.directory_descriptor)
+        sync_atomic_directory(write, deadline, label)
+    except BaseException as cleanup_error:
+        if primary_error is None:
+            raise
+        append_error_detail(primary_error, f"atomic temporary cleanup failed: {cleanup_error}")
+
+
+def close_atomic_write(
+    write: AtomicWrite,
+    primary_error: BaseException | None,
+    deadline: float | None = None,
+    label: str = "atomic write",
+) -> None:
+    first_error = primary_error
+    try:
+        os.close(write.descriptor)
+    except BaseException as error:
+        if first_error is None:
+            first_error = error
+        else:
+            append_error_detail(
+                first_error, f"atomic descriptor close failed: {error}"
+            )
+    try:
+        validate_atomic_directory(write)
+    except BaseException as error:
+        if write.cleanup_identity != write.temporary_identity:
+            write.cleanup_identity = None
+        if first_error is None:
+            first_error = error
+        else:
+            append_error_detail(first_error, f"atomic directory changed: {error}")
+    try:
+        remove_atomic_temporary(write, first_error, deadline, f"{label} cleanup")
+    except BaseException as error:
+        if first_error is None:
+            first_error = error
+        else:
+            append_error_detail(first_error, f"atomic temporary cleanup failed: {error}")
+    try:
+        validate_atomic_directory(write)
+    except BaseException as error:
+        if first_error is None:
+            first_error = error
+        else:
+            append_error_detail(first_error, f"atomic directory changed: {error}")
+    close_atomic_descriptors((write.directory_descriptor,), first_error)
+    if primary_error is None and first_error is not None:
+        raise first_error
+
+
+def open_atomic_write(path: Path, temporary: Path | None = None) -> AtomicWrite:
+    temporary = temporary or atomic_temporary_path(path)
+    destination, candidate = validated_atomic_paths(path, temporary)
+    directory_descriptor = open_atomic_directory(destination.parent)
+    directory_identity = atomic_file_identity(os.fstat(directory_descriptor))
+    placeholder = AtomicWrite(
+        destination, candidate, -1, directory_descriptor,
+        directory_identity, destination.name, candidate.name,
+        None, (-1, -1), None,
+    )
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        destination_identity = atomic_destination_identity(placeholder)
+        if atomic_entry_exists(placeholder, candidate.name):
+            raise OSError("atomic temporary path already exists")
+        descriptor = os.open(candidate.name, flags, 0o600, dir_fd=directory_descriptor)
+    except BaseException as error:
+        close_atomic_descriptors((directory_descriptor,), error)
+        raise
+    temporary_identity = atomic_file_identity(os.fstat(descriptor))
+    write = AtomicWrite(
+        destination, candidate, descriptor, directory_descriptor,
+        directory_identity, destination.name, candidate.name, destination_identity,
+        temporary_identity, temporary_identity,
+    )
+    try:
+        validate_atomic_temporary_file(write)
+        validate_atomic_directory(write)
+    except BaseException as error:
+        close_atomic_write(write, error)
+        raise
+    return write
+
+
+def write_atomic_descriptor(descriptor: int, content: bytes) -> None:
+    stream = os.fdopen(os.dup(descriptor), "wb")
+    primary_error: BaseException | None = None
+    try:
+        stream.write(content)
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            stream.close()
+        except BaseException as close_error:
+            if primary_error is None:
+                raise
+            append_error_detail(primary_error, f"atomic stream close failed: {close_error}")
+
+
+def rename_atomic_entries(
+    write: AtomicWrite, source: str, destination: str, flags: int
+) -> None:
+    validate_atomic_rename_entries(write, source, destination)
+    if sys.platform != "darwin" or not hasattr(LIBSYSTEM, "renameatx_np"):
+        raise OSError(errno.ENOTSUP, "secure atomic replacement unavailable")
+    result = LIBSYSTEM.renameatx_np(
+        write.directory_descriptor,
+        os.fsencode(source),
+        write.directory_descriptor,
+        os.fsencode(destination),
+        flags,
+    )
+    if result != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def validate_atomic_rename_entries(
+    write: AtomicWrite, source: str, destination: str
+) -> None:
+    if source == write.temporary_name and destination == write.destination_name:
+        source_identity = write.temporary_identity
+        destination_identity = write.destination_identity
+    elif source == write.destination_name and destination == write.temporary_name:
+        source_identity = write.temporary_identity
+        destination_identity = write.destination_identity
+    else:
+        raise OSError("invalid atomic replacement operation")
+    if atomic_raw_identity(write, source) != source_identity:
+        raise OSError("atomic replacement source identity changed")
+    if atomic_raw_identity(write, destination) != destination_identity:
+        raise OSError("atomic replacement destination identity changed")
+
+
+def rollback_atomic_install(
+    write: AtomicWrite,
+    had_destination: bool,
+    deadline: float | None = None,
+    label: str = "atomic replacement rollback",
+) -> None:
+    write.cleanup_identity = None
+    installed = atomic_raw_identity(write, write.destination_name)
+    displaced = atomic_raw_identity(write, write.temporary_name)
+    if had_destination:
+        if (
+            installed != write.temporary_identity
+            or displaced != write.destination_identity
+        ):
+            raise OSError("atomic replacement rollback identity changed")
+        rename_atomic_entries(
+            write, write.destination_name, write.temporary_name,
+            RENAME_SWAP | RENAME_NOFOLLOW_ANY,
+        )
+    else:
+        if installed != write.temporary_identity or displaced is not None:
+            raise OSError("atomic replacement rollback identity changed")
+        rename_atomic_entries(
+            write, write.destination_name, write.temporary_name,
+            RENAME_EXCL | RENAME_NOFOLLOW_ANY,
+        )
+    try:
+        restored = atomic_raw_identity(write, write.destination_name)
+        retained = atomic_raw_identity(write, write.temporary_name)
+        if restored != write.destination_identity or retained != write.temporary_identity:
+            raise OSError("atomic replacement rollback failed")
+    except BaseException as error:
+        acknowledge_atomic_namespace(write, error, label, deadline)
+        raise
+    write.cleanup_identity = write.temporary_identity
+    sync_atomic_directory(write, deadline, label)
+
+
+def verify_atomic_install(write: AtomicWrite, had_destination: bool) -> None:
+    installed = atomic_entry_identity(
+        write, write.destination_name, "atomic destination"
+    )
+    if installed != write.temporary_identity:
+        raise OSError("atomic replacement installed unexpected file")
+    displaced = atomic_entry_identity(
+        write, write.temporary_name, "atomic displaced file", missing=True
+    )
+    expected = write.destination_identity if had_destination else None
+    if displaced != expected:
+        raise OSError("atomic replacement displaced unexpected file")
+    write.cleanup_identity = displaced
+
+
+def commit_atomic_write(
+    write: AtomicWrite,
+    deadline: float | None = None,
+    label: str = "atomic replacement",
+) -> None:
+    validate_atomic_directory(write)
+    if atomic_destination_identity(write) != write.destination_identity:
+        raise OSError("atomic destination changed before replacement")
+    validate_atomic_temporary_file(write)
+    had_destination = write.destination_identity is not None
+    flags = RENAME_SWAP if had_destination else RENAME_EXCL
+    try:
+        rename_atomic_entries(
+            write, write.temporary_name, write.destination_name,
+            flags | RENAME_NOFOLLOW_ANY,
+        )
+    except BaseException as error:
+        acknowledge_atomic_namespace(write, error, label, deadline)
+        raise
+    try:
+        verify_atomic_install(write, had_destination)
+        validate_atomic_directory(write)
+        sync_atomic_directory(write, deadline, label)
+        validate_atomic_directory(write)
+    except BaseException as error:
+        try:
+            rollback_atomic_install(write, had_destination, deadline, f"{label} rollback")
+        except BaseException as rollback_error:
+            append_error_detail(
+                error, f"atomic replacement rollback failed: {rollback_error}"
+            )
+            acknowledge_atomic_namespace(
+                write, error, f"{label} failure", deadline
+            )
+        raise
+
+
+def write_atomic_bytes(
+    path: Path, content: bytes, temporary: Path | None = None
+) -> None:
+    write = open_atomic_write(path, temporary)
+    primary_error: BaseException | None = None
+    try:
+        write_atomic_descriptor(write.descriptor, content)
+        commit_atomic_write(write)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        close_atomic_write(write, primary_error)
+
+
+def write_atomic_json(path: Path, value: object) -> None:
+    content = json.dumps(value, sort_keys=True).encode("utf-8")
+    write_atomic_bytes(path, content)
 
 
 def identity_payload(identity: ProcessIdentity) -> dict[str, object]:
@@ -1798,7 +2259,7 @@ def cleanup_direct_spawn(
     return list(dict.fromkeys(errors))
 
 
-def append_error_detail(error: Exception, detail: str) -> None:
+def append_error_detail(error: BaseException, detail: str) -> None:
     if isinstance(error, OSError) and error.strerror is not None:
         error.strerror = f"{error.strerror}; {detail}"
     elif len(error.args) == 1 and isinstance(error.args[0], str):
@@ -1807,7 +2268,7 @@ def append_error_detail(error: Exception, detail: str) -> None:
         error.add_note(detail)
 
 
-def append_cleanup_errors(error: Exception, label: str, errors: list[str]) -> None:
+def append_cleanup_errors(error: BaseException, label: str, errors: list[str]) -> None:
     details = list(dict.fromkeys(errors))
     if details:
         append_error_detail(error, f"{label}: {'; '.join(details)}")
@@ -2019,11 +2480,18 @@ def launchctl_deadlines(
     process_cleanup_deadline: float | None,
 ) -> tuple[float, float, float]:
     command_by = started_at + LAUNCHCTL_AUTHENTICATION_SECONDS + maximum
-    if deadline is not None:
-        command_by = min(command_by, deadline)
-    cleanup_by = command_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
-    if process_cleanup_deadline is not None:
+    if process_cleanup_deadline is None:
+        cleanup_by = command_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+        if deadline is not None:
+            cleanup_by = min(cleanup_by, deadline)
+        command_by = min(
+            command_by,
+            cleanup_by - LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
+        )
+    else:
         cleanup_by = process_cleanup_deadline
+        if deadline is not None:
+            command_by = min(command_by, deadline)
         command_by = min(
             command_by,
             cleanup_by - LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
@@ -2189,12 +2657,28 @@ def await_containment_handshake(
 
 
 def write_containment_acknowledgement(
-    job: LaunchdJob, acknowledgement_token: str, coalition_id: int
+    job: LaunchdJob,
+    acknowledgement_token: str,
+    coalition_id: int,
+    deadline: float | None,
 ) -> None:
-    write_atomic_json(
-        job.acknowledgement_path,
-        {"token": acknowledgement_token, "resource_coalition_id": coalition_id},
-    )
+    payload = {"token": acknowledgement_token, "resource_coalition_id": coalition_id}
+    try:
+        if deadline is None:
+            write_atomic_json(job.acknowledgement_path, payload)
+        else:
+            content = json.dumps(payload, sort_keys=True).encode("utf-8")
+            write_bytes_bounded(
+                job.acknowledgement_path,
+                content,
+                deadline,
+                ATOMIC_WRITER_ARGUMENT,
+                "containment acknowledgement",
+            )
+    except OSError as error:
+        raise SimulatorLifecycleError(
+            f"containment acknowledgement write failed: {error}"
+        ) from error
 
 
 def containment_setup_cleanup_errors(
@@ -2255,7 +2739,11 @@ def spawn_contained_job(
         validate_containment_sidecar(
             bound_job, wrapper_identity, containment_payload
         )
-        write_containment_acknowledgement(job, acknowledgement_token, coalition_id)
+        write_containment_acknowledgement(
+            job, acknowledgement_token, coalition_id, setup_deadline
+        )
+        if setup_deadline is not None and time.monotonic() >= setup_deadline:
+            raise SimulatorLifecycleError("containment setup deadline expired")
         return bound_job
     except Exception as error:
         cleanup_errors = containment_setup_cleanup_errors(
@@ -3492,48 +3980,164 @@ def write_timeout_evidence(
         raise errors[0]
 
 
-def terminate_evidence_writer(
-    process: subprocess.Popen[bytes], deadline: float
+def terminate_bounded_writer(
+    process: subprocess.Popen[bytes], deadline: float, label: str
 ) -> None:
     if process.poll() is not None:
         return
+    errors: list[str] = []
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    except OSError as error:
+        errors.append(f"kill failed: {error}")
     timeout = bounded_wait(deadline, EVIDENCE_WRITER_CLEANUP_SECONDS)
     try:
         process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired as error:
-        raise OSError("timeout evidence writer could not be terminated") from error
+    except subprocess.TimeoutExpired:
+        errors.append("could not be terminated")
+    except OSError as error:
+        errors.append(f"reap failed: {error}")
+    if errors:
+        raise OSError(f"{label} writer {'; '.join(errors)}")
 
 
-def write_text_bounded(path: Path, content: str, deadline: float) -> None:
+def append_bounded_writer_cleanup(
+    error: BaseException,
+    process: subprocess.Popen[bytes],
+    deadline: float,
+    label: str,
+) -> None:
+    errors: list[str] = []
+    record_cleanup_failure(
+        errors, "", lambda: terminate_bounded_writer(process, deadline, label)
+    )
+    for stream_label, stream in (("stdin", process.stdin), ("stderr", process.stderr)):
+        if stream is not None:
+            record_cleanup_failure(errors, f"{stream_label} close failed", stream.close)
+    append_cleanup_errors(error, f"{label} writer cleanup failed", errors)
+
+
+def communicate_bounded_writer(
+    process: subprocess.Popen[bytes], content: bytes, deadline: float, label: str
+) -> bytes:
+    write_timeout = deadline - time.monotonic() - EVIDENCE_WRITER_CLEANUP_SECONDS
+    try:
+        if write_timeout <= 0:
+            raise subprocess.TimeoutExpired(process.args, 0)
+        _, stderr = process.communicate(content, timeout=write_timeout)
+        return stderr
+    except subprocess.TimeoutExpired as cause:
+        error = OSError(f"{label} write deadline expired")
+        append_bounded_writer_cleanup(error, process, deadline, label)
+        raise error from cause
+    except BaseException as error:
+        append_bounded_writer_cleanup(error, process, deadline, label)
+        raise
+
+
+def bounded_writer_command(
+    path: Path, writer_argument: str, write: AtomicWrite | None
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        writer_argument,
+        str(path),
+    ]
+    if write is None:
+        return command
+    return [
+        *command,
+        str(write.temporary),
+        str(write.descriptor),
+        str(write.directory_descriptor),
+    ]
+
+
+def bounded_atomic_commit(
+    write: AtomicWrite, deadline: float, label: str
+) -> None:
+    if time.monotonic() >= deadline:
+        raise OSError(f"{label} write deadline expired")
+    commit_atomic_write(write, deadline, f"{label} directory synchronization")
+
+
+def sync_atomic_directory_bounded(
+    write: AtomicWrite, deadline: float, label: str
+) -> None:
     remaining = deadline - time.monotonic()
-    write_timeout = remaining - EVIDENCE_WRITER_CLEANUP_SECONDS
-    if write_timeout <= 0:
-        raise OSError("timeout evidence write deadline expired")
+    if remaining <= EVIDENCE_WRITER_CLEANUP_SECONDS:
+        raise OSError(f"{label} deadline expired")
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        DIRECTORY_SYNC_ARGUMENT,
+        str(write.directory_descriptor),
+    ]
     process = subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve()), EVIDENCE_WRITER_ARGUMENT, str(path)],
+        command,
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        pass_fds=(write.directory_descriptor,),
     )
-    try:
-        _, stderr = process.communicate(content.encode("utf-8"), timeout=write_timeout)
-    except subprocess.TimeoutExpired as error:
-        try:
-            terminate_evidence_writer(process, deadline)
-        finally:
-            if process.stdin is not None:
-                process.stdin.close()
-            if process.stderr is not None:
-                process.stderr.close()
-        raise OSError("timeout evidence write deadline expired") from error
+    stderr = communicate_bounded_writer(process, b"", deadline, label)
     if process.returncode != 0:
         message = stderr.decode("utf-8", "replace").strip()
-        raise OSError(message or "timeout evidence writer failed")
+        raise OSError(message or f"{label} failed")
+
+
+def write_bytes_bounded(
+    path: Path,
+    content: bytes,
+    deadline: float,
+    writer_argument: str,
+    label: str,
+) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= EVIDENCE_WRITER_CLEANUP_SECONDS:
+        raise OSError(f"{label} write deadline expired")
+    write = open_atomic_write(path) if writer_argument == ATOMIC_WRITER_ARGUMENT else None
+    command = bounded_writer_command(path, writer_argument, write)
+    primary_error: BaseException | None = None
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            pass_fds=(
+                ()
+                if write is None
+                else (write.descriptor, write.directory_descriptor)
+            ),
+        )
+        stderr = communicate_bounded_writer(process, content, deadline, label)
+        if process.returncode != 0:
+            message = stderr.decode("utf-8", "replace").strip()
+            raise OSError(message or f"{label} writer failed")
+        if write is not None:
+            bounded_atomic_commit(write, deadline, label)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        if write is not None:
+            close_atomic_write(write, primary_error, deadline, label)
+
+
+def write_text_bounded(path: Path, content: str, deadline: float) -> None:
+    write_bytes_bounded(
+        path,
+        content.encode("utf-8"),
+        deadline,
+        EVIDENCE_WRITER_ARGUMENT,
+        "timeout evidence",
+    )
 
 
 def read_job_bytes_now(path: Path, offset: int) -> tuple[bytes, int]:
@@ -4232,8 +4836,10 @@ def run_attempt(
     if remaining is not None and remaining <= required_reserve:
         raise SimulatorLifecycleError("wall timeout exhausted before xcodebuild")
     deadline = getattr(args, "wall_deadline", None)
+    setup_deadline = reserved_deadline(deadline, TIMEOUT_EVIDENCE_SECONDS)
     job = spawn_contained_job(
-        command, True, deadline, cleanup_reserve=CONTAINED_JOB_CLEANUP_SECONDS
+        command, True, setup_deadline, bootstrap_maximum=LIFECYCLE_BOOTSTRAP_SECONDS,
+        cleanup_reserve=CONTAINED_JOB_CLEANUP_SECONDS,
     )
     cleanup_attempted = False
     try:
@@ -4446,6 +5052,109 @@ def run_evidence_writer(arguments: list[str]) -> int:
     return 0
 
 
+def run_directory_sync(arguments: list[str]) -> int:
+    if len(arguments) != 2:
+        print("invalid directory-sync arguments", file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    try:
+        os.fsync(int(arguments[1]))
+    except (OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    return 0
+
+
+def inherited_atomic_write(
+    path: Path,
+    temporary: Path,
+    descriptor: int,
+    directory_descriptor: int,
+) -> AtomicWrite:
+    destination, candidate = validated_atomic_paths(path, temporary)
+    temporary_identity = atomic_file_identity(os.fstat(descriptor))
+    directory_identity = atomic_file_identity(os.fstat(directory_descriptor))
+    write = AtomicWrite(
+        destination,
+        candidate,
+        descriptor,
+        directory_descriptor,
+        directory_identity,
+        destination.name,
+        candidate.name,
+        None,
+        temporary_identity,
+        temporary_identity,
+    )
+    validate_atomic_directory(write)
+    write.destination_identity = atomic_destination_identity(write)
+    return write
+
+
+def write_inherited_atomic_temporary(
+    path: Path,
+    temporary: Path,
+    descriptor: int,
+    directory_descriptor: int,
+    content: bytes,
+) -> None:
+    primary_error: BaseException | None = None
+    try:
+        write = inherited_atomic_write(
+            path, temporary, descriptor, directory_descriptor
+        )
+        validate_atomic_temporary_file(write)
+        write_atomic_descriptor(descriptor, content)
+        validate_atomic_temporary_file(write)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        close_atomic_descriptors(
+            (descriptor, directory_descriptor), primary_error
+        )
+
+
+def write_direct_atomic_temporary(
+    path: Path, temporary: Path, content: bytes
+) -> None:
+    write = open_atomic_write(path, temporary)
+    primary_error: BaseException | None = None
+    try:
+        write_atomic_descriptor(write.descriptor, content)
+        validate_atomic_temporary_file(write)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        close_atomic_write(write, primary_error)
+
+
+def run_atomic_writer(arguments: list[str]) -> int:
+    if len(arguments) not in (3, 5):
+        print("invalid atomic-writer arguments", file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    try:
+        path = Path(arguments[1])
+        temporary = Path(arguments[2])
+        if os.path.normpath(arguments[2]) != arguments[2]:
+            raise OSError("invalid atomic temporary path")
+        content = sys.stdin.buffer.read()
+        if len(arguments) == 3:
+            write_direct_atomic_temporary(path, temporary, content)
+        else:
+            write_inherited_atomic_temporary(
+                path,
+                temporary,
+                int(arguments[3]),
+                int(arguments[4]),
+                content,
+            )
+    except (OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    return 0
+
+
 def main() -> int:
     if sys.argv[1:2] == [CONTAINED_CHILD_ARGUMENT]:
         return run_contained_child(sys.argv[1:])
@@ -4455,6 +5164,10 @@ def main() -> int:
         return run_direct_target(sys.argv[1:])
     if sys.argv[1:2] == [EVIDENCE_WRITER_ARGUMENT]:
         return run_evidence_writer(sys.argv[1:])
+    if sys.argv[1:2] == [ATOMIC_WRITER_ARGUMENT]:
+        return run_atomic_writer(sys.argv[1:])
+    if sys.argv[1:2] == [DIRECTORY_SYNC_ARGUMENT]:
+        return run_directory_sync(sys.argv[1:])
     return run(parse_args())
 
 

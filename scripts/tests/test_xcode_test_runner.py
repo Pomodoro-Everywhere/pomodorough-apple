@@ -10,6 +10,7 @@ import select
 import signal
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -96,9 +97,413 @@ def authenticated_direct_spawn(
 def lifecycle_test_deadline() -> float:
     return (
         time.monotonic()
+        + run_xcode_tests.LAUNCHCTL_AUTHENTICATION_SECONDS
         + run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
+        + run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+        + run_xcode_tests.CONTAINMENT_HANDSHAKE_SECONDS
         + run_xcode_tests.LIFECYCLE_CLEANUP_SECONDS
     )
+
+
+def launchctl_test_deadline(command_window: float = 1.0) -> float:
+    return (
+        time.monotonic()
+        + command_window
+        + run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    )
+
+
+def explicit_atomic_temporary(path: Path, token: str = "0123456789abcdef") -> Path:
+    return path.with_suffix(f".{token}.tmp")
+
+
+def invoke_atomic_writer(
+    target: Path, temporary: Path | None, content: bytes = b"acknowledgement"
+) -> tuple[int, str]:
+    stdin = mock.Mock()
+    stdin.buffer.read.return_value = content
+    stderr = io.StringIO()
+    arguments = [run_xcode_tests.ATOMIC_WRITER_ARGUMENT, str(target)]
+    if temporary is not None:
+        arguments.append(str(temporary))
+    with mock.patch.object(
+        run_xcode_tests.sys, "stdin", stdin
+    ), mock.patch.object(run_xcode_tests.sys, "stderr", stderr):
+        result = run_xcode_tests.run_atomic_writer(arguments)
+    return result, stderr.getvalue()
+
+
+def late_atomic_commit_popen(
+    release: threading.Event,
+    finished: threading.Event,
+    commit_errors: list[OSError],
+    threads: list[threading.Thread],
+) -> Callable[..., subprocess.Popen[bytes]]:
+    def spawn(command: list[str], **options: object) -> subprocess.Popen[bytes]:
+        inherited = options["pass_fds"]  # type: ignore[assignment]
+        descriptor = os.dup(inherited[0])
+        directory_descriptor = os.dup(inherited[1])
+        started = threading.Event()
+        process = mock.Mock()
+        process.args = command
+        process.pid = 4321
+        process.returncode = None
+        process.poll.return_value = None
+        process.wait.side_effect = subprocess.TimeoutExpired(command, 0.01)
+        process.stdin.close.side_effect = OSError("forced stdin close failure")
+        process.stderr.close.side_effect = OSError("forced stderr close failure")
+
+        def communicate(content: bytes, timeout: float) -> tuple[bytes, bytes]:
+            def finish() -> None:
+                try:
+                    os.write(descriptor, content)
+                    started.set()
+                    release.wait(2)
+                    os.fsync(descriptor)
+                    os.stat(
+                        Path(command[-3]).name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
+                except OSError as error:
+                    commit_errors.append(error)
+                finally:
+                    os.close(descriptor)
+                    os.close(directory_descriptor)
+                    finished.set()
+
+            thread = threading.Thread(target=finish)
+            threads.append(thread)
+            thread.start()
+            started.wait(1)
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        process.communicate.side_effect = communicate
+        return process
+
+    return spawn
+
+
+def replace_atomic_entry(path: Path, attacker: Path, replacement: str) -> None:
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    if replacement == "symlink":
+        path.symlink_to(attacker)
+    elif replacement == "hardlink":
+        os.link(attacker, path)
+    else:
+        staged = path.with_name(f"{path.name}.{replacement}")
+        staged.write_bytes(replacement.encode())
+        if replacement == "rename":
+            os.rename(staged, path)
+        else:
+            path.write_bytes(staged.read_bytes())
+            staged.unlink()
+
+
+def atomic_race_rename(
+    raced_path: Path, attacker: Path, replacement: str
+) -> Callable[[run_xcode_tests.AtomicWrite, str, str, int], None]:
+    original = run_xcode_tests.rename_atomic_entries
+    pending = True
+
+    def rename(
+        write: run_xcode_tests.AtomicWrite,
+        source: str,
+        destination: str,
+        flags: int,
+    ) -> None:
+        nonlocal pending
+        if pending:
+            pending = False
+            replace_atomic_entry(raced_path, attacker, replacement)
+        original(write, source, destination, flags)
+
+    return rename
+
+
+def assert_atomic_race_outcome(
+    test: unittest.TestCase,
+    target: Path,
+    temporary: Path,
+    attacker: Path,
+    raced_entry: str,
+    replacement: str,
+    had_destination: bool,
+) -> None:
+    test.assertEqual(attacker.read_bytes(), b"attacker")
+    if raced_entry == "temporary":
+        test.assertEqual(target.exists(), had_destination)
+        if had_destination:
+            test.assertEqual(target.read_bytes(), b"original")
+        test.assertTrue(temporary.exists() or temporary.is_symlink())
+        return
+    test.assertFalse(temporary.exists() or temporary.is_symlink())
+    if replacement == "symlink":
+        test.assertEqual(target.readlink(), attacker)
+    else:
+        expected = b"attacker" if replacement == "hardlink" else replacement.encode()
+        test.assertEqual(target.read_bytes(), expected)
+
+
+def replace_atomic_directory(
+    parent: Path, moved: Path, attacker_parent: Path, replacement: str
+) -> None:
+    parent.rename(moved)
+    if replacement == "symlink":
+        parent.symlink_to(attacker_parent, target_is_directory=True)
+    else:
+        parent.mkdir()
+    (parent / "acknowledgement.json").write_bytes(b"attacker")
+
+
+def atomic_directory_race(
+    parent: Path,
+    moved: Path,
+    attacker_parent: Path,
+    replacement: str,
+    phase: str,
+) -> Callable[[run_xcode_tests.AtomicWrite, str, str, int], None]:
+    original = run_xcode_tests.rename_atomic_entries
+    pending = True
+
+    def rename(
+        write: run_xcode_tests.AtomicWrite,
+        source: str,
+        destination: str,
+        flags: int,
+    ) -> None:
+        nonlocal pending
+        race = pending
+        pending = False
+        if race and phase == "during":
+            replace_atomic_directory(parent, moved, attacker_parent, replacement)
+        original(write, source, destination, flags)
+        if race and phase == "after":
+            replace_atomic_directory(parent, moved, attacker_parent, replacement)
+
+    return rename
+
+
+def assert_atomic_directory_race(
+    test: unittest.TestCase, phase: str, replacement: str, original: bytes | None
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        parent = root / "owned"
+        parent.mkdir()
+        moved = root / "moved"
+        attacker_parent = root / "attacker"
+        attacker_parent.mkdir()
+        target = parent / "acknowledgement.json"
+        if original is not None:
+            target.write_bytes(original)
+        write = run_xcode_tests.open_atomic_write(target)
+        primary: BaseException | None = None
+        try:
+            run_xcode_tests.write_atomic_descriptor(write.descriptor, b"replacement")
+            if phase == "before":
+                replace_atomic_directory(parent, moved, attacker_parent, replacement)
+                run_xcode_tests.commit_atomic_write(write)
+            else:
+                rename = atomic_directory_race(
+                    parent, moved, attacker_parent, replacement, phase
+                )
+                with mock.patch.object(
+                    run_xcode_tests, "rename_atomic_entries", side_effect=rename
+                ):
+                    run_xcode_tests.commit_atomic_write(write)
+        except BaseException as error:
+            primary = error
+        finally:
+            run_xcode_tests.close_atomic_write(write, primary)
+        test.assertIsInstance(primary, OSError)
+        test.assertEqual((parent / target.name).read_bytes(), b"attacker")
+        test.assertEqual((moved / target.name).exists(), original is not None)
+        if original is not None:
+            test.assertEqual((moved / target.name).read_bytes(), original)
+        test.assertEqual(list(moved.glob("acknowledgement.*.tmp")), [])
+
+
+def assert_displaced_temp_replacement_rejected(
+    test: unittest.TestCase, replacement: str
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        target = root / "acknowledgement.json"
+        target.write_bytes(b"original")
+        temporary = explicit_atomic_temporary(target)
+        attacker = root / "attacker.json"
+        attacker.write_bytes(b"attacker")
+        original_rename = run_xcode_tests.rename_atomic_entries
+        pending = True
+
+        def replace_after_rename(
+            write: run_xcode_tests.AtomicWrite,
+            source: str,
+            destination: str,
+            flags: int,
+        ) -> None:
+            nonlocal pending
+            original_rename(write, source, destination, flags)
+            if pending:
+                pending = False
+                replace_atomic_entry(temporary, attacker, replacement)
+
+        with mock.patch.object(
+            run_xcode_tests,
+            "rename_atomic_entries",
+            side_effect=replace_after_rename,
+        ), test.assertRaisesRegex(OSError, "rollback identity changed"):
+            run_xcode_tests.write_atomic_bytes(target, b"replacement", temporary)
+        test.assertEqual(target.read_bytes(), b"replacement")
+        test.assertNotEqual(target.stat().st_ino, attacker.stat().st_ino)
+        test.assertTrue(temporary.exists() or temporary.is_symlink())
+
+
+def assert_rollback_substitution_rejected(
+    test: unittest.TestCase, raced_entry: str
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        target = root / "acknowledgement.json"
+        target.write_bytes(b"original")
+        temporary = explicit_atomic_temporary(target)
+        attacker = root / "attacker.json"
+        attacker.write_bytes(b"attacker")
+        original_rename = run_xcode_tests.rename_atomic_entries
+        original_fsync = os.fsync
+        rename_calls = 0
+        directory_syncs = 0
+
+        def substitute_before_rollback(*arguments: object) -> None:
+            nonlocal rename_calls
+            rename_calls += 1
+            if rename_calls == 2:
+                raced = target if raced_entry == "destination" else temporary
+                replace_atomic_entry(raced, attacker, "hardlink")
+            original_rename(*arguments)  # type: ignore[arg-type]
+
+        def fail_commit_sync(descriptor: int) -> None:
+            nonlocal directory_syncs
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                directory_syncs += 1
+                if directory_syncs == 1:
+                    raise OSError("forced commit fsync failure")
+            original_fsync(descriptor)
+
+        with mock.patch.object(
+            run_xcode_tests,
+            "rename_atomic_entries",
+            side_effect=substitute_before_rollback,
+        ), mock.patch.object(
+            run_xcode_tests.os, "fsync", side_effect=fail_commit_sync
+        ), test.assertRaisesRegex(OSError, "rollback failed.*identity changed"):
+            run_xcode_tests.write_atomic_bytes(target, b"replacement", temporary)
+        if raced_entry == "destination":
+            test.assertEqual(temporary.read_bytes(), b"original")
+        else:
+            test.assertEqual(target.read_bytes(), b"replacement")
+
+
+def directory_sync_control_environment(
+    root: Path, actions: tuple[str, ...]
+) -> dict[str, str]:
+    control = root / "directory-sync-control"
+    marker = root / "directory-sync-hung-pid"
+    (root / "sitecustomize.py").write_text(
+        textwrap.dedent(
+            """
+            import errno
+            import os
+            from pathlib import Path
+            import sys
+            import time
+
+            if "--directory-sync" in sys.argv:
+                real_fsync = os.fsync
+                def controlled_fsync(descriptor):
+                    control = Path(os.environ["POMODOROUGH_SYNC_CONTROL"])
+                    count = int(control.read_text()) if control.exists() else 0
+                    control.write_text(str(count + 1))
+                    actions = os.environ["POMODOROUGH_SYNC_ACTIONS"].split(",")
+                    action = actions[count] if count < len(actions) else "ok"
+                    if action == "error":
+                        raise OSError(errno.EIO, "forced directory sync failure")
+                    if action == "hang":
+                        Path(os.environ["POMODOROUGH_SYNC_MARKER"]).write_text(
+                            str(os.getpid())
+                        )
+                        time.sleep(30)
+                    real_fsync(descriptor)
+                os.fsync = controlled_fsync
+            """
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "PYTHONPATH": str(root),
+        "POMODOROUGH_SYNC_ACTIONS": ",".join(actions),
+        "POMODOROUGH_SYNC_CONTROL": str(control),
+        "POMODOROUGH_SYNC_MARKER": str(marker),
+    }
+
+
+def assert_hung_sync_reaped(test: unittest.TestCase, root: Path) -> None:
+    process_id = int((root / "directory-sync-hung-pid").read_text())
+    with test.assertRaises(ProcessLookupError):
+        os.kill(process_id, 0)
+
+
+HOSTED_ATTEMPT_WALL_TIMEOUT = (
+    run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+    + run_xcode_tests.TIMEOUT_EVIDENCE_SECONDS
+    + run_xcode_tests.LAUNCHCTL_AUTHENTICATION_SECONDS
+    + run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
+    + run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    + run_xcode_tests.CONTAINMENT_HANDSHAKE_SECONDS
+)
+
+
+def simulated_launchctl_delay(
+    delay: float,
+) -> subprocess.CompletedProcess[str]:
+    clock = [0.0]
+    job = direct_job(Path("/tmp/ap13-launchctl-bootstrap"))
+
+    def spawn(*_arguments: object, **options: object) -> run_xcode_tests.DirectJob:
+        callback = options.get("authenticated")
+        if not callable(callback):
+            raise AssertionError("missing direct authentication callback")
+        clock[0] = run_xcode_tests.LAUNCHCTL_AUTHENTICATION_SECONDS
+        callback()
+        return job
+
+    def complete(
+        _job: run_xcode_tests.DirectJob,
+        timeout: float,
+        _deadline: float,
+        _cleanup_reserve: float,
+    ) -> run_xcode_tests.DirectCompletion:
+        clock[0] += min(delay, timeout)
+        returncode = 0 if delay <= timeout + 1e-9 else None
+        return run_xcode_tests.DirectCompletion(returncode, "", "", None)
+
+    total_deadline = (
+        run_xcode_tests.LAUNCHCTL_AUTHENTICATION_SECONDS
+        + run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
+        + run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    )
+    with mock.patch.object(
+        run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+    ), mock.patch.object(
+        run_xcode_tests, "spawn_direct_job", side_effect=spawn
+    ), mock.patch.object(
+        run_xcode_tests, "complete_direct_job", side_effect=complete
+    ):
+        return run_xcode_tests.launchctl_run(
+            [], total_deadline, run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
+        )
 
 
 def direct_frame(
@@ -2717,6 +3122,730 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests.validate_containment_sidecar(job, wrapper, payload)
         self.assertFalse(job.acknowledgement_path.exists())
 
+    def test_acknowledgement_fsync_timeout_fails_closed_without_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "fsync-entered"
+            (root / "sitecustomize.py").write_text(
+                textwrap.dedent(
+                    """
+                    import os
+                    import sys
+                    import time
+                    if "--atomic-writer" in sys.argv:
+                        def delayed_fsync(_descriptor):
+                            open(os.environ["POMODOROUGH_FSYNC_MARKER"], "w").close()
+                            time.sleep(30)
+                        os.fsync = delayed_fsync
+                    """
+                ),
+                encoding="utf-8",
+            )
+            job = launchd_job(root)
+            deadline = time.monotonic() + 1.0
+            original_popen = subprocess.Popen
+            writers: list[subprocess.Popen[bytes]] = []
+
+            def capture_writer(*arguments: object, **options: object) -> object:
+                writer = original_popen(*arguments, **options)
+                writers.append(writer)
+                return writer
+
+            environment = {
+                "PYTHONPATH": str(root),
+                "POMODOROUGH_FSYNC_MARKER": str(marker),
+            }
+            with mock.patch.dict(os.environ, environment), mock.patch.object(
+                run_xcode_tests.subprocess, "Popen", side_effect=capture_writer
+            ), self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError, "write deadline expired"
+            ):
+                run_xcode_tests.write_containment_acknowledgement(
+                    job, "token", 77, deadline
+                )
+            finished = time.monotonic()
+            self.assertTrue(marker.exists())
+            self.assertFalse(job.acknowledgement_path.exists())
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+        self.assertEqual(len(writers), 1)
+        self.assertIsNotNone(writers[0].poll())
+        self.assertLess(finished, deadline + 0.25)
+
+    def test_atomic_stream_failures_remove_temporary_file(self) -> None:
+        for operation in ("write", "flush"):
+            with self.subTest(
+                operation=operation
+            ), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = root / "acknowledgement.json"
+                temporary = explicit_atomic_temporary(target)
+                real_fdopen = os.fdopen
+
+                def failing_fdopen(descriptor: int, mode: str) -> mock.MagicMock:
+                    real_stream = real_fdopen(descriptor, mode)
+                    stream = mock.MagicMock(wraps=real_stream)
+                    getattr(stream, operation).side_effect = OSError(
+                        f"forced {operation} failure"
+                    )
+                    return stream
+
+                with mock.patch.object(
+                    run_xcode_tests.os, "fdopen", side_effect=failing_fdopen
+                ), self.assertRaisesRegex(OSError, f"forced {operation} failure"):
+                    run_xcode_tests.write_atomic_bytes(
+                        target, b"acknowledgement", temporary
+                    )
+                self.assertEqual(list(root.iterdir()), [])
+
+    def test_direct_atomic_writer_fsync_failure_removes_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            with mock.patch.object(
+                run_xcode_tests.os,
+                "fsync",
+                side_effect=OSError("forced fsync failure"),
+            ):
+                result, _ = invoke_atomic_writer(target, temporary)
+            self.assertEqual(result, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(temporary.exists())
+
+    def test_direct_atomic_writer_rejects_unowned_temporary_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            valid_name = explicit_atomic_temporary(target).name
+            paths = (
+                target,
+                root / "other" / valid_name,
+                target.with_suffix(".0123456789abcdeg.tmp"),
+                root / "nested" / ".." / valid_name,
+            )
+            for temporary in paths:
+                with self.subTest(temporary=temporary):
+                    result, stderr = invoke_atomic_writer(target, temporary)
+                    self.assertEqual(
+                        result, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE
+                    )
+                    self.assertIn("invalid atomic temporary path", stderr)
+                    self.assertEqual(target.read_bytes(), b"original")
+
+    def test_direct_atomic_writer_rejects_symlink_equivalent_temporary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            temporary.symlink_to(target)
+            result, stderr = invoke_atomic_writer(target, temporary)
+            self.assertEqual(result, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE)
+            self.assertIn("atomic temporary path already exists", stderr)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertTrue(temporary.is_symlink())
+
+    def test_direct_atomic_writer_rejects_destination_symlink_to_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            temporary = explicit_atomic_temporary(target)
+            target.symlink_to(temporary)
+            result, stderr = invoke_atomic_writer(target, temporary)
+            self.assertEqual(result, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE)
+            self.assertIn("atomic destination is not a regular file", stderr)
+            self.assertEqual(target.readlink(), temporary)
+            self.assertFalse(temporary.exists())
+
+    def test_real_atomic_writer_rejects_unrelated_destination_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unrelated = root / "unrelated.json"
+            unrelated.write_bytes(b"unrelated")
+            target = root / "acknowledgement.json"
+            target.symlink_to(unrelated)
+            temporary = explicit_atomic_temporary(target)
+            result = subprocess.run(
+                [sys.executable, RUNNER, "--atomic-writer", target, temporary],
+                input=b"replacement",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE)
+            self.assertIn(b"atomic destination is not a regular file", result.stderr)
+            self.assertEqual(target.readlink(), unrelated)
+            self.assertEqual(unrelated.read_bytes(), b"unrelated")
+            self.assertFalse(temporary.exists())
+
+    def test_direct_atomic_writer_rejects_non_regular_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.mkdir()
+            temporary = explicit_atomic_temporary(target)
+            result, stderr = invoke_atomic_writer(target, temporary)
+            self.assertEqual(result, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE)
+            self.assertIn("atomic destination is not a regular file", stderr)
+            self.assertTrue(target.is_dir())
+            self.assertFalse(temporary.exists())
+
+    def test_direct_atomic_writer_only_prepares_valid_temporary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            result, stderr = invoke_atomic_writer(target, temporary)
+            self.assertEqual(result, 0)
+            self.assertEqual(stderr, "")
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(temporary.exists())
+
+    def test_real_direct_atomic_writer_prepares_without_committing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            result = subprocess.run(
+                [sys.executable, RUNNER, "--atomic-writer", target, temporary],
+                input=b"replacement",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(temporary.exists())
+
+    def test_atomic_commit_replaces_absent_and_existing_destination(self) -> None:
+        for original in (None, b"original"):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = root / "acknowledgement.json"
+                if original is not None:
+                    target.write_bytes(original)
+                run_xcode_tests.write_atomic_bytes(target, b"replacement")
+                self.assertEqual(target.read_bytes(), b"replacement")
+                self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+
+    def test_atomic_commit_rejects_requested_directory_replacement(self) -> None:
+        for phase in ("before", "during", "after"):
+            for replacement in ("directory", "symlink"):
+                for original in (None, b"original"):
+                    with self.subTest(
+                        phase=phase, replacement=replacement, original=original
+                    ):
+                        assert_atomic_directory_race(
+                            self, phase, replacement, original
+                        )
+
+    def test_atomic_directory_fsync_failure_restores_destination(self) -> None:
+        original_fsync = os.fsync
+
+        def fail_directory_sync(descriptor: int) -> None:
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError("forced directory fsync failure")
+            original_fsync(descriptor)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            with mock.patch.object(
+                run_xcode_tests.os, "fsync", side_effect=fail_directory_sync
+            ), self.assertRaisesRegex(OSError, "forced directory fsync failure"):
+                run_xcode_tests.write_atomic_bytes(target, b"replacement")
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+
+    def test_atomic_commit_rejects_final_entry_substitutions(self) -> None:
+        replacements = ("symlink", "regular", "hardlink", "rename")
+        for raced_entry in ("temporary", "destination"):
+            for had_destination in (False, True):
+                for replacement in replacements:
+                    with self.subTest(
+                        entry=raced_entry,
+                        existing=had_destination,
+                        replacement=replacement,
+                    ), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        target = root / "acknowledgement.json"
+                        if had_destination:
+                            target.write_bytes(b"original")
+                        temporary = explicit_atomic_temporary(target)
+                        attacker = root / "attacker.json"
+                        attacker.write_bytes(b"attacker")
+                        raced_path = temporary if raced_entry == "temporary" else target
+                        rename = atomic_race_rename(raced_path, attacker, replacement)
+                        with mock.patch.object(
+                            run_xcode_tests, "rename_atomic_entries", side_effect=rename
+                        ), self.assertRaises(OSError):
+                            run_xcode_tests.write_atomic_bytes(
+                                target, b"replacement", temporary
+                            )
+                        assert_atomic_race_outcome(
+                            self, target, temporary, attacker,
+                            raced_entry, replacement, had_destination,
+                        )
+
+    def test_atomic_rollback_rejects_displaced_entry_replacement(self) -> None:
+        for replacement in ("symlink", "regular", "hardlink", "rename"):
+            with self.subTest(replacement=replacement):
+                assert_displaced_temp_replacement_rejected(self, replacement)
+
+    def test_atomic_rollback_rejects_last_boundary_substitutions(self) -> None:
+        for raced_entry in ("destination", "temporary"):
+            with self.subTest(entry=raced_entry):
+                assert_rollback_substitution_rejected(self, raced_entry)
+
+    def test_atomic_namespace_mutations_are_synced_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            events: list[str] = []
+            original_fsync = os.fsync
+            original_rename = run_xcode_tests.rename_atomic_entries
+            original_unlink = os.unlink
+
+            def record_sync(descriptor: int) -> None:
+                kind = "directory-sync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-sync"
+                events.append(kind)
+                original_fsync(descriptor)
+
+            def record_rename(*arguments: object) -> None:
+                events.append("rename")
+                original_rename(*arguments)  # type: ignore[arg-type]
+
+            def record_unlink(*arguments: object, **options: object) -> None:
+                events.append("unlink")
+                original_unlink(*arguments, **options)  # type: ignore[arg-type]
+
+            with mock.patch.object(
+                run_xcode_tests.os, "fsync", side_effect=record_sync
+            ), mock.patch.object(
+                run_xcode_tests, "rename_atomic_entries", side_effect=record_rename
+            ), mock.patch.object(
+                run_xcode_tests.os, "unlink", side_effect=record_unlink
+            ):
+                run_xcode_tests.write_atomic_bytes(target, b"replacement")
+            self.assertEqual(
+                events,
+                ["file-sync", "rename", "directory-sync", "unlink", "directory-sync"],
+            )
+
+    def test_atomic_rollback_namespace_mutations_are_synced_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            events: list[str] = []
+            original_fsync = os.fsync
+            original_rename = run_xcode_tests.rename_atomic_entries
+            original_unlink = os.unlink
+            directory_syncs = 0
+
+            def record_sync(descriptor: int) -> None:
+                nonlocal directory_syncs
+                is_directory = stat.S_ISDIR(os.fstat(descriptor).st_mode)
+                events.append("directory-sync" if is_directory else "file-sync")
+                if is_directory:
+                    directory_syncs += 1
+                    if directory_syncs == 1:
+                        raise OSError("forced commit sync failure")
+                original_fsync(descriptor)
+
+            def record_rename(*arguments: object) -> None:
+                events.append("rename")
+                original_rename(*arguments)  # type: ignore[arg-type]
+
+            def record_unlink(*arguments: object, **options: object) -> None:
+                events.append("unlink")
+                original_unlink(*arguments, **options)  # type: ignore[arg-type]
+
+            with mock.patch.object(
+                run_xcode_tests.os, "fsync", side_effect=record_sync
+            ), mock.patch.object(
+                run_xcode_tests, "rename_atomic_entries", side_effect=record_rename
+            ), mock.patch.object(
+                run_xcode_tests.os, "unlink", side_effect=record_unlink
+            ), self.assertRaisesRegex(OSError, "forced commit sync failure"):
+                run_xcode_tests.write_atomic_bytes(target, b"replacement")
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(
+                events,
+                [
+                    "file-sync", "rename", "directory-sync", "rename",
+                    "directory-sync", "unlink", "directory-sync",
+                ],
+            )
+
+    def test_atomic_cleanup_sync_failure_rejects_committed_success(self) -> None:
+        original_fsync = os.fsync
+        directory_syncs = 0
+
+        def fail_cleanup_sync(descriptor: int) -> None:
+            nonlocal directory_syncs
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                directory_syncs += 1
+                if directory_syncs == 2:
+                    raise OSError("forced cleanup sync failure")
+            original_fsync(descriptor)
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            with mock.patch.object(
+                run_xcode_tests.os, "fsync", side_effect=fail_cleanup_sync
+            ), self.assertRaisesRegex(OSError, "forced cleanup sync failure"):
+                run_xcode_tests.write_atomic_bytes(target, b"replacement")
+            self.assertEqual(target.read_bytes(), b"replacement")
+            self.assertEqual(list(Path(directory).glob("*.tmp")), [])
+
+    def test_atomic_cleanup_sync_failure_preserves_commit_error(self) -> None:
+        original_fsync = os.fsync
+        primary = OSError("forced commit sync failure")
+        directory_syncs = 0
+
+        def fail_namespace_syncs(descriptor: int) -> None:
+            nonlocal directory_syncs
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                directory_syncs += 1
+                if directory_syncs == 1:
+                    raise primary
+                if directory_syncs == 3:
+                    raise OSError("forced cleanup sync failure")
+            original_fsync(descriptor)
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            with mock.patch.object(
+                run_xcode_tests.os, "fsync", side_effect=fail_namespace_syncs
+            ), self.assertRaises(OSError) as raised:
+                run_xcode_tests.write_atomic_bytes(target, b"replacement")
+            self.assertIs(raised.exception, primary)
+            self.assertIn("forced cleanup sync failure", str(primary))
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(list(Path(directory).glob("*.tmp")), [])
+
+    def test_atomic_writer_rejects_intermediate_symlink_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            actual = root / "actual"
+            actual.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            target = alias / "acknowledgement.json"
+            temporary = explicit_atomic_temporary(target)
+            result = subprocess.run(
+                [sys.executable, RUNNER, "--atomic-writer", target, temporary],
+                input=b"replacement",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE
+            )
+            self.assertRegex(
+                result.stderr, rb"(Not a directory|Too many levels of symbolic links)"
+            )
+            self.assertEqual(list(actual.iterdir()), [])
+
+    def test_inherited_atomic_writer_close_failure_preserves_write_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            temporary = explicit_atomic_temporary(target)
+            write = run_xcode_tests.open_atomic_write(target, temporary)
+            descriptor = os.dup(write.descriptor)
+            directory_descriptor = os.dup(write.directory_descriptor)
+            primary = OSError("primary write failure")
+            original_close = os.close
+
+            def fail_inherited_close(candidate: int) -> None:
+                if candidate in {descriptor, directory_descriptor}:
+                    raise OSError("forced inherited close failure")
+                original_close(candidate)
+
+            try:
+                with mock.patch.object(
+                    run_xcode_tests, "write_atomic_descriptor", side_effect=primary
+                ), mock.patch.object(
+                    run_xcode_tests.os,
+                    "close",
+                    side_effect=fail_inherited_close,
+                ), self.assertRaises(OSError) as raised:
+                    run_xcode_tests.write_inherited_atomic_temporary(
+                        target, temporary, descriptor, directory_descriptor, b"payload"
+                    )
+                self.assertIs(raised.exception, primary)
+                self.assertIn("primary write failure", str(primary))
+                self.assertIn("forced inherited close failure", str(primary))
+            finally:
+                original_close(descriptor)
+                original_close(directory_descriptor)
+                run_xcode_tests.close_atomic_write(write, None)
+
+    def test_atomic_replace_failure_removes_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            with mock.patch.object(
+                run_xcode_tests,
+                "rename_atomic_entries",
+                side_effect=OSError("forced replace failure"),
+            ), self.assertRaisesRegex(OSError, "forced replace failure"):
+                run_xcode_tests.write_atomic_bytes(target, b"acknowledgement")
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_atomic_cleanup_failure_does_not_mask_primary_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            with mock.patch.object(
+                run_xcode_tests.os,
+                "fsync",
+                side_effect=OSError("primary fsync failure"),
+            ), mock.patch.object(
+                run_xcode_tests.os,
+                "unlink",
+                side_effect=OSError("cleanup unlink failure"),
+            ), self.assertRaisesRegex(
+                OSError,
+                "primary fsync failure; atomic temporary cleanup failed: "
+                "cleanup unlink failure",
+            ):
+                run_xcode_tests.write_atomic_bytes(target, b"acknowledgement")
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(len(list(Path(directory).glob("*.tmp"))), 1)
+
+    def test_atomic_cleanup_failure_surfaces_without_primary_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            cleanup = OSError("cleanup unlink failure")
+            with mock.patch.object(
+                run_xcode_tests, "commit_atomic_write"
+            ), mock.patch.object(
+                run_xcode_tests.os, "unlink", side_effect=cleanup
+            ), self.assertRaisesRegex(OSError, "cleanup unlink failure") as raised:
+                run_xcode_tests.write_atomic_bytes(
+                    target, b"acknowledgement", temporary
+                )
+            self.assertIs(raised.exception, cleanup)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertTrue(temporary.exists())
+
+    def test_bounded_atomic_timeout_preserves_primary_and_removes_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            process = mock.Mock(spec=subprocess.Popen)
+            process.args = ["atomic-writer"]
+            process.communicate.side_effect = subprocess.TimeoutExpired([], 1)
+            process.stdin = mock.Mock()
+            process.stderr = mock.Mock()
+            cleanup = OSError("containment acknowledgement writer could not be terminated")
+            with mock.patch.object(
+                run_xcode_tests, "atomic_temporary_path", return_value=temporary
+            ), mock.patch.object(
+                run_xcode_tests.subprocess, "Popen", return_value=process
+            ), mock.patch.object(
+                run_xcode_tests, "terminate_bounded_writer", side_effect=cleanup
+            ), self.assertRaisesRegex(
+                OSError,
+                "containment acknowledgement write deadline expired; containment "
+                "acknowledgement writer cleanup failed: containment acknowledgement "
+                "writer could not be terminated",
+            ) as raised:
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"acknowledgement",
+                    time.monotonic() + 1,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(temporary.exists())
+
+    def test_bounded_atomic_timeout_blocks_late_child_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            temporary = explicit_atomic_temporary(target)
+            release = threading.Event()
+            finished = threading.Event()
+            commit_errors: list[OSError] = []
+            threads: list[threading.Thread] = []
+            spawn = late_atomic_commit_popen(release, finished, commit_errors, threads)
+            with mock.patch.object(
+                run_xcode_tests, "atomic_temporary_path", return_value=temporary
+            ), mock.patch.object(
+                run_xcode_tests.subprocess, "Popen", side_effect=spawn
+            ), mock.patch.object(
+                run_xcode_tests.os, "killpg", side_effect=OSError("forced kill failure")
+            ), self.assertRaises(OSError) as raised:
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    time.monotonic() + 0.2,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            message = str(raised.exception)
+            self.assertIn("write deadline expired", message)
+            self.assertIn("forced kill failure", message)
+            self.assertIn("could not be terminated", message)
+            self.assertIn("forced stdin close failure", message)
+            self.assertIn("forced stderr close failure", message)
+            self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
+            release.set()
+            self.assertTrue(finished.wait(1))
+            threads[0].join(1)
+            self.assertIsInstance(commit_errors[0], FileNotFoundError)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(temporary.exists())
+
+    def test_bounded_atomic_rejects_temporary_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            attacker = root / "attacker.json"
+            attacker.write_bytes(b"attacker")
+            temporary = explicit_atomic_temporary(target)
+            process = mock.Mock(spec=subprocess.Popen)
+            process.returncode = 0
+
+            def substitute(*_arguments: object) -> bytes:
+                temporary.unlink()
+                temporary.symlink_to(attacker)
+                return b""
+
+            with mock.patch.object(
+                run_xcode_tests, "atomic_temporary_path", return_value=temporary
+            ), mock.patch.object(
+                run_xcode_tests.subprocess, "Popen", return_value=process
+            ), mock.patch.object(
+                run_xcode_tests, "communicate_bounded_writer", side_effect=substitute
+            ), self.assertRaisesRegex(OSError, "untrusted atomic temporary file"):
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    time.monotonic() + 1,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(attacker.read_bytes(), b"attacker")
+            self.assertTrue(temporary.is_symlink())
+
+    def test_bounded_atomic_parent_replace_failure_removes_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            with mock.patch.object(
+                run_xcode_tests,
+                "rename_atomic_entries",
+                side_effect=OSError("forced parent replace failure"),
+            ), self.assertRaisesRegex(OSError, "forced parent replace failure"):
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    time.monotonic() + 1,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+
+    def test_bounded_atomic_directory_sync_completes_before_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            environment = directory_sync_control_environment(root, ("ok", "ok"))
+            with mock.patch.dict(os.environ, environment):
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    time.monotonic() + 1,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertEqual(target.read_bytes(), b"replacement")
+            self.assertEqual((root / "directory-sync-control").read_text(), "2")
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+
+    def test_bounded_atomic_commit_sync_hang_obeys_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            environment = directory_sync_control_environment(root, ("hang",))
+            deadline = time.monotonic() + 0.75
+            with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(
+                OSError, "directory synchronization write deadline expired"
+            ):
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    deadline,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertLess(time.monotonic(), deadline + 0.25)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+            assert_hung_sync_reaped(self, root)
+
+    def test_bounded_atomic_cleanup_sync_hang_rejects_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            environment = directory_sync_control_environment(root, ("ok", "hang"))
+            deadline = time.monotonic() + 0.75
+            with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(
+                OSError, "cleanup write deadline expired"
+            ):
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    deadline,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertLess(time.monotonic(), deadline + 0.25)
+            self.assertEqual(target.read_bytes(), b"replacement")
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+            assert_hung_sync_reaped(self, root)
+
+    def test_bounded_atomic_rollback_sync_hang_preserves_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "acknowledgement.json"
+            target.write_bytes(b"original")
+            environment = directory_sync_control_environment(root, ("error", "hang"))
+            deadline = time.monotonic() + 0.75
+            with mock.patch.dict(os.environ, environment), self.assertRaises(
+                OSError
+            ) as raised:
+                run_xcode_tests.write_bytes_bounded(
+                    target,
+                    b"replacement",
+                    deadline,
+                    run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
+                    "containment acknowledgement",
+                )
+            self.assertLess(time.monotonic(), deadline + 0.25)
+            self.assertIn("forced directory sync failure", str(raised.exception))
+            self.assertIn("rollback failed", str(raised.exception))
+            self.assertIn("deadline expired", str(raised.exception))
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+            assert_hung_sync_reaped(self, root)
+
     def test_job_root_signal_uses_persisted_audit_identity(self) -> None:
         token = (0, 0, 0, 0, 0, 2222, 0, 41)
         original = run_xcode_tests.ProcessIdentity(2222, (10, 20), token)
@@ -2787,7 +3916,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         )
         with mock.patch.object(run_xcode_tests, "LAUNCHCTL", sys.executable):
             result = run_xcode_tests.launchctl_run(
-                ["-c", source], time.monotonic() + 4, 2
+                ["-c", source], launchctl_test_deadline(4), 2
             )
         child_pid = int(result.stdout.strip())
         try:
@@ -2813,7 +3942,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         )
         with mock.patch.object(run_xcode_tests, "LAUNCHCTL", sys.executable):
             result = run_xcode_tests.launchctl_run(
-                ["-c", source], time.monotonic() + 4, 2
+                ["-c", source], launchctl_test_deadline(4), 2
             )
         child_pid = int(result.stdout.strip())
         try:
@@ -2823,6 +3952,50 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 os.kill(child_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+    def test_launchctl_total_deadline_includes_nested_cleanup(self) -> None:
+        authenticate_by, command_seconds, cleanup_by = (
+            run_xcode_tests.launchctl_deadlines(10.0, 26.0, 10.0, None)
+        )
+        self.assertEqual(authenticate_by, 14.0)
+        self.assertEqual(command_seconds, 10.0)
+        self.assertEqual(cleanup_by, 26.0)
+        self.assertEqual(
+            cleanup_by - authenticate_by - command_seconds,
+            run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
+        )
+
+    def test_lifecycle_bootstrap_accepts_delays_through_ten_seconds(self) -> None:
+        for delay in (2.01, 10.0):
+            with self.subTest(delay=delay):
+                result = simulated_launchctl_delay(delay)
+                self.assertEqual(result.returncode, 0)
+
+    def test_lifecycle_bootstrap_rejects_delay_over_ten_seconds(self) -> None:
+        with self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError, "launchctl timed out"
+        ):
+            simulated_launchctl_delay(10.01)
+
+    def test_timeout_evidence_probe_cannot_enter_cleanup_reserve(self) -> None:
+        clock = [18.0]
+        wall_deadline = 33.75
+        with mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(run_xcode_tests, "launchctl_result") as launch:
+            evidence_deadline = run_xcode_tests.process_evidence_deadline(
+                wall_deadline
+            )
+            evidence = run_xcode_tests.launchd_job_evidence(
+                launchd_job(Path("/tmp/ap13-evidence")), evidence_deadline
+            )
+        self.assertEqual(evidence_deadline - clock[0], 0.25)
+        self.assertEqual(
+            wall_deadline - evidence_deadline,
+            run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS,
+        )
+        self.assertIn("launchd containment deadline expired", evidence)
+        launch.assert_not_called()
 
     def test_launchctl_timeout_reaps_real_authenticated_process_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2967,7 +4140,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.SimulatorLifecycleError,
                     "launchctl timeout cleanup failed: direct process cleanup incomplete",
                 ) as raised:
-                    run_xcode_tests.launchctl_run([], time.monotonic() + 1, 0.2)
+                    run_xcode_tests.launchctl_run([], launchctl_test_deadline(), 0.2)
         self.assertIsInstance(
             raised.exception.__cause__, run_xcode_tests.SimulatorLifecycleError
         )
@@ -2988,7 +4161,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests.SimulatorLifecycleError,
                 "launchctl process cleanup failed: direct process cleanup incomplete",
             ):
-                run_xcode_tests.launchctl_run([], time.monotonic() + 1, 0.2)
+                run_xcode_tests.launchctl_run([], launchctl_test_deadline(), 0.2)
 
     def test_launchctl_failure_cleanup_evidence_blocks_absence_match(self) -> None:
         job = direct_job(Path("/tmp/ap12-launchctl-failure"))
@@ -3005,7 +4178,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "complete_direct_job", return_value=completion
         ):
-            result = run_xcode_tests.launchctl_run([], time.monotonic() + 1, 0.2)
+            result = run_xcode_tests.launchctl_run([], launchctl_test_deadline(), 0.2)
         self.assertEqual(result.returncode, 113)
         self.assertIn("launchctl process cleanup failed", result.stderr)
         self.assertFalse(run_xcode_tests.bootout_result_is_absent(result))
@@ -3040,7 +4213,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "complete_direct_job", side_effect=complete
         ):
-            result = run_xcode_tests.launchctl_run([], time.monotonic() + 1, 0.2)
+            result = run_xcode_tests.launchctl_run([], launchctl_test_deadline(), 0.2)
         self.assertEqual(result.returncode, 0)
 
     def test_launchctl_accepts_slow_authentication_before_command_budget(self) -> None:
@@ -3138,7 +4311,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "spawn_direct_job", side_effect=failure
         ), mock.patch.object(run_xcode_tests, "complete_direct_job") as complete:
             with self.assertRaises(run_xcode_tests.SimulatorLifecycleError) as raised:
-                run_xcode_tests.launchctl_run([], time.monotonic() + 1, 0.2)
+                run_xcode_tests.launchctl_run([], launchctl_test_deadline(), 0.2)
         self.assertIs(raised.exception, failure)
         complete.assert_not_called()
 
@@ -4311,10 +5484,62 @@ class XcodeTestRunnerTests(unittest.TestCase):
         contained.assert_called_once_with(
             args.command,
             True,
-            args.wall_deadline,
+            args.wall_deadline - run_xcode_tests.TIMEOUT_EVIDENCE_SECONDS,
+            bootstrap_maximum=run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS,
             cleanup_reserve=run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS,
         )
         direct.assert_not_called()
+
+    def test_delayed_setup_cannot_cross_cutoff_or_consume_reserves(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            clock = [0.0]
+            wall_deadline = HOSTED_ATTEMPT_WALL_TIMEOUT
+            launch_deadline = wall_deadline - 0.25
+            setup_cutoff = launch_deadline - 15.5
+            started = subprocess.CompletedProcess([], 0, "", "")
+            def delayed_acknowledgement(
+                _job: run_xcode_tests.LaunchdJob,
+                _token: str,
+                _coalition_id: int,
+                deadline: float | None,
+            ) -> None:
+                assert deadline is not None
+                self.assertEqual(deadline, setup_cutoff)
+                clock[0] = deadline + 0.01
+            with mock.patch.object(
+                run_xcode_tests, "create_launchd_job", return_value=job
+            ), mock.patch.object(
+                run_xcode_tests, "launchd_domain", return_value=f"gui/{os.getuid()}"
+            ), mock.patch.object(
+                run_xcode_tests, "launchctl_run", return_value=started
+            ), mock.patch.object(
+                run_xcode_tests,
+                "await_containment_handshake",
+                return_value=({}, 77, mock.sentinel.wrapper),
+            ), mock.patch.object(
+                run_xcode_tests, "validate_containment_sidecar"
+            ), mock.patch.object(
+                run_xcode_tests,
+                "write_containment_acknowledgement",
+                side_effect=delayed_acknowledgement,
+            ), mock.patch.object(
+                run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+            ), mock.patch.object(
+                run_xcode_tests, "abort_containment_handshake"
+            ) as abort:
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "containment setup deadline expired",
+                ):
+                    run_xcode_tests.spawn_contained_job(
+                        ["target"], False, launch_deadline, 10.0, 15.5
+                    )
+        self.assertEqual(launch_deadline - setup_cutoff, 15.5)
+        self.assertEqual(wall_deadline - launch_deadline, 0.25)
+        abort.assert_called_once_with(
+            job, 77, launch_deadline, 15.5
+        )
 
     def test_runner_fails_closed_only_for_successful_cleanup_error(self) -> None:
         for expected in (0, 7, 65, 124, 125):
@@ -5125,7 +6350,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self,
         source: str,
         idle_timeout: float = 1,
-        wall_timeout: float = run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS + 4,
+        wall_timeout: float = HOSTED_ATTEMPT_WALL_TIMEOUT,
     ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, str]]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -5189,7 +6414,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIn("classification=test-execution-timeout", result.stderr)
 
     def test_wall_timeout_writes_both_timeout_evidence_files(self) -> None:
-        wall_timeout = run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS + 4
+        wall_timeout = HOSTED_ATTEMPT_WALL_TIMEOUT
         started = time.monotonic()
         result, _, evidence = self.run_fake_xcode(
             """
