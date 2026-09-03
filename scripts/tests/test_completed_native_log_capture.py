@@ -21,7 +21,7 @@ TOKEN = "fake-secret-never-retained"
 BASE = "https://api.github.com/repos/example/apple"
 SIGNED = "https://production.blob.core.windows.net/logs/job?signature=fake"
 SUCCESSOR_BOUNDARY = "\n  retain-completed-native-log:\n"
-WORKFLOW_PREFIX_SHA256 = "8869036a0958b08fe36b09da466f00c7c7f3706366a05e538c75095239a113ab"
+WORKFLOW_PREFIX_SHA256 = "42684b3390cbbb2b2b7548892718e63a750f405e9c22c88d78e0b1eb9894c79f"
 SUCCESSOR_SOURCE = '''    name: <name>
     if: <condition>
     needs: <needs>

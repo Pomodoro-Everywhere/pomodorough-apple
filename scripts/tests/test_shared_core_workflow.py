@@ -8,9 +8,39 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CORE_COMMIT = "542aca9a322a1b04c3e53d4a76152f385675d0a1"
 CORE_RELEASE_TAG = "v0.10.0"
 CORE_SHA256 = "f735303cbd13a1671090b7ecd1e9c96a210ca007d8a35244bdf8028772c66eb6"
+
+
 class SharedCoreWorkflowTests(unittest.TestCase):
+    def core_download_command(self, workflow: str) -> str:
+        lines = workflow.splitlines()
+        starts = [index for index, line in enumerate(lines) if line.strip().startswith("curl --fail")]
+        self.assertEqual(len(starts), 1)
+        start = starts[0]
+        end = next(
+            index
+            for index in range(start, len(lines))
+            if lines[index].strip() == '--output "$released"'
+        )
+        return "\n".join(line.strip() for line in lines[start : end + 1])
+
+    def assert_bounded_core_download(self, workflow: str) -> None:
+        expected = "\n".join(
+            (
+                "curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \\",
+                "--connect-timeout 30 --max-time 90 \\",
+                "--retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \\",
+                '"https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/'
+                '$CORE_RELEASE_TAG/pomodorough_core.wasm" \\',
+                '--output "$released"',
+            )
+        )
+        self.assertEqual(self.core_download_command(workflow), expected)
+
     def assert_portable_provenance_contract(self, workflow: str) -> None:
         normalized = "\n".join(line.strip() for line in workflow.splitlines())
+        self.assertIn(f'CORE_COMMIT: "{CORE_COMMIT}"', workflow)
+        self.assertIn(f'CORE_RELEASE_TAG: "{CORE_RELEASE_TAG}"', workflow)
+        self.assertIn(f'CORE_SHA256: "{CORE_SHA256}"', workflow)
         self.assertIn('verify_wasm_artifact.py "$rebuilt"', normalized)
         self.assertIn(
             'verify_wasm_artifact.py \\\n"$released" \\\n--sha256 "$CORE_SHA256"',
@@ -93,7 +123,51 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(f'CORE_RELEASE_TAG: "{CORE_RELEASE_TAG}"', workflow)
         self.assertIn("releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm", workflow)
+        self.assert_bounded_core_download(workflow)
         self.assert_portable_provenance_contract(workflow)
+
+    def test_ci_and_release_share_bounded_core_download_contract(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assert_bounded_core_download(workflow)
+        self.assert_bounded_core_download(release_workflow)
+        self.assertEqual(
+            self.core_download_command(workflow),
+            self.core_download_command(release_workflow),
+        )
+
+    def test_bounded_core_download_rejects_retry_and_verification_regressions(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        mutations = (
+            ("--retry 3", "--retry 4"),
+            ("--retry-delay 5", "--retry-delay 0"),
+            ("--retry-max-time 375", "--retry-max-time 0"),
+            ("--connect-timeout 30", "--connect-timeout 31"),
+            ("--max-time 90", "--max-time 0"),
+            ("--retry-all-errors", ""),
+            ("--proto '=https'", "--proto '=http,https'"),
+            ("--tlsv1.2", ""),
+        )
+        for original, replacement in mutations:
+            with self.subTest(original=original), self.assertRaises(AssertionError):
+                self.assert_bounded_core_download(workflow.replace(original, replacement, 1))
+
+        verification_mutations = (
+            (
+                '          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \\\n'
+                '            "$released" \\\n'
+                '            --sha256 "$CORE_SHA256"\n',
+                "",
+            ),
+            ('cmp "$released" Resources/SharedCore/pomodorough_core.wasm', ""),
+            ('$CORE_RELEASE_TAG/pomodorough_core.wasm', "latest/pomodorough_core.wasm"),
+            (f'CORE_COMMIT: "{CORE_COMMIT}"', 'CORE_COMMIT: "untrusted"'),
+        )
+        for original, replacement in verification_mutations:
+            mutated = workflow.replace(original, replacement, 1)
+            with self.subTest(original=original), self.assertRaises(AssertionError):
+                self.assert_bounded_core_download(mutated)
+                self.assert_portable_provenance_contract(mutated)
 
     def test_portable_provenance_contract_rejects_regressions(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

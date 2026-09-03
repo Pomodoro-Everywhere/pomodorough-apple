@@ -2076,7 +2076,13 @@ def bootout_job(
     return None
 
 
-def confirm_job_absent(job: LaunchdJob, deadline: float | None) -> None:
+def confirm_job_absent(
+    job: LaunchdJob,
+    deadline: float | None,
+    bootout_confirmed: bool = False,
+) -> None:
+    if bootout_confirmed:
+        return
     cleanup_by = cleanup_deadline(deadline)
     while True:
         if time.monotonic() >= cleanup_by:
@@ -2184,6 +2190,13 @@ def record_containment_finalization(
     coalition_id: int | None,
     deadlines: ContainmentCleanupDeadlines,
 ) -> None:
+    bootout_confirmed = False
+
+    def unload_job() -> None:
+        nonlocal bootout_confirmed
+        bootout_job(job, deadlines.bootout_by, deadlines.bootout_cleanup_by)
+        bootout_confirmed = True
+
     if coalition_id is not None:
         record_cleanup_failure(
             errors,
@@ -2193,14 +2206,14 @@ def record_containment_finalization(
     record_cleanup_failure(
         errors,
         "bootout failed",
-        lambda: bootout_job(
-            job, deadlines.bootout_by, deadlines.bootout_cleanup_by
-        ),
+        unload_job,
     )
     record_cleanup_failure(
         errors,
         "absence confirmation failed",
-        lambda: confirm_job_absent(job, deadlines.confirmation_by),
+        lambda: confirm_job_absent(
+            job, deadlines.confirmation_by, bootout_confirmed
+        ),
     )
 
 

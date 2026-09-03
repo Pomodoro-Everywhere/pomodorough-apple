@@ -126,6 +126,8 @@ jobs:
             --sha256 "$CORE_SHA256"
           released="$RUNNER_TEMP/pomodorough_core.wasm"
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 30 --max-time 90 \
+            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
             "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
             --output "$released"
           python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \

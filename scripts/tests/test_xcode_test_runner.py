@@ -2227,7 +2227,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 process_cleanup_deadline: float | None = None,
             ) -> None:
                 deadlines[name] = deadline
-                if process_cleanup_deadline is not None:
+                if name == "bootout" and process_cleanup_deadline is not None:
                     deadlines["bootout_cleanup"] = process_cleanup_deadline
 
             return operation
@@ -2387,10 +2387,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS,
             )
         else:
-            self.assertGreaterEqual(
-                budgets["absence"],
-                run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS,
-            )
+            self.assertNotIn("absence", budgets)
         launch.assert_called_once()
         self.assertEqual(launch.call_args.args[0][1], "bootout")
 
@@ -2656,7 +2653,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 process_cleanup_deadline: float | None = None,
             ) -> None:
                 value: object = deadline
-                if process_cleanup_deadline is not None:
+                if name == "bootout" and process_cleanup_deadline is not None:
                     value = (deadline, process_cleanup_deadline)
                 deadlines[name] = value
 
@@ -3600,6 +3597,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 self.assertTrue(arguments[2].endswith("/job.plist"))
                 loaded = False
                 return subprocess.CompletedProcess(arguments, 0, "", "")
+            self.assertEqual(arguments, ["print", job.service])
             self.assertFalse(loaded)
             return subprocess.CompletedProcess(
                 arguments, 113, "", "Could not find service\n"
@@ -3671,18 +3669,89 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests, "drain_coalition"
             ), mock.patch.object(
                 run_xcode_tests, "bootout_job", return_value=None
-            ), mock.patch.object(run_xcode_tests, "confirm_job_absent"):
+            ), mock.patch.object(
+                run_xcode_tests, "confirm_job_absent"
+            ) as confirm:
                 cleanup_error = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
         self.assertIsNone(cleanup_error)
+        confirm.assert_called_once_with(job, mock.ANY, True)
 
-    def test_confirm_absence_accepts_macos_idempotent_bootout_result(self) -> None:
-        result = subprocess.CompletedProcess([], 3, "", "No such process")
+    def test_confirm_absence_accepts_exact_missing_service_result(self) -> None:
+        result = subprocess.CompletedProcess([], 113, "", "Could not find service")
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_retry", return_value=result
+            ) as launchctl:
+                run_xcode_tests.confirm_job_absent(job, time.monotonic() + 1)
+        launchctl.assert_called_once_with(
+            ["print", job.service], mock.ANY
+        )
+
+    def test_confirm_absence_rejects_mixed_absence_diagnostic(self) -> None:
+        result = subprocess.CompletedProcess(
+            [], 113, "", "Could not find service\npermission denied"
+        )
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
             with mock.patch.object(
                 run_xcode_tests, "launchctl_retry", return_value=result
             ):
-                run_xcode_tests.confirm_job_absent(job, time.monotonic() + 1)
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "disappearance check exited 113",
+                ):
+                    run_xcode_tests.confirm_job_absent(job, time.monotonic() + 1)
+
+    def test_successful_bootout_skips_redundant_print_probe(self) -> None:
+        errors: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            deadlines = run_xcode_tests.containment_cleanup_deadlines(
+                time.monotonic() + 1
+            )
+            with mock.patch.object(
+                run_xcode_tests, "bootout_job", return_value=None
+            ) as bootout, mock.patch.object(
+                run_xcode_tests, "launchctl_retry"
+            ) as launchctl:
+                run_xcode_tests.record_containment_finalization(
+                    errors, job, None, deadlines
+                )
+        self.assertEqual(errors, [])
+        bootout.assert_called_once()
+        launchctl.assert_not_called()
+
+    def test_failed_bootout_keeps_exact_absence_fallback(self) -> None:
+        failure = run_xcode_tests.SimulatorLifecycleError("permission denied")
+        absent = subprocess.CompletedProcess([], 113, "", "Could not find service")
+        errors: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            deadlines = run_xcode_tests.containment_cleanup_deadlines(
+                time.monotonic() + 1
+            )
+            with mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=failure
+            ), mock.patch.object(
+                run_xcode_tests, "launchctl_retry", return_value=absent
+            ) as launchctl:
+                run_xcode_tests.record_containment_finalization(
+                    errors, job, None, deadlines
+                )
+        self.assertEqual(errors, ["bootout failed: permission denied"])
+        launchctl.assert_called_once_with(["print", job.service], mock.ANY)
+
+    def test_confirm_absence_preserves_launchctl_timeout(self) -> None:
+        failure = run_xcode_tests.SimulatorLifecycleError("launchctl timed out")
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "launchctl_retry", side_effect=failure
+            ):
+                with self.assertRaises(run_xcode_tests.SimulatorLifecycleError) as raised:
+                    run_xcode_tests.confirm_job_absent(job, time.monotonic() + 1)
+        self.assertIs(raised.exception, failure)
 
     def test_launchd_cleanup_fails_when_service_never_disappears(self) -> None:
         result = subprocess.CompletedProcess([], 0, "state = running", "")
