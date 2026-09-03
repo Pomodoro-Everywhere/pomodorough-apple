@@ -23,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import BinaryIO, Callable, Iterable, TextIO, TypeVar, cast
+from typing import Callable, Iterable, TextIO, TypeVar, cast
 
 
 FINAL_TEST_MARKERS = (
@@ -68,6 +68,7 @@ DIRECT_CHANNEL_KEY_BYTES = 32
 DIRECT_CHANNEL_LIMIT_BYTES = 64 * 1024
 DIRECT_CHANNEL_WORK_PER_PUMP = 128
 DIRECT_WRAPPER_REAP_SECONDS = 0.5
+LAUNCHCTL_WRAPPER_REAP_SECONDS = 0.2
 CONTAINED_CHILD_ARGUMENT = "--contained-child"
 DIRECT_CHILD_ARGUMENT = "--direct-child"
 DIRECT_TARGET_ARGUMENT = "--direct-target"
@@ -259,6 +260,15 @@ class DirectJob:
     process: subprocess.Popen[bytes]
     identity: ProcessIdentity
     channel: DirectChannel
+    wrapper_reap_seconds: float = DIRECT_WRAPPER_REAP_SECONDS
+
+
+@dataclass(frozen=True)
+class DirectCompletion:
+    returncode: int | None
+    stdout: str
+    stderr: str
+    cleanup_error: str | None
 
 
 @dataclass
@@ -1212,7 +1222,11 @@ def direct_child_arguments(
     ]
 
 
-def spawn_direct_job(command: list[str], deadline: float | None) -> DirectJob:
+def spawn_direct_job(
+    command: list[str],
+    deadline: float | None,
+    cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
+) -> DirectJob:
     resources = DirectSpawnResources()
     try:
         resources.root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-lifecycle-"))
@@ -1242,11 +1256,27 @@ def spawn_direct_job(command: list[str], deadline: float | None) -> DirectJob:
         channel = DirectChannel(
             event_read, key, target_exec_required=LIBPROC is not None
         )
-        identity = await_direct_identity(channel, process, deadline)
+        identity = await_direct_identity(
+            channel, process, deadline, cleanup_reserve
+        )
         os.write(acknowledgement_write, b"1")
         close_direct_descriptor(resources.descriptors, acknowledgement_write)
         resources.descriptors.remove(event_read)
-        return DirectJob(root, stdout_path, stderr_path, process, identity, channel)
+        wrapper_reap_seconds = min(
+            DIRECT_WRAPPER_REAP_SECONDS,
+            cleanup_reserve
+            * LAUNCHCTL_WRAPPER_REAP_SECONDS
+            / LAUNCHCTL_PROCESS_CLEANUP_SECONDS,
+        )
+        return DirectJob(
+            root,
+            stdout_path,
+            stderr_path,
+            process,
+            identity,
+            channel,
+            wrapper_reap_seconds,
+        )
     except Exception as error:
         append_direct_spawn_cleanup(error, cleanup_direct_spawn(resources, deadline))
         raise
@@ -1258,59 +1288,50 @@ def launchd_domain() -> str:
     return f"gui/{os.getuid()}"
 
 
-def captured_process_output(stream: BinaryIO) -> str:
-    stream.flush()
-    stream.seek(0)
-    return stream.read().decode("utf-8", errors="replace")
+def launchctl_deadlines(
+    started_at: float,
+    deadline: float | None,
+    maximum: float,
+    process_cleanup_deadline: float | None,
+) -> tuple[float, float]:
+    finish_by = started_at + maximum
+    if deadline is not None:
+        finish_by = min(finish_by, deadline)
+    if finish_by <= started_at:
+        raise SimulatorLifecycleError("launchd containment deadline expired")
+    if process_cleanup_deadline is None:
+        return finish_by, finish_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    if process_cleanup_deadline <= finish_by:
+        raise SimulatorLifecycleError("launchctl process cleanup deadline expired")
+    return finish_by, process_cleanup_deadline
 
 
-def terminate_launchctl_process(
-    process: subprocess.Popen[bytes],
-    deadline: float | None = None,
-) -> None:
-    if process.poll() is not None:
-        return
-    identity = process_identity(process.pid)
-    if identity is None:
-        if process.poll() is not None:
-            return
-        raise SimulatorLifecycleError("launchctl process identity unavailable")
-    # Unreaped direct child retains its PID, so this identity cannot be PID reuse.
-    if not signal_identity(identity, signal.SIGKILL):
-        if process.poll() is not None:
-            return
-        if process_identity(process.pid) == identity:
-            raise SimulatorLifecycleError("identity-bound launchctl termination failed")
-        raise SimulatorLifecycleError("launchctl process identity changed")
-    cleanup_by = cleanup_deadline(deadline, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
-    timeout = bounded_wait(cleanup_by, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
-    if timeout <= 0:
-        if process.poll() is not None:
-            return
-        raise SimulatorLifecycleError("launchctl process cleanup timed out")
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired as error:
-        if process.poll() is not None:
-            return
-        raise SimulatorLifecycleError("launchctl process cleanup timed out") from error
-
-
-def wait_for_launchctl_process(
-    process: subprocess.Popen[bytes], command: list[str], deadline: float
-) -> int:
-    timeout = deadline - time.monotonic()
-    if timeout > 0:
-        try:
-            return process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as error:
-            timeout_error = error
+def launchctl_result(
+    command: list[str],
+    finish_by: float,
+    cleanup_by: float,
+) -> subprocess.CompletedProcess[str]:
+    cleanup_reserve = cleanup_by - finish_by
+    job = spawn_direct_job(command, cleanup_by, cleanup_reserve)
+    timeout = max(0.0, finish_by - time.monotonic())
+    completion = complete_direct_job(job, timeout, cleanup_by, cleanup_reserve)
+    if completion.cleanup_error is not None:
+        detail = f"launchctl process cleanup failed: {completion.cleanup_error}"
+        if completion.returncode is None:
+            cleanup_error = SimulatorLifecycleError(detail)
+            raise SimulatorLifecycleError(
+                f"launchctl timeout cleanup failed: {completion.cleanup_error}"
+            ) from cleanup_error
+        if completion.returncode == 0:
+            raise SimulatorLifecycleError(detail)
+        stderr = f"{completion.stderr}\n{detail}\n"
     else:
-        timeout_error = subprocess.TimeoutExpired(command, 0)
-    returncode = process.poll()
-    if returncode is not None:
-        return returncode
-    raise timeout_error
+        stderr = completion.stderr
+    if completion.returncode is None:
+        raise subprocess.TimeoutExpired(command, timeout, completion.stdout, stderr)
+    return subprocess.CompletedProcess(
+        command, completion.returncode, completion.stdout, stderr
+    )
 
 
 def launchctl_run(
@@ -1321,34 +1342,13 @@ def launchctl_run(
 ) -> subprocess.CompletedProcess[str]:
     command = [LAUNCHCTL, *arguments]
     started_at = time.monotonic()
-    finish_by = started_at + maximum
-    if deadline is not None:
-        finish_by = min(finish_by, deadline)
-    if finish_by <= started_at:
-        raise SimulatorLifecycleError("launchd containment deadline expired")
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        try:
-            process = subprocess.Popen(
-                command, stdout=stdout, stderr=stderr, start_new_session=True
-            )
-        except OSError as error:
-            raise SimulatorLifecycleError(f"launchctl failed to start: {error}") from error
-        try:
-            returncode = wait_for_launchctl_process(process, command, finish_by)
-        except subprocess.TimeoutExpired as error:
-            try:
-                terminate_launchctl_process(process, process_cleanup_deadline)
-            except SimulatorLifecycleError as cleanup_error:
-                raise SimulatorLifecycleError(
-                    f"launchctl timeout cleanup failed: {cleanup_error}"
-                ) from cleanup_error
-            raise SimulatorLifecycleError("launchctl timed out") from error
-        return subprocess.CompletedProcess(
-            command,
-            returncode,
-            captured_process_output(stdout),
-            captured_process_output(stderr),
-        )
+    finish_by, cleanup_by = launchctl_deadlines(
+        started_at, deadline, maximum, process_cleanup_deadline
+    )
+    try:
+        return launchctl_result(command, finish_by, cleanup_by)
+    except subprocess.TimeoutExpired as error:
+        raise SimulatorLifecycleError("launchctl timed out") from error
 
 
 def launchctl_retry(
@@ -1360,8 +1360,11 @@ def launchctl_retry(
         if remaining <= 0:
             break
         attempt_maximum = min(maximum, remaining / 2)
+        command_deadline = time.monotonic() + attempt_maximum
         try:
-            return launchctl_run(arguments, deadline, attempt_maximum, deadline)
+            return launchctl_run(
+                arguments, command_deadline, attempt_maximum, deadline
+            )
         except SimulatorLifecycleError as error:
             if not isinstance(error.__cause__, subprocess.TimeoutExpired):
                 raise
@@ -1743,10 +1746,13 @@ def bounded_direct_children(
 
 
 def await_direct_identity(
-    channel: DirectChannel, process: subprocess.Popen[bytes], deadline: float | None
+    channel: DirectChannel,
+    process: subprocess.Popen[bytes],
+    deadline: float | None,
+    cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
 ) -> ProcessIdentity:
     handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
-    setup_deadline = reserved_deadline(deadline, CLEANUP_RESERVE_SECONDS)
+    setup_deadline = reserved_deadline(deadline, cleanup_reserve)
     if setup_deadline is not None:
         handshake_by = min(handshake_by, setup_deadline)
     while time.monotonic() < handshake_by:
@@ -2312,10 +2318,13 @@ def wait_for_job_status(
 
 
 def wait_for_direct_status(
-    job: DirectJob, timeout: float, wall_deadline: float | None = None
+    job: DirectJob,
+    timeout: float,
+    wall_deadline: float | None = None,
+    cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
 ) -> int | None:
     deadline = time.monotonic() + timeout
-    observation_deadline = reserved_deadline(wall_deadline, CLEANUP_RESERVE_SECONDS)
+    observation_deadline = reserved_deadline(wall_deadline, cleanup_reserve)
     if observation_deadline is not None:
         deadline = min(deadline, observation_deadline)
     while time.monotonic() < deadline:
@@ -2422,7 +2431,7 @@ def reap_direct_wrapper(job: DirectJob, deadline: float) -> None:
     reap_process_with_grace(
         job.process,
         deadline,
-        DIRECT_WRAPPER_REAP_SECONDS,
+        job.wrapper_reap_seconds,
         "direct wrapper reap deadline expired",
         "direct wrapper reap timed out",
     )
@@ -2491,10 +2500,12 @@ def drain_direct_job(job: DirectJob, deadline: float, errors: list[str]) -> None
 
 
 def cleanup_direct_job(
-    job: DirectJob, deadline: float | None, signal_root: bool
+    job: DirectJob,
+    deadline: float | None,
+    signal_root: bool,
 ) -> None:
     cleanup_by = cleanup_deadline(deadline)
-    observation_by = cleanup_by - DIRECT_WRAPPER_REAP_SECONDS
+    observation_by = cleanup_by - job.wrapper_reap_seconds
     errors: list[str] = []
     try:
         if signal_root:
@@ -2791,10 +2802,27 @@ def direct_lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
     job = spawn_direct_job(command, deadline)
+    completion = complete_direct_job(job, timeout, deadline)
+    stderr = completion.stderr
+    if completion.cleanup_error is not None:
+        stderr += f"\ndirect cleanup error: {completion.cleanup_error}\n"
+        if completion.returncode == 0:
+            raise SimulatorLifecycleError(completion.cleanup_error)
+    if completion.returncode is None:
+        raise subprocess.TimeoutExpired(command, timeout, completion.stdout, stderr)
+    return LifecycleOutcome(command, completion.returncode, completion.stdout, stderr)
+
+
+def complete_direct_job(
+    job: DirectJob,
+    timeout: float,
+    deadline: float | None,
+    cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
+) -> DirectCompletion:
     cleanup_attempted = False
     cleanup_errors: list[str] = []
     try:
-        returncode = wait_for_direct_status(job, timeout, deadline)
+        returncode = wait_for_direct_status(job, timeout, deadline, cleanup_reserve)
         cleanup_attempted = True
         try:
             cleanup_direct_job(job, deadline, returncode is None)
@@ -2805,7 +2833,9 @@ def direct_lifecycle_process(
     except Exception as error:
         if not cleanup_attempted and job.root.exists():
             record_cleanup_failure(
-                cleanup_errors, "", lambda: cleanup_direct_job(job, deadline, True)
+                cleanup_errors,
+                "",
+                lambda: cleanup_direct_job(job, deadline, True),
             )
         record_cleanup_failure(
             cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
@@ -2815,14 +2845,9 @@ def direct_lifecycle_process(
     record_cleanup_failure(
         cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
     )
-    cleanup_error = cleanup_error_text(cleanup_errors)
-    if cleanup_error is not None:
-        stderr += f"\ndirect cleanup error: {cleanup_error}\n"
-        if returncode == 0:
-            raise SimulatorLifecycleError(cleanup_error)
-    if returncode is None:
-        raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
-    return LifecycleOutcome(command, returncode, stdout, stderr)
+    return DirectCompletion(
+        returncode, stdout, stderr, cleanup_error_text(cleanup_errors)
+    )
 
 
 def contained_lifecycle_process(
