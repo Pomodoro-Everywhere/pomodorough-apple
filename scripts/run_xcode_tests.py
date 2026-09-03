@@ -408,6 +408,19 @@ def unique_process_identity(pid: int, info: ProcUniqueIdentifierInfo) -> Process
     return ProcessIdentity(pid, (info.p_uniqueid, info.p_idversion), tuple(values))
 
 
+def stable_darwin_process_identity(pid: int) -> ProcessIdentity | None:
+    first = unique_identifier_info(pid)
+    second = unique_identifier_info(pid)
+    if (
+        first is None
+        or second is None
+        or first.p_uniqueid != second.p_uniqueid
+        or first.p_idversion != second.p_idversion
+    ):
+        return None
+    return direct_identity(unique_process_identity(pid, first))
+
+
 def stable_darwin_process_info(
     pid: int,
 ) -> tuple[ProcessIdentity, ProcBSDInfo] | None:
@@ -596,6 +609,8 @@ def direct_process_record(pid: int) -> tuple[ProcessIdentity, int] | None:
 
 
 def direct_process_identity(pid: int) -> ProcessIdentity | None:
+    if LIBPROC is not None:
+        return stable_darwin_process_identity(pid)
     record = direct_process_record(pid)
     return None if record is None else record[0]
 

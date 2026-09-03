@@ -1331,6 +1331,42 @@ class XcodeTestRunnerTests(unittest.TestCase):
             record = run_xcode_tests.stable_darwin_process_info(2222)
         self.assertIsNone(record)
 
+    def test_darwin_direct_identity_does_not_require_bsd_record(self) -> None:
+        first = run_xcode_tests.ProcUniqueIdentifierInfo()
+        first.p_uniqueid = 10
+        first.p_idversion = 20
+        second = run_xcode_tests.ProcUniqueIdentifierInfo()
+        second.p_uniqueid = 10
+        second.p_idversion = 20
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "unique_identifier_info",
+            side_effect=[first, second],
+        ), mock.patch.object(run_xcode_tests, "direct_process_record") as record:
+            identity = run_xcode_tests.direct_process_identity(2222)
+        self.assertEqual(identity, darwin_direct_identity(2222, 10, 20))
+        record.assert_not_called()
+
+    def test_stable_darwin_identity_rejects_process_or_exec_churn(self) -> None:
+        cases = ((10, 20, 11, 20), (10, 20, 10, 21))
+        for first_unique, first_version, second_unique, second_version in cases:
+            first = run_xcode_tests.ProcUniqueIdentifierInfo()
+            first.p_uniqueid = first_unique
+            first.p_idversion = first_version
+            second = run_xcode_tests.ProcUniqueIdentifierInfo()
+            second.p_uniqueid = second_unique
+            second.p_idversion = second_version
+            with self.subTest(
+                first=(first_unique, first_version),
+                second=(second_unique, second_version),
+            ), mock.patch.object(
+                run_xcode_tests,
+                "unique_identifier_info",
+                side_effect=[first, second],
+            ):
+                identity = run_xcode_tests.stable_darwin_process_identity(2222)
+            self.assertIsNone(identity)
+
     def test_launchd_containment_rejects_identity_or_coalition_churn(self) -> None:
         original = run_xcode_tests.ProcessIdentity(2222, (10, 20))
         replacement = run_xcode_tests.ProcessIdentity(2222, (11, 20))
