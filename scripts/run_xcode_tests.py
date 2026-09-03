@@ -50,6 +50,7 @@ LAUNCH_INFRASTRUCTURE_MARKERS = (
 SIMULATOR_DESTINATION_KEYS = frozenset({"platform", "name", "id", "OS", "arch"})
 SIMULATOR_ARCHITECTURES = frozenset({"arm64", "x86_64"})
 CLEANUP_RESERVE_SECONDS = 2.0
+CONTAINED_JOB_CLEANUP_SECONDS = 6.0
 CONTAINMENT_DRAIN_RESERVE_SECONDS = 0.25
 CONTAINMENT_BOOTOUT_RESERVE_SECONDS = 0.5
 CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS = 0.5
@@ -2233,7 +2234,7 @@ def cleanup_coalition_id(
 def cleanup_contained_job(
     job: LaunchdJob, deadline: float | None, _signal_root: bool
 ) -> None:
-    cleanup_by = cleanup_deadline(deadline)
+    cleanup_by = cleanup_deadline(deadline, CONTAINED_JOB_CLEANUP_SECONDS)
     deadlines = containment_cleanup_deadlines(cleanup_by)
     coalition_id = cleanup_coalition_id(job, deadlines)
     errors: list[str] = []

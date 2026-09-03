@@ -2203,6 +2203,110 @@ class XcodeTestRunnerTests(unittest.TestCase):
             return str(error)
         return result if isinstance(result, str) else None
 
+    def hosted_cleanup_deadlines(
+        self, sidecar: str | None, caller_deadline: float | None = None
+    ) -> tuple[list[float], dict[str, object]]:
+        clock = [10.0]
+        signal_deadlines: list[float] = []
+        deadlines: dict[str, object] = {}
+
+        def signal_members(
+            _coalition_id: int, _requested: signal.Signals, deadline: float
+        ) -> None:
+            signal_deadlines.append(deadline)
+            clock[0] += 0.4
+            if clock[0] >= deadline:
+                raise run_xcode_tests.SimulatorLifecycleError(
+                    "Darwin coalition census deadline expired"
+                )
+
+        def capture(name: str) -> object:
+            def operation(
+                _value: object,
+                deadline: float,
+                process_cleanup_deadline: float | None = None,
+            ) -> None:
+                deadlines[name] = deadline
+                if process_cleanup_deadline is not None:
+                    deadlines["bootout_cleanup"] = process_cleanup_deadline
+
+            return operation
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            if sidecar is not None:
+                job.coalition_path.write_text(sidecar, encoding="utf-8")
+            with mock.patch.object(
+                run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+            ), mock.patch.object(
+                run_xcode_tests, "signal_coalition_members", side_effect=signal_members
+            ), mock.patch.object(
+                run_xcode_tests, "pause_before_cleanup"
+            ), mock.patch.object(
+                run_xcode_tests, "drain_coalition", side_effect=capture("drain")
+            ), mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=capture("bootout")
+            ), mock.patch.object(
+                run_xcode_tests, "confirm_job_absent", side_effect=capture("confirm")
+            ):
+                run_xcode_tests.cleanup_contained_job(job, caller_deadline, False)
+        return signal_deadlines, deadlines
+
+    def test_hosted_cleanup_paths_receive_bounded_census_budget(self) -> None:
+        cases = {
+            "descendant": ('{"resource_coalition_id":77}', 14.0),
+            "sidecar-missing-0": (None, 16.0),
+            "sidecar-missing-4": (None, 16.0),
+            "sidecar-corrupt-0": ("not-json", 16.0),
+            "sidecar-corrupt-3": ("not-json", 16.0),
+            "sidecar-corrupt-4": ("not-json", 16.0),
+            "sidecar-forged-1": ('{"resource_coalition_id":999}', 16.0),
+            "sidecar-forged-2": ('{"resource_coalition_id":999}', 16.0),
+            "successful-target": ('{"resource_coalition_id":77}', 15.0),
+        }
+        for name, (sidecar, caller_deadline) in cases.items():
+            with self.subTest(path=name):
+                with mock.patch.object(
+                    run_xcode_tests,
+                    "CONTAINED_JOB_CLEANUP_SECONDS",
+                    run_xcode_tests.CLEANUP_RESERVE_SECONDS,
+                ), self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "Darwin coalition census deadline expired",
+                ):
+                    self.hosted_cleanup_deadlines(sidecar, caller_deadline)
+                signal_deadlines, deadlines = self.hosted_cleanup_deadlines(
+                    sidecar, caller_deadline
+                )
+                expected = run_xcode_tests.containment_cleanup_deadlines(
+                    caller_deadline
+                )
+                self.assertTrue(signal_deadlines)
+                self.assertTrue(
+                    all(deadline == expected.signal_by for deadline in signal_deadlines)
+                )
+                self.assertEqual(deadlines["drain"], expected.drain_by)
+                self.assertEqual(deadlines["bootout"], expected.bootout_by)
+                self.assertEqual(
+                    deadlines["bootout_cleanup"], expected.bootout_cleanup_by
+                )
+                self.assertEqual(deadlines["confirm"], expected.confirmation_by)
+
+    def test_contained_cleanup_budget_obeys_caller_deadline(self) -> None:
+        caller_deadline = 15.0
+        signal_deadlines, deadlines = self.hosted_cleanup_deadlines(
+            '{"resource_coalition_id":77}', caller_deadline
+        )
+        expected = run_xcode_tests.containment_cleanup_deadlines(caller_deadline)
+        self.assertTrue(signal_deadlines)
+        self.assertTrue(
+            all(deadline == expected.signal_by for deadline in signal_deadlines)
+        )
+        self.assertEqual(deadlines["drain"], expected.drain_by)
+        self.assertEqual(deadlines["bootout"], expected.bootout_by)
+        self.assertEqual(deadlines["bootout_cleanup"], expected.bootout_cleanup_by)
+        self.assertEqual(deadlines["confirm"], caller_deadline)
+
     def expired_drain_finalization(
         self,
         operation: Callable[[run_xcode_tests.LaunchdJob], object],
