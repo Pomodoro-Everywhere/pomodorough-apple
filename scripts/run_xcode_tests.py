@@ -845,6 +845,18 @@ def direct_audit_pid_version(identity: ProcessIdentity) -> int | None:
     return token[7]
 
 
+def direct_wrapper_process_identity(pid: int) -> ProcessIdentity | None:
+    if LIBPROC is None:
+        return direct_process_identity(pid)
+    first_start = darwin_process_start_abstime(pid)
+    token = darwin_process_audit_token(pid)
+    second_start = darwin_process_start_abstime(pid)
+    if token is None or first_start is None or first_start != second_start:
+        return None
+    identity = ProcessIdentity(pid, (first_start, 0), token)
+    return identity if direct_audit_pid_version(identity) is not None else None
+
+
 def peer_identity_covers_exec_report(
     reported: ProcessIdentity, current: ProcessIdentity
 ) -> bool:
@@ -1633,7 +1645,7 @@ def configure_direct_subreaper() -> None:
 def await_direct_process_identity(pid: int, deadline: float) -> ProcessIdentity:
     def inspect() -> ProcessIdentity | None:
         while time.monotonic() < deadline:
-            identity = direct_process_identity(pid)
+            identity = direct_wrapper_process_identity(pid)
             if identity is not None:
                 return identity
             time.sleep(bounded_wait(deadline, DESCENDANT_POLL_SECONDS))
@@ -1731,7 +1743,7 @@ def darwin_direct_target_identity(
     deadline: float | None,
 ) -> ProcessIdentity:
     current = direct_process_identity(wrapper.pid)
-    if current is None or current != wrapper:
+    if current is None or not peer_identity_covers_exec_report(wrapper, current):
         raise SimulatorLifecycleError("direct wrapper identity changed")
     if process.poll() is not None:
         raise SimulatorLifecycleError("direct target ancestry unavailable")
@@ -1741,7 +1753,7 @@ def darwin_direct_target_identity(
     if identity is None or process.poll() is not None:
         raise SimulatorLifecycleError("direct target ancestry unavailable")
     current = direct_process_identity(wrapper.pid)
-    if current is None or current != wrapper:
+    if current is None or not peer_identity_covers_exec_report(wrapper, current):
         raise SimulatorLifecycleError("direct wrapper identity changed")
     return identity
 
@@ -3048,6 +3060,27 @@ def await_peer_identity_covering_exec_report(
     )
 
 
+def await_peer_identity_covering_wrapper_report(
+    descriptor: int, reported: ProcessIdentity, deadline: float
+) -> ProcessIdentity | None:
+    retry_deadline = deadline - DESCENDANT_POLL_SECONDS
+
+    def inspect() -> ProcessIdentity | None:
+        while time.monotonic() < retry_deadline:
+            current = stable_darwin_peer_identity(descriptor, reported.pid)
+            if current is not None:
+                if peer_identity_covers_exec_report(reported, current):
+                    return current
+                if not peer_identity_precedes_exec_report(reported, current):
+                    return None
+            time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
+        return None
+
+    return deadline_call(
+        inspect, deadline, "direct wrapper identity deadline expired"
+    )
+
+
 def direct_message_deadline(deadline: float | None) -> float:
     handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
     return min(handshake_by, deadline) if deadline is not None else handshake_by
@@ -3137,18 +3170,19 @@ def await_direct_identity(
                     handshake_by,
                 )
                 channel.wrapper_listener = -1
-                current = bounded_peer_process_identity(
-                    channel.wrapper_peer, process.pid, handshake_by
+                current = await_peer_identity_covering_wrapper_report(
+                    channel.wrapper_peer, identity, handshake_by
                 )
             else:
                 current = bounded_process_identity(process.pid, handshake_by)
             if (
                 identity.pid != process.pid
                 or current is None
-                or current != identity
+                or not same_direct_process(current, identity)
             ):
                 raise SimulatorLifecycleError("forged direct wrapper identity")
-            return identity
+            channel.wrapper = current
+            return current
         if channel.closed or process.poll() is not None:
             raise SimulatorLifecycleError("direct wrapper exited before identity handshake")
         time.sleep(bounded_wait(handshake_by, DESCENDANT_POLL_SECONDS))

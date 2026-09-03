@@ -566,6 +566,120 @@ def spawn_execing_socket_peer(
     )
 
 
+def spawn_reporting_execing_socket_peer(
+    socket_path: Path, report_descriptor: int
+) -> subprocess.Popen[bytes]:
+    exec_source = "import os,sys,time;os.write(int(sys.argv[1]),b'x');time.sleep(30)"
+    child_source = textwrap.dedent(
+        """
+        import os
+        import socket
+        import sys
+        import time
+
+        sys.path.insert(0, sys.argv[1])
+        from scripts import run_xcode_tests as runner
+
+        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        peer.connect(sys.argv[2])
+        peer.set_inheritable(True)
+        deadline = time.monotonic() + 5
+        identity = None
+        while identity is None and time.monotonic() < deadline:
+            identity = runner.direct_process_identity(os.getpid())
+        if identity is None:
+            raise SystemExit(125)
+        report = runner.json.dumps(runner.identity_payload(identity)).encode()
+        os.write(int(sys.argv[3]), report)
+        os.set_inheritable(int(sys.argv[3]), False)
+        os.execv(sys.executable, [sys.executable, "-c", sys.argv[4], str(peer.fileno())])
+        """
+    )
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            child_source,
+            str(ROOT),
+            str(socket_path),
+            str(report_descriptor),
+            exec_source,
+        ],
+        pass_fds=(report_descriptor,),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def read_reported_wrapper_identity(
+    descriptor: int, deadline: float
+) -> run_xcode_tests.ProcessIdentity:
+    content = bytearray()
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([descriptor], [], [], 0.1)
+        if not ready:
+            continue
+        chunk = os.read(descriptor, 4096)
+        if not chunk:
+            break
+        content.extend(chunk)
+    payload = run_xcode_tests.json.loads(content)
+    return run_xcode_tests.process_identity_from_payload(payload, "wrapper stress")
+
+
+def await_execed_wrapper_identity(
+    process: subprocess.Popen[bytes],
+    reported: run_xcode_tests.ProcessIdentity,
+    deadline: float,
+) -> run_xcode_tests.ProcessIdentity:
+    while time.monotonic() < deadline:
+        current = run_xcode_tests.direct_process_identity(process.pid)
+        if current is not None and current.audit_token != reported.audit_token:
+            if run_xcode_tests.peer_identity_covers_exec_report(reported, current):
+                return current
+        time.sleep(run_xcode_tests.bounded_wait(deadline, 0.01))
+    raise AssertionError("wrapper exec identity unavailable")
+
+
+def exercise_real_wrapper_exec_convergence() -> tuple[
+    run_xcode_tests.ProcessIdentity,
+    run_xcode_tests.ProcessIdentity,
+    run_xcode_tests.ProcessIdentity,
+]:
+    with tempfile.TemporaryDirectory() as directory:
+        socket_path = Path(directory) / "wrapper.sock"
+        listener = run_xcode_tests.open_direct_listener(socket_path)
+        report_read, report_write = os.pipe()
+        process = spawn_reporting_execing_socket_peer(socket_path, report_write)
+        os.close(report_write)
+        channel = run_xcode_tests.DirectChannel(-1, b"key")
+        try:
+            deadline = time.monotonic() + 5
+            reported = read_reported_wrapper_identity(report_read, deadline)
+            current = await_execed_wrapper_identity(process, reported, deadline)
+            channel.wrapper = reported
+            channel.wrapper_listener = listener.detach()
+            channel.wrapper_socket_path = socket_path
+            channel.peer_identity_required = True
+            with mock.patch.object(run_xcode_tests, "pump_direct_channel"):
+                accepted = run_xcode_tests.await_direct_identity(
+                    channel, process, deadline
+                )
+            ready, _, _ = select.select([channel.wrapper_peer], [], [], 1)
+            if ready != [channel.wrapper_peer] or os.read(channel.wrapper_peer, 1) != b"x":
+                raise AssertionError("exec wrapper peer unavailable")
+            return reported, current, accepted
+        finally:
+            listener.close()
+            os.close(report_read)
+            for descriptor in (channel.wrapper_listener, channel.wrapper_peer):
+                if descriptor >= 0:
+                    os.close(descriptor)
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+
 def darwin_descendant_fixture() -> tuple[
     run_xcode_tests.ProcessIdentity,
     list[int],
@@ -1868,7 +1982,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         identity = run_xcode_tests.ProcessIdentity(2222, (30, 40))
         with mock.patch.object(
             run_xcode_tests,
-            "direct_process_identity",
+            "direct_wrapper_process_identity",
             side_effect=[None, None, identity],
         ) as inspect, mock.patch.object(run_xcode_tests.time, "sleep") as sleep:
             result = run_xcode_tests.await_direct_process_identity(
@@ -1892,7 +2006,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         try:
             with mock.patch.object(
                 run_xcode_tests,
-                "direct_process_identity",
+                "direct_wrapper_process_identity",
                 side_effect=stalled_identity,
             ):
                 with self.assertRaisesRegex(
@@ -1912,7 +2026,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             return operation()
 
         with mock.patch.object(
-            run_xcode_tests, "direct_process_identity", return_value=None
+            run_xcode_tests, "direct_wrapper_process_identity", return_value=None
         ), mock.patch.object(
             run_xcode_tests.time, "monotonic", side_effect=[0.0, 0.0, 1.0]
         ), mock.patch.object(
@@ -2098,6 +2212,37 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 identity = run_xcode_tests.stable_darwin_process_identity(2222)
             self.assertIsNone(identity)
 
+    def test_darwin_wrapper_identity_accepts_stable_birth_token_sample(self) -> None:
+        expected = darwin_direct_identity(2222, 10, 20)
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "darwin_process_start_abstime",
+            side_effect=[10, 10],
+        ), mock.patch.object(
+            run_xcode_tests,
+            "darwin_process_audit_token",
+            return_value=expected.audit_token,
+        ):
+            identity = run_xcode_tests.direct_wrapper_process_identity(2222)
+        self.assertEqual(identity, expected)
+
+    def test_darwin_wrapper_identity_rejects_birth_or_token_substitution(self) -> None:
+        valid = darwin_direct_identity(2222, 10, 20).audit_token
+        wrong_pid = darwin_direct_identity(3333, 10, 20).audit_token
+        cases = (([10, 11], valid), ([10, 10], wrong_pid), ([10, 10], None))
+        for starts, token in cases:
+            with self.subTest(starts=starts, token=token), mock.patch.object(
+                run_xcode_tests, "LIBPROC", object()
+            ), mock.patch.object(
+                run_xcode_tests,
+                "darwin_process_start_abstime",
+                side_effect=starts,
+            ), mock.patch.object(
+                run_xcode_tests, "darwin_process_audit_token", return_value=token
+            ):
+                identity = run_xcode_tests.direct_wrapper_process_identity(2222)
+            self.assertIsNone(identity)
+
     def test_stable_darwin_peer_identity_accepts_one_exec_transition(self) -> None:
         before_exec = darwin_direct_identity(2222, 10, 20)
         after_exec = darwin_direct_identity(2222, 10, 21)
@@ -2130,6 +2275,36 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ):
                 identity = run_xcode_tests.stable_darwin_peer_identity(91, 2222)
             self.assertIsNone(identity)
+
+    def test_wrapper_peer_identity_waits_for_reported_exec_generation(self) -> None:
+        before_report = darwin_direct_identity(2222, 10, 19)
+        reported = darwin_direct_identity(2222, 10, 20)
+        after_report = darwin_direct_identity(2222, 10, 21)
+        with mock.patch.object(
+            run_xcode_tests,
+            "stable_darwin_peer_identity",
+            side_effect=[before_report, after_report],
+        ) as inspect, mock.patch.object(run_xcode_tests.time, "sleep"):
+            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
+                91, reported, time.monotonic() + 1
+            )
+        self.assertEqual(current, after_report)
+        self.assertEqual(inspect.call_count, 2)
+
+    def test_wrapper_peer_identity_does_not_accept_peer_eof(self) -> None:
+        reported = darwin_direct_identity(2222, 10, 20)
+        with mock.patch.object(
+            run_xcode_tests,
+            "stable_darwin_peer_identity",
+            return_value=None,
+        ), mock.patch.object(
+            run_xcode_tests, "direct_peer_closed", return_value=True
+        ) as closed:
+            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
+                91, reported, time.monotonic() + 0.02
+            )
+        self.assertIsNone(current)
+        closed.assert_not_called()
 
     def test_stable_darwin_peer_identity_rejects_missing_descriptor(self) -> None:
         with self.assertRaisesRegex(
@@ -2216,6 +2391,42 @@ class XcodeTestRunnerTests(unittest.TestCase):
             observed = run_xcode_tests.direct_target_identity(process, wrapper, 91)
         self.assertEqual(observed, target)
         private.assert_not_called()
+
+    def test_darwin_target_identity_accepts_wrapper_exec_convergence(self) -> None:
+        wrapper = darwin_direct_identity(1111, 10, 20)
+        converged = darwin_direct_identity(1111, 10, 21)
+        target = darwin_direct_identity(2222, 30, 40)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        process.poll.return_value = None
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[converged, converged],
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity", return_value=target
+        ):
+            observed = run_xcode_tests.direct_target_identity(process, wrapper, 91)
+        self.assertEqual(observed, target)
+
+    def test_darwin_target_identity_rejects_wrapper_birth_substitution(self) -> None:
+        wrapper = darwin_direct_identity(1111, 10, 20)
+        replacement = darwin_direct_identity(1111, 11, 21)
+        target = darwin_direct_identity(2222, 30, 40)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        process.poll.return_value = None
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "direct_process_identity", return_value=replacement
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity", return_value=target
+        ) as peer:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "direct wrapper identity changed",
+            ):
+                run_xcode_tests.direct_target_identity(process, wrapper, 91)
+        peer.assert_not_called()
 
     def test_darwin_target_identity_rejects_exec_during_binding(self) -> None:
         wrapper = darwin_direct_identity(1111, 10, 20)
@@ -2391,16 +2602,68 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 7)
 
-    def test_wrapper_handshake_rejects_same_process_exec_generation(self) -> None:
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_wrapper_handshake_converges_after_real_exec_stress(self) -> None:
+        for iteration in range(40):
+            with self.subTest(iteration=iteration):
+                reported, current, accepted = exercise_real_wrapper_exec_convergence()
+                self.assertTrue(run_xcode_tests.same_direct_process(reported, current))
+                self.assertNotEqual(reported.audit_token, current.audit_token)
+                self.assertTrue(
+                    run_xcode_tests.peer_identity_covers_exec_report(reported, accepted)
+                )
+
+    def test_wrapper_handshake_accepts_same_process_exec_generation(self) -> None:
         reported = darwin_direct_identity(2222, 10, 20)
         current = darwin_direct_identity(2222, 10, 21)
-        channel = run_xcode_tests.DirectChannel(-1, b"key", wrapper=reported)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper=reported,
+            wrapper_listener=91,
+            wrapper_socket_path=Path("wrapper.sock"),
+            peer_identity_required=True,
+        )
         process = mock.Mock(spec=subprocess.Popen)
         process.pid = reported.pid
         with mock.patch.object(
             run_xcode_tests, "pump_direct_channel"
         ), mock.patch.object(
-            run_xcode_tests, "bounded_process_identity", return_value=current
+            run_xcode_tests, "bind_direct_peer_identity", return_value=92
+        ) as bind, mock.patch.object(
+            run_xcode_tests,
+            "await_peer_identity_covering_wrapper_report",
+            return_value=current,
+        ) as converge:
+            observed = run_xcode_tests.await_direct_identity(channel, process, None)
+        self.assertEqual(observed, current)
+        self.assertEqual(channel.wrapper, current)
+        self.assertEqual(channel.wrapper_peer, 92)
+        bind.assert_called_once()
+        converge.assert_called_once()
+
+    def test_wrapper_handshake_rejects_process_birth_substitution(self) -> None:
+        reported = darwin_direct_identity(2222, 10, 20)
+        replacement = darwin_direct_identity(2222, 11, 21)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper=reported,
+            wrapper_listener=91,
+            wrapper_socket_path=Path("wrapper.sock"),
+            peer_identity_required=True,
+        )
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = reported.pid
+        with mock.patch.object(run_xcode_tests, "pump_direct_channel"), mock.patch.object(
+            run_xcode_tests, "bind_direct_peer_identity", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests,
+            "await_peer_identity_covering_wrapper_report",
+            return_value=replacement,
         ):
             with self.assertRaisesRegex(
                 run_xcode_tests.SimulatorLifecycleError,
