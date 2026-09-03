@@ -1833,12 +1833,44 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with mock.patch.object(
             run_xcode_tests.subprocess, "Popen", return_value=process
         ), mock.patch.object(
-            run_xcode_tests.time, "monotonic", side_effect=[10.0, 10.0, 10.3]
+            run_xcode_tests.time, "monotonic", side_effect=[10.0, 10.3]
         ), mock.patch.object(run_xcode_tests, "terminate_launchctl_process") as terminate:
             result = run_xcode_tests.launchctl_run([], 10.2, 0.2)
         self.assertEqual(result.returncode, 113)
         process.wait.assert_not_called()
         terminate.assert_not_called()
+
+    def test_launchctl_retry_bounds_timeout_and_reap_to_one_deadline(self) -> None:
+        clock = [10.0]
+        waits: list[float] = []
+        process = mock.Mock(pid=2222)
+        process.poll.return_value = None
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 41))
+
+        def wait(timeout: float) -> int:
+            waits.append(timeout)
+            clock[0] += timeout
+            if len(waits) == 1:
+                raise subprocess.TimeoutExpired(["launchctl"], timeout)
+            return -signal.SIGKILL
+
+        process.wait.side_effect = wait
+        with mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(
+            run_xcode_tests.subprocess, "Popen", return_value=process
+        ), mock.patch.object(
+            run_xcode_tests, "process_identity", return_value=identity
+        ), mock.patch.object(
+            run_xcode_tests, "signal_identity", return_value=True
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError, "launchctl timed out"
+            ):
+                run_xcode_tests.launchctl_retry(["print", "service"], 10.5)
+        self.assertEqual(len(waits), 2)
+        self.assertAlmostEqual(sum(waits), 0.5)
+        self.assertAlmostEqual(clock[0], 10.5)
 
     def test_launchctl_reap_timeout_accepts_completed_process_poll(self) -> None:
         token = (0, 0, 0, 0, 0, 2222, 0, 41)
@@ -2138,16 +2170,143 @@ class XcodeTestRunnerTests(unittest.TestCase):
         cleanup.assert_called_once_with(job, None, False)
         self.assertFalse(job.root.exists())
 
-    def test_lifecycle_cleanup_records_timeout_after_coalition_drain(self) -> None:
-        events: list[str] = []
-        timeout = run_xcode_tests.SimulatorLifecycleError("launchctl timed out")
+    def containment_cleanup_operations(
+        self,
+    ) -> tuple[
+        tuple[str, Callable[[run_xcode_tests.LaunchdJob], object]], ...
+    ]:
+        return (
+            (
+                "lifecycle",
+                lambda job: run_xcode_tests.lifecycle_cleanup_error(job, None, False),
+            ),
+            (
+                "contained",
+                lambda job: run_xcode_tests.cleanup_contained_job(job, None, False),
+            ),
+            (
+                "handshake",
+                lambda job: run_xcode_tests.abort_containment_handshake(
+                    job, 77, None
+                ),
+            ),
+        )
 
-        def fail_bootout(*_args: object) -> None:
+    def cleanup_operation_result(
+        self,
+        operation: Callable[[run_xcode_tests.LaunchdJob], object],
+        job: run_xcode_tests.LaunchdJob,
+    ) -> str | None:
+        try:
+            result = operation(job)
+        except run_xcode_tests.SimulatorLifecycleError as error:
+            return str(error)
+        return result if isinstance(result, str) else None
+
+    def expired_drain_finalization(
+        self,
+        operation: Callable[[run_xcode_tests.LaunchdJob], object],
+        bootout_times_out: bool,
+    ) -> tuple[str | None, dict[str, float], mock.Mock]:
+        clock = [10.0]
+        budgets: dict[str, float] = {}
+        process = mock.Mock(pid=2222)
+        process.poll.return_value = None
+        identity = run_xcode_tests.ProcessIdentity(2222, (10, 41))
+
+        def drain(_coalition_id: int, deadline: float) -> None:
+            clock[0] = deadline + 0.000001
+            raise run_xcode_tests.SimulatorLifecycleError("descendants remained")
+
+        def wait(timeout: float) -> int:
+            phase = "bootout" if "bootout" not in budgets else "termination"
+            budgets[phase] = timeout
+            clock[0] += timeout
+            if phase == "bootout" and bootout_times_out:
+                raise subprocess.TimeoutExpired(["launchctl"], timeout)
+            return 0
+
+        def confirm_absence(
+            arguments: list[str], deadline: float
+        ) -> subprocess.CompletedProcess[str]:
+            budgets["absence"] = deadline - clock[0]
+            return subprocess.CompletedProcess(arguments, 113, "", "Could not find service")
+
+        process.wait.side_effect = wait
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+            ), mock.patch.object(
+                run_xcode_tests, "cleanup_coalition_id", return_value=77
+            ), mock.patch.object(
+                run_xcode_tests, "signal_coalition_members"
+            ), mock.patch.object(
+                run_xcode_tests, "pause_before_cleanup"
+            ), mock.patch.object(
+                run_xcode_tests, "drain_coalition", side_effect=drain
+            ), mock.patch.object(
+                run_xcode_tests.subprocess, "Popen", return_value=process
+            ) as launch, mock.patch.object(
+                run_xcode_tests, "launchctl_retry", side_effect=confirm_absence
+            ), mock.patch.object(
+                run_xcode_tests, "process_identity", return_value=identity
+            ), mock.patch.object(
+                run_xcode_tests, "signal_identity", return_value=True
+            ):
+                result = self.cleanup_operation_result(operation, job)
+        return result, budgets, launch
+
+    def assert_expired_drain_preserves_finalization(
+        self,
+        operation: Callable[[run_xcode_tests.LaunchdJob], object],
+        bootout_times_out: bool,
+    ) -> None:
+        result, budgets, launch = self.expired_drain_finalization(
+            operation, bootout_times_out
+        )
+        expected = "coalition drain failed: descendants remained"
+        if bootout_times_out:
+            expected += "; bootout failed: launchctl timed out"
+        self.assertEqual(result, expected)
+        self.assertGreater(budgets["bootout"], 0)
+        self.assertLessEqual(
+            budgets["bootout"], run_xcode_tests.CONTAINMENT_BOOTOUT_RESERVE_SECONDS
+        )
+        if bootout_times_out:
+            self.assertAlmostEqual(
+                budgets["termination"],
+                run_xcode_tests.CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS,
+            )
+            self.assertAlmostEqual(
+                budgets["absence"],
+                run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS,
+            )
+        else:
+            self.assertGreaterEqual(
+                budgets["absence"],
+                run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS,
+            )
+        launch.assert_called_once()
+        self.assertEqual(launch.call_args.args[0][1], "bootout")
+
+    def test_lifecycle_cleanup_drains_live_coalition_before_bootout(self) -> None:
+        events: list[str] = []
+        coalition_live = True
+
+        def bootout(*_args: object) -> None:
             events.append("bootout")
-            raise timeout
+            if coalition_live:
+                raise run_xcode_tests.SimulatorLifecycleError("launchctl timed out")
+
+        def drain(*_args: object) -> None:
+            nonlocal coalition_live
+            events.append("drain")
+            coalition_live = False
 
         def confirm_absence(*_args: object) -> None:
             events.append("confirm")
+            self.assertFalse(coalition_live)
 
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
@@ -2156,17 +2315,17 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
                 run_xcode_tests,
                 "drain_coalition",
-                side_effect=lambda *_args: events.append("drain"),
+                side_effect=drain,
             ), mock.patch.object(
-                run_xcode_tests, "bootout_job", side_effect=fail_bootout
+                run_xcode_tests, "bootout_job", side_effect=bootout
             ), mock.patch.object(
                 run_xcode_tests, "confirm_job_absent", side_effect=confirm_absence
             ):
                 cleanup_error = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
-        self.assertEqual(cleanup_error, "bootout failed: launchctl timed out")
-        self.assertEqual(events, ["bootout", "drain", "confirm"])
+        self.assertIsNone(cleanup_error)
+        self.assertEqual(events, ["drain", "bootout", "confirm"])
 
-    def test_lifecycle_cleanup_reports_all_teardown_errors(self) -> None:
+    def test_cleanup_paths_report_all_finalization_errors(self) -> None:
         events: list[str] = []
         bootout_failure = run_xcode_tests.SimulatorLifecycleError(
             "bootout permission denied"
@@ -2188,33 +2347,216 @@ class XcodeTestRunnerTests(unittest.TestCase):
             events.append("drain")
             raise drain_failure
 
+        for name, operation in self.containment_cleanup_operations():
+            events.clear()
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as directory:
+                job = launchd_job(Path(directory))
+                with mock.patch.object(
+                    run_xcode_tests, "cleanup_coalition_id", return_value=77
+                ), mock.patch.object(
+                    run_xcode_tests, "signal_coalition_members"
+                ), mock.patch.object(
+                    run_xcode_tests, "pause_before_cleanup"
+                ), mock.patch.object(
+                    run_xcode_tests, "drain_coalition", side_effect=fail_drain
+                ), mock.patch.object(
+                    run_xcode_tests, "bootout_job", side_effect=fail_bootout
+                ), mock.patch.object(
+                    run_xcode_tests, "confirm_job_absent", side_effect=fail_absence
+                ):
+                    cleanup_error = self.cleanup_operation_result(operation, job)
+            self.assertEqual(
+                cleanup_error,
+                "coalition drain failed: descendants remained; "
+                "bootout failed: bootout permission denied; "
+                "absence confirmation failed: absence permission denied",
+            )
+            self.assertEqual(events, ["drain", "bootout", "confirm"])
+
+    def test_missing_coalition_still_aggregates_finalization_failures(self) -> None:
+        events: list[str] = []
+
+        def fail(phase: str, detail: str) -> Callable[..., None]:
+            def operation(*_args: object) -> None:
+                events.append(phase)
+                raise run_xcode_tests.SimulatorLifecycleError(detail)
+
+            return operation
+
+        for name, operation in self.containment_cleanup_operations()[:2]:
+            events.clear()
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as directory:
+                job = launchd_job(Path(directory), None)
+                with mock.patch.object(
+                    run_xcode_tests, "bootout_job", side_effect=fail("bootout", "denied")
+                ), mock.patch.object(
+                    run_xcode_tests,
+                    "confirm_job_absent",
+                    side_effect=fail("confirm", "still loaded"),
+                ), mock.patch.object(run_xcode_tests, "drain_coalition") as drain:
+                    cleanup_error = self.cleanup_operation_result(operation, job)
+            self.assertEqual(
+                cleanup_error,
+                "contained coalition identity unavailable; containment finalization "
+                "failed: bootout failed: denied; absence confirmation failed: still loaded",
+            )
+            self.assertEqual(events, ["bootout", "confirm"])
+            drain.assert_not_called()
+
+    def test_cleanup_attempts_unload_and_absence_after_drain_failure(self) -> None:
+        events: list[str] = []
+        drain_failure = run_xcode_tests.SimulatorLifecycleError("descendants remained")
+
+        def capture(name: str, failure: Exception | None = None) -> object:
+            def operation(*_args: object) -> None:
+                events.append(name)
+                if failure is not None:
+                    raise failure
+
+            return operation
+
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
             with mock.patch.object(
                 run_xcode_tests, "cleanup_coalition_id", return_value=77
             ), mock.patch.object(run_xcode_tests, "signal_coalition_members"), mock.patch.object(
+                run_xcode_tests, "pause_before_cleanup"
+            ), mock.patch.object(
                 run_xcode_tests,
                 "drain_coalition",
-                side_effect=fail_drain,
+                side_effect=capture("drain", drain_failure),
             ), mock.patch.object(
-                run_xcode_tests, "bootout_job", side_effect=fail_bootout
+                run_xcode_tests, "bootout_job", side_effect=capture("bootout")
             ), mock.patch.object(
-                run_xcode_tests, "confirm_job_absent", side_effect=fail_absence
+                run_xcode_tests,
+                "confirm_job_absent",
+                side_effect=capture("confirm"),
             ):
-                cleanup_error = run_xcode_tests.lifecycle_cleanup_error(job, None, False)
-        self.assertEqual(
-            cleanup_error,
-            "bootout failed: bootout permission denied; "
-            "coalition drain failed: descendants remained; "
-            "absence confirmation failed: absence permission denied",
-        )
-        self.assertEqual(events, ["bootout", "drain", "confirm"])
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "coalition drain failed: descendants remained",
+                ):
+                    run_xcode_tests.cleanup_contained_job(job, None, False)
+        self.assertEqual(events, ["drain", "bootout", "confirm"])
+
+    def test_handshake_abort_drains_known_coalition_before_bootout(self) -> None:
+        events: list[str] = []
+        coalition_live = True
+
+        def drain(*_args: object) -> None:
+            nonlocal coalition_live
+            events.append("drain")
+            coalition_live = False
+
+        def bootout(*_args: object) -> None:
+            events.append("bootout")
+            self.assertFalse(coalition_live)
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            with mock.patch.object(
+                run_xcode_tests, "drain_coalition", side_effect=drain
+            ), mock.patch.object(
+                run_xcode_tests, "bootout_job", side_effect=bootout
+            ), mock.patch.object(
+                run_xcode_tests,
+                "confirm_job_absent",
+                side_effect=lambda *_args: events.append("confirm"),
+            ):
+                run_xcode_tests.abort_containment_handshake(job, 77, None)
+        self.assertEqual(events, ["drain", "bootout", "confirm"])
+
+    def test_drain_epsilon_preserves_finalization_across_cleanup_paths(self) -> None:
+        for name, operation in self.containment_cleanup_operations():
+            with self.subTest(path=name):
+                self.assert_expired_drain_preserves_finalization(operation, False)
+
+    def test_bootout_timeout_preserves_confirmation_across_cleanup_paths(self) -> None:
+        for name, operation in self.containment_cleanup_operations():
+            with self.subTest(path=name):
+                self.assert_expired_drain_preserves_finalization(operation, True)
+
+    def test_signal_exhaustion_preserves_finalization_across_cleanup_paths(self) -> None:
+        for name, operation in self.containment_cleanup_operations():
+            clock = [10.0]
+            events: list[str] = []
+            first_signal: list[str] = []
+
+            def signal_members(
+                _coalition_id: int, requested: signal.Signals, deadline: float
+            ) -> None:
+                events.append(requested.name)
+                if first_signal:
+                    return
+                first_signal.append(requested.name)
+                clock[0] = deadline + 0.000001
+                raise run_xcode_tests.SimulatorLifecycleError("signal budget exhausted")
+
+            def fail(phase: str, detail: str) -> Callable[..., None]:
+                def operation(*_args: object) -> None:
+                    events.append(phase)
+                    raise run_xcode_tests.SimulatorLifecycleError(detail)
+
+                return operation
+
+            def drain(_coalition_id: int, deadline: float) -> None:
+                events.append("drain")
+                if name == "handshake":
+                    signal_members(77, signal.SIGKILL, deadline)
+                raise run_xcode_tests.SimulatorLifecycleError("descendants remained")
+
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as directory:
+                job = launchd_job(Path(directory))
+                with mock.patch.object(
+                    run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+                ), mock.patch.object(
+                    run_xcode_tests, "cleanup_coalition_id", return_value=77
+                ), mock.patch.object(
+                    run_xcode_tests, "signal_coalition_members", side_effect=signal_members
+                ), mock.patch.object(
+                    run_xcode_tests, "pause_before_cleanup"
+                ), mock.patch.object(
+                    run_xcode_tests,
+                    "drain_coalition",
+                    side_effect=drain,
+                ), mock.patch.object(
+                    run_xcode_tests,
+                    "bootout_job",
+                    side_effect=fail("bootout", "bootout denied"),
+                ), mock.patch.object(
+                    run_xcode_tests,
+                    "confirm_job_absent",
+                    side_effect=fail("confirm", "absence denied"),
+                ):
+                    cleanup_error = self.cleanup_operation_result(operation, job)
+            detail = cleanup_error or ""
+            if name == "handshake":
+                self.assertIn("coalition drain failed: signal budget exhausted", detail)
+            else:
+                self.assertIn(
+                    f"{first_signal[0]} signal failed: signal budget exhausted", detail
+                )
+                self.assertIn("coalition drain failed: descendants remained", detail)
+            self.assertIn("bootout failed: bootout denied", detail)
+            self.assertIn("absence confirmation failed: absence denied", detail)
+            self.assertEqual(events[-2:], ["bootout", "confirm"])
 
     def test_lifecycle_cleanup_reserves_absence_confirmation_budget(self) -> None:
-        deadlines: dict[str, float] = {}
+        deadlines: dict[str, object] = {}
+        signal_deadlines: list[float] = []
 
         def capture(name: str) -> object:
-            return lambda _value, deadline: deadlines.__setitem__(name, deadline)
+            def operation(
+                _value: object,
+                deadline: float,
+                process_cleanup_deadline: float | None = None,
+            ) -> None:
+                value: object = deadline
+                if process_cleanup_deadline is not None:
+                    value = (deadline, process_cleanup_deadline)
+                deadlines[name] = value
+
+            return operation
 
         with tempfile.TemporaryDirectory() as directory:
             job = launchd_job(Path(directory))
@@ -2223,7 +2565,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "cleanup_coalition_id", return_value=77
             ) as coalition, mock.patch.object(
-                run_xcode_tests, "signal_coalition_members"
+                run_xcode_tests,
+                "signal_coalition_members",
+                side_effect=lambda _coalition, _signal, deadline: signal_deadlines.append(
+                    deadline
+                ),
             ), mock.patch.object(
                 run_xcode_tests, "pause_before_cleanup"
             ), mock.patch.object(
@@ -2238,11 +2584,29 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 )
         cleanup_by = 10.0 + run_xcode_tests.LIFECYCLE_CLEANUP_SECONDS
         teardown_by = cleanup_by - run_xcode_tests.CLEANUP_RESERVE_SECONDS
-        coalition.assert_called_once_with(job, teardown_by)
+        coalition.assert_called_once()
+        coalition_deadlines = coalition.call_args.args[1]
+        self.assertEqual(coalition.call_args.args[0], job)
+        self.assertEqual(coalition_deadlines.signal_by, teardown_by)
         self.assertEqual(
             deadlines,
-            {"bootout": teardown_by, "drain": teardown_by, "confirm": cleanup_by},
+            {
+                "bootout": (
+                    cleanup_by
+                    - run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS
+                    - run_xcode_tests.CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS,
+                    cleanup_by
+                    - run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS,
+                ),
+                "drain": cleanup_by
+                - run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS
+                - run_xcode_tests.CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS
+                - run_xcode_tests.CONTAINMENT_BOOTOUT_RESERVE_SECONDS,
+                "confirm": cleanup_by,
+            },
         )
+        self.assertTrue(signal_deadlines)
+        self.assertTrue(all(deadline == teardown_by for deadline in signal_deadlines))
 
     def test_bootstrap_timeout_always_aborts_possible_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3117,6 +3481,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ],
             None,
             1.5,
+            None,
         )
 
     def test_bootout_removes_inactive_definition_before_absence_proof(self) -> None:

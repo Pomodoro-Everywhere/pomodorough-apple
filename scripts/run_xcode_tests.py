@@ -50,6 +50,10 @@ LAUNCH_INFRASTRUCTURE_MARKERS = (
 SIMULATOR_DESTINATION_KEYS = frozenset({"platform", "name", "id", "OS", "arch"})
 SIMULATOR_ARCHITECTURES = frozenset({"arm64", "x86_64"})
 CLEANUP_RESERVE_SECONDS = 2.0
+CONTAINMENT_DRAIN_RESERVE_SECONDS = 0.25
+CONTAINMENT_BOOTOUT_RESERVE_SECONDS = 0.5
+CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS = 0.5
+CONTAINMENT_ABSENCE_RESERVE_SECONDS = 0.5
 TIMEOUT_EVIDENCE_SECONDS = 0.25
 EVIDENCE_WRITE_SECONDS = 1.0
 EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
@@ -202,6 +206,15 @@ class LaunchdJob:
     coalition_path: Path
     acknowledgement_path: Path
     coalition_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ContainmentCleanupDeadlines:
+    signal_by: float
+    drain_by: float
+    bootout_by: float
+    bootout_cleanup_by: float
+    confirmation_by: float
 
 
 @dataclass(frozen=True)
@@ -1252,7 +1265,7 @@ def captured_process_output(stream: BinaryIO) -> str:
 
 def terminate_launchctl_process(
     process: subprocess.Popen[bytes],
-    _operation_deadline: float | None = None,
+    deadline: float | None = None,
 ) -> None:
     if process.poll() is not None:
         return
@@ -1268,7 +1281,7 @@ def terminate_launchctl_process(
         if process_identity(process.pid) == identity:
             raise SimulatorLifecycleError("identity-bound launchctl termination failed")
         raise SimulatorLifecycleError("launchctl process identity changed")
-    cleanup_by = time.monotonic() + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+    cleanup_by = cleanup_deadline(deadline, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
     timeout = bounded_wait(cleanup_by, LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
     if timeout <= 0:
         if process.poll() is not None:
@@ -1300,13 +1313,18 @@ def wait_for_launchctl_process(
 
 
 def launchctl_run(
-    arguments: list[str], deadline: float | None, maximum: float = 2.0
+    arguments: list[str],
+    deadline: float | None,
+    maximum: float = 2.0,
+    process_cleanup_deadline: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [LAUNCHCTL, *arguments]
-    timeout = bounded_wait(deadline, maximum)
-    if timeout <= 0:
+    started_at = time.monotonic()
+    finish_by = started_at + maximum
+    if deadline is not None:
+        finish_by = min(finish_by, deadline)
+    if finish_by <= started_at:
         raise SimulatorLifecycleError("launchd containment deadline expired")
-    finish_by = time.monotonic() + timeout
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         try:
             process = subprocess.Popen(
@@ -1318,7 +1336,7 @@ def launchctl_run(
             returncode = wait_for_launchctl_process(process, command, finish_by)
         except subprocess.TimeoutExpired as error:
             try:
-                terminate_launchctl_process(process, finish_by)
+                terminate_launchctl_process(process, process_cleanup_deadline)
             except SimulatorLifecycleError as cleanup_error:
                 raise SimulatorLifecycleError(
                     f"launchctl timeout cleanup failed: {cleanup_error}"
@@ -1336,9 +1354,13 @@ def launchctl_retry(
     arguments: list[str], deadline: float, maximum: float = 0.25
 ) -> subprocess.CompletedProcess[str]:
     last_timeout: SimulatorLifecycleError | None = None
-    while time.monotonic() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        attempt_maximum = min(maximum, remaining / 2)
         try:
-            return launchctl_run(arguments, deadline, maximum)
+            return launchctl_run(arguments, deadline, attempt_maximum, deadline)
         except SimulatorLifecycleError as error:
             if not isinstance(error.__cause__, subprocess.TimeoutExpired):
                 raise
@@ -2033,11 +2055,16 @@ def pause_before_cleanup(deadline: float | None, maximum: float) -> None:
         time.sleep(wait)
 
 
-def bootout_job(job: LaunchdJob, deadline: float | None) -> str | None:
+def bootout_job(
+    job: LaunchdJob,
+    deadline: float | None,
+    process_cleanup_deadline: float | None = None,
+) -> str | None:
     result = launchctl_run(
         ["bootout", launchd_job_domain(job), str(job.root / "job.plist")],
         deadline,
         1.5,
+        process_cleanup_deadline,
     )
     if not result.returncode:
         return None
@@ -2115,52 +2142,27 @@ def cleanup_deadline(
     return cleanup_by if deadline is None else min(deadline, cleanup_by)
 
 
-def abort_containment_handshake(
-    job: LaunchdJob,
-    coalition_id: int | None,
-    deadline: float | None,
-    cleanup_maximum: float = CLEANUP_RESERVE_SECONDS,
+def containment_cleanup_deadlines(
+    confirmation_by: float, signal_cap: float | None = None
+) -> ContainmentCleanupDeadlines:
+    bootout_cleanup_by = (
+        confirmation_by - CONTAINMENT_ABSENCE_RESERVE_SECONDS
+    )
+    bootout_by = (
+        bootout_cleanup_by - CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS
+    )
+    drain_by = bootout_by - CONTAINMENT_BOOTOUT_RESERVE_SECONDS
+    signal_by = drain_by - CONTAINMENT_DRAIN_RESERVE_SECONDS
+    if signal_cap is not None:
+        signal_by = min(signal_by, signal_cap)
+    return ContainmentCleanupDeadlines(
+        signal_by, drain_by, bootout_by, bootout_cleanup_by, confirmation_by
+    )
+
+
+def record_containment_signals(
+    errors: list[str], coalition_id: int, deadline: float
 ) -> None:
-    cleanup_by = cleanup_deadline(deadline, cleanup_maximum)
-    bootout_job(job, cleanup_by)
-    if coalition_id is not None:
-        drain_coalition(coalition_id, cleanup_by)
-    confirm_job_absent(job, cleanup_by)
-
-
-def cleanup_coalition_id(job: LaunchdJob, deadline: float) -> int:
-    try:
-        return job_coalition_id(job)
-    except SimulatorLifecycleError:
-        bootout_job(job, deadline)
-        confirm_job_absent(job, deadline)
-        raise
-
-
-def cleanup_contained_job(
-    job: LaunchdJob, deadline: float | None, _signal_root: bool
-) -> None:
-    cleanup_by = cleanup_deadline(deadline)
-    coalition_id = cleanup_coalition_id(job, cleanup_by)
-    phases = [(signal.SIGINT, 0.05), (signal.SIGTERM, 0.1)]
-    if hasattr(signal, "SIGINFO"):
-        phases.insert(0, (signal.SIGINFO, 0.02))
-    for requested, pause in phases:
-        signal_coalition_members(coalition_id, requested, cleanup_by)
-        pause_before_cleanup(cleanup_by, pause)
-    bootout_job(job, cleanup_by)
-    drain_coalition(coalition_id, cleanup_by)
-    confirm_job_absent(job, cleanup_by)
-
-
-def lifecycle_cleanup_error(
-    job: LaunchdJob, deadline: float | None, _signal_root: bool
-) -> str | None:
-    cleanup_by = cleanup_deadline(deadline, LIFECYCLE_CLEANUP_SECONDS)
-    teardown_by = reserved_deadline(cleanup_by, CLEANUP_RESERVE_SECONDS)
-    assert teardown_by is not None
-    coalition_id = cleanup_coalition_id(job, teardown_by)
-    errors: list[str] = []
     phases = [(signal.SIGINT, 0.05), (signal.SIGTERM, 0.1)]
     if hasattr(signal, "SIGINFO"):
         phases.insert(0, (signal.SIGINFO, 0.02))
@@ -2169,19 +2171,90 @@ def lifecycle_cleanup_error(
             errors,
             f"{requested.name} signal failed",
             lambda requested=requested: signal_coalition_members(
-                coalition_id, requested, teardown_by
+                coalition_id, requested, deadline
             ),
         )
-        pause_before_cleanup(teardown_by, pause)
+        pause_before_cleanup(deadline, pause)
+
+
+def record_containment_finalization(
+    errors: list[str],
+    job: LaunchdJob,
+    coalition_id: int | None,
+    deadlines: ContainmentCleanupDeadlines,
+) -> None:
+    if coalition_id is not None:
+        record_cleanup_failure(
+            errors,
+            "coalition drain failed",
+            lambda: drain_coalition(coalition_id, deadlines.drain_by),
+        )
     record_cleanup_failure(
-        errors, "bootout failed", lambda: bootout_job(job, teardown_by)
+        errors,
+        "bootout failed",
+        lambda: bootout_job(
+            job, deadlines.bootout_by, deadlines.bootout_cleanup_by
+        ),
     )
     record_cleanup_failure(
-        errors, "coalition drain failed", lambda: drain_coalition(coalition_id, teardown_by)
+        errors,
+        "absence confirmation failed",
+        lambda: confirm_job_absent(job, deadlines.confirmation_by),
     )
-    record_cleanup_failure(
-        errors, "absence confirmation failed", lambda: confirm_job_absent(job, cleanup_by)
-    )
+
+
+def abort_containment_handshake(
+    job: LaunchdJob,
+    coalition_id: int | None,
+    deadline: float | None,
+    cleanup_maximum: float = CLEANUP_RESERVE_SECONDS,
+) -> None:
+    cleanup_by = cleanup_deadline(deadline, cleanup_maximum)
+    deadlines = containment_cleanup_deadlines(cleanup_by)
+    errors: list[str] = []
+    record_containment_finalization(errors, job, coalition_id, deadlines)
+    detail = cleanup_error_text(errors)
+    if detail is not None:
+        raise SimulatorLifecycleError(detail)
+
+
+def cleanup_coalition_id(
+    job: LaunchdJob, deadlines: ContainmentCleanupDeadlines
+) -> int:
+    try:
+        return job_coalition_id(job)
+    except SimulatorLifecycleError as error:
+        errors: list[str] = []
+        record_containment_finalization(errors, job, None, deadlines)
+        append_cleanup_errors(error, "containment finalization failed", errors)
+        raise
+
+
+def cleanup_contained_job(
+    job: LaunchdJob, deadline: float | None, _signal_root: bool
+) -> None:
+    cleanup_by = cleanup_deadline(deadline)
+    deadlines = containment_cleanup_deadlines(cleanup_by)
+    coalition_id = cleanup_coalition_id(job, deadlines)
+    errors: list[str] = []
+    record_containment_signals(errors, coalition_id, deadlines.signal_by)
+    record_containment_finalization(errors, job, coalition_id, deadlines)
+    detail = cleanup_error_text(errors)
+    if detail is not None:
+        raise SimulatorLifecycleError(detail)
+
+
+def lifecycle_cleanup_error(
+    job: LaunchdJob, deadline: float | None, _signal_root: bool
+) -> str | None:
+    cleanup_by = cleanup_deadline(deadline, LIFECYCLE_CLEANUP_SECONDS)
+    teardown_by = reserved_deadline(cleanup_by, CLEANUP_RESERVE_SECONDS)
+    assert teardown_by is not None
+    deadlines = containment_cleanup_deadlines(cleanup_by, teardown_by)
+    coalition_id = cleanup_coalition_id(job, deadlines)
+    errors: list[str] = []
+    record_containment_signals(errors, coalition_id, deadlines.signal_by)
+    record_containment_finalization(errors, job, coalition_id, deadlines)
     return cleanup_error_text(errors)
 
 
