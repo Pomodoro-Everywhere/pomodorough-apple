@@ -807,6 +807,23 @@ def configure_direct_subreaper() -> None:
         raise SimulatorLifecycleError(f"direct subreaper unavailable: {detail}")
 
 
+def await_direct_process_identity(pid: int, deadline: float) -> ProcessIdentity:
+    def inspect() -> ProcessIdentity | None:
+        while time.monotonic() < deadline:
+            identity = direct_process_identity(pid)
+            if identity is not None:
+                return identity
+            time.sleep(bounded_wait(deadline, DESCENDANT_POLL_SECONDS))
+        return None
+
+    identity = deadline_call(
+        inspect, deadline, "direct wrapper identity deadline expired"
+    )
+    if identity is None:
+        raise SimulatorLifecycleError("direct wrapper identity unavailable")
+    return identity
+
+
 def direct_child_identity(
     parent: ProcessIdentity, pid: int
 ) -> ProcessIdentity | None:
@@ -1046,12 +1063,11 @@ def direct_child(
     reporter: DirectReporter | None = None
     try:
         key = read_direct_key(key_descriptor)
+        reporter = DirectReporter(event_descriptor, key)
         os.close(key_descriptor)
         configure_direct_subreaper()
-        identity = direct_process_identity(os.getpid())
-        if identity is None:
-            raise SimulatorLifecycleError("direct wrapper identity unavailable")
-        reporter = DirectReporter(event_descriptor, key)
+        identity_deadline = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS / 2
+        identity = await_direct_process_identity(os.getpid(), identity_deadline)
         report_direct_event(
             reporter,
             {"event": "wrapper", "identity": identity_payload(identity)},

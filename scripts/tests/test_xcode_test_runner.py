@@ -1141,6 +1141,94 @@ class XcodeTestRunnerTests(unittest.TestCase):
             identity = run_xcode_tests.direct_child_identity(parent, departed.pid)
         self.assertIsNone(identity)
 
+    def test_direct_wrapper_identity_retries_transient_lookup_failures(self) -> None:
+        identity = run_xcode_tests.ProcessIdentity(2222, (30, 40))
+        with mock.patch.object(
+            run_xcode_tests,
+            "direct_process_identity",
+            side_effect=[None, None, identity],
+        ) as inspect, mock.patch.object(run_xcode_tests.time, "sleep") as sleep:
+            result = run_xcode_tests.await_direct_process_identity(
+                identity.pid, time.monotonic() + 1
+            )
+        self.assertEqual(result, identity)
+        self.assertEqual(inspect.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_direct_wrapper_identity_lookup_has_hard_deadline(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def stalled_identity(_pid: int) -> None:
+            entered.set()
+            release.wait(1)
+            finished.set()
+            raise RuntimeError("released stalled identity lookup")
+
+        try:
+            with mock.patch.object(
+                run_xcode_tests,
+                "direct_process_identity",
+                side_effect=stalled_identity,
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.OperationDeadlineExpired,
+                    "direct wrapper identity deadline expired",
+                ):
+                    run_xcode_tests.await_direct_process_identity(
+                        2222, time.monotonic() + 0.02
+                    )
+            self.assertTrue(entered.is_set())
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(1))
+
+    def test_direct_wrapper_identity_exhaustion_fails_closed(self) -> None:
+        def immediate(operation: Callable[[], object], *_args: object) -> object:
+            return operation()
+
+        with mock.patch.object(
+            run_xcode_tests, "direct_process_identity", return_value=None
+        ), mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=[0.0, 0.0, 1.0]
+        ), mock.patch.object(
+            run_xcode_tests.time, "sleep"
+        ), mock.patch.object(
+            run_xcode_tests, "deadline_call", side_effect=immediate
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "direct wrapper identity unavailable",
+            ):
+                run_xcode_tests.await_direct_process_identity(2222, 1.0)
+
+    def test_direct_child_authenticates_identity_setup_failure(self) -> None:
+        failure = run_xcode_tests.OperationDeadlineExpired(
+            "direct wrapper identity deadline expired"
+        )
+        with mock.patch.object(
+            run_xcode_tests, "read_direct_key", return_value=b"k" * 32
+        ), mock.patch.object(run_xcode_tests.os, "close"), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ) as configure, mock.patch.object(
+            run_xcode_tests, "await_direct_process_identity", side_effect=failure
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ) as report, mock.patch.object(
+            run_xcode_tests.signal, "pause", side_effect=RuntimeError("stop child")
+        ), mock.patch.object(run_xcode_tests, "spawn_gated_direct_target") as spawn:
+            with self.assertRaisesRegex(RuntimeError, "stop child"):
+                run_xcode_tests.direct_child(91, 92, 93, ["target"])
+        configure.assert_called_once_with()
+        reporter, payload = report.call_args.args
+        self.assertEqual((reporter.descriptor, reporter.key), (91, b"k" * 32))
+        self.assertEqual(
+            payload,
+            {"event": "error", "message": "direct wrapper identity deadline expired"},
+        )
+        spawn.assert_not_called()
+
     def test_stable_darwin_process_info_rejects_uniqueid_churn(self) -> None:
         first = run_xcode_tests.ProcUniqueIdentifierInfo()
         first.p_uniqueid = 10
