@@ -95,8 +95,7 @@ def lifecycle_test_deadline() -> float:
     return (
         time.monotonic()
         + run_xcode_tests.LIFECYCLE_BOOTSTRAP_SECONDS
-        + run_xcode_tests.CLEANUP_RESERVE_SECONDS
-        + 4
+        + run_xcode_tests.LIFECYCLE_CLEANUP_SECONDS
     )
 
 
@@ -2452,6 +2451,71 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests.launchctl_run([], 15.0, 1.0, 17.0)
         complete.assert_called_once_with(job, 1.0, 15.25, 2.0)
 
+    def test_bootout_reserves_full_direct_authentication_after_drain(self) -> None:
+        job = direct_job(Path("/tmp/ap12-bootout-authentication"))
+        clock = [10.0]
+        authentication_windows: list[float] = []
+
+        def spawn(*arguments: object, **options: object) -> object:
+            deadline, cleanup_reserve = arguments[1:3]
+            assert isinstance(deadline, float)
+            assert isinstance(cleanup_reserve, float)
+            authenticate_by = deadline - cleanup_reserve
+            authentication_windows.append(authenticate_by - clock[0])
+            clock[0] = authenticate_by
+            callback = options.get("authenticated")
+            assert callable(callback)
+            callback()
+            return job
+
+        completion = run_xcode_tests.DirectCompletion(0, "", "", None)
+        bootout_by = clock[0] + run_xcode_tests.CONTAINMENT_BOOTOUT_RESERVE_SECONDS
+        cleanup_by = bootout_by + run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+        with mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(
+            run_xcode_tests, "spawn_direct_job", side_effect=spawn
+        ), mock.patch.object(
+            run_xcode_tests, "complete_direct_job", return_value=completion
+        ) as complete:
+            run_xcode_tests.bootout_job(launchd_job(job.root), bootout_by, cleanup_by)
+        self.assertEqual(authentication_windows, [4.0])
+        complete.assert_called_once_with(job, 1.5, cleanup_by, 2.0)
+
+    def test_absence_reserves_full_direct_authentication_after_bootout(self) -> None:
+        job = direct_job(Path("/tmp/ap12-absence-authentication"))
+        clock = [10.0]
+        authentication_windows: list[float] = []
+
+        def spawn(*arguments: object, **options: object) -> object:
+            deadline, cleanup_reserve = arguments[1:3]
+            assert isinstance(deadline, float)
+            assert isinstance(cleanup_reserve, float)
+            authenticate_by = deadline - cleanup_reserve
+            authentication_windows.append(authenticate_by - clock[0])
+            clock[0] = authenticate_by
+            callback = options.get("authenticated")
+            assert callable(callback)
+            callback()
+            return job
+
+        completion = run_xcode_tests.DirectCompletion(
+            113, "", "Could not find service\n", None
+        )
+        confirmation_by = clock[0] + run_xcode_tests.CONTAINMENT_ABSENCE_RESERVE_SECONDS
+        with mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(
+            run_xcode_tests, "spawn_direct_job", side_effect=spawn
+        ), mock.patch.object(
+            run_xcode_tests, "complete_direct_job", return_value=completion
+        ) as complete:
+            run_xcode_tests.confirm_job_absent(
+                launchd_job(job.root), confirmation_by
+            )
+        self.assertEqual(authentication_windows, [4.0])
+        complete.assert_called_once_with(job, 1.0, confirmation_by, 2.0)
+
     def test_launchctl_fails_closed_on_direct_identity_setup_error(self) -> None:
         failure = run_xcode_tests.SimulatorLifecycleError(
             "forged direct wrapper identity"
@@ -2783,16 +2847,17 @@ class XcodeTestRunnerTests(unittest.TestCase):
         return signal_deadlines, deadlines
 
     def test_hosted_cleanup_paths_receive_bounded_census_budget(self) -> None:
+        caller_deadline = 10.0 + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
         cases = {
-            "descendant": ('{"resource_coalition_id":77}', 16.0),
-            "sidecar-missing-0": (None, 16.0),
-            "sidecar-missing-4": (None, 16.0),
-            "sidecar-corrupt-0": ("not-json", 16.0),
-            "sidecar-corrupt-3": ("not-json", 16.0),
-            "sidecar-corrupt-4": ("not-json", 16.0),
-            "sidecar-forged-1": ('{"resource_coalition_id":999}', 16.0),
-            "sidecar-forged-2": ('{"resource_coalition_id":999}', 16.0),
-            "successful-target": ('{"resource_coalition_id":77}', 16.0),
+            "descendant": ('{"resource_coalition_id":77}', caller_deadline),
+            "sidecar-missing-0": (None, caller_deadline),
+            "sidecar-missing-4": (None, caller_deadline),
+            "sidecar-corrupt-0": ("not-json", caller_deadline),
+            "sidecar-corrupt-3": ("not-json", caller_deadline),
+            "sidecar-corrupt-4": ("not-json", caller_deadline),
+            "sidecar-forged-1": ('{"resource_coalition_id":999}', caller_deadline),
+            "sidecar-forged-2": ('{"resource_coalition_id":999}', caller_deadline),
+            "successful-target": ('{"resource_coalition_id":77}', caller_deadline),
         }
         for name, (sidecar, caller_deadline) in cases.items():
             with self.subTest(path=name):
@@ -2823,7 +2888,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 self.assertEqual(deadlines["confirm"], expected.confirmation_by)
 
     def test_contained_cleanup_budget_obeys_caller_deadline(self) -> None:
-        caller_deadline = 16.0
+        caller_deadline = 10.0 + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
         signal_deadlines, deadlines = self.hosted_cleanup_deadlines(
             '{"resource_coalition_id":77}', caller_deadline
         )
@@ -3510,11 +3575,21 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = simulator_args(root)
-            args.wall_deadline = 100.0
+            execution_budget = 4.0
+            args.wall_deadline = (
+                90.0
+                + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+                + execution_budget
+            )
             job = launchd_job(root / "job")
             job.root.mkdir()
             with mock.patch.object(
-                run_xcode_tests, "remaining_wall_budget", return_value=10
+                run_xcode_tests,
+                "remaining_wall_budget",
+                return_value=(
+                    run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+                    + execution_budget
+                ),
             ), mock.patch.object(
                 run_xcode_tests, "spawn_contained_job", return_value=job
             ), mock.patch.object(
@@ -3531,16 +3606,20 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(evidence_deadline, 90.25)
         self.assertLessEqual(
             evidence_deadline,
-            100.0 - run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS,
+            args.wall_deadline - run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS,
         )
-        cleanup.assert_called_once_with(job, 100.0, True)
+        cleanup.assert_called_once_with(job, args.wall_deadline, True)
         final_output.assert_not_called()
 
     def test_attempt_cleanup_failure_preserves_exit_without_duplicate_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = simulator_args(root)
-            args.wall_deadline = time.monotonic() + 10
+            args.wall_deadline = (
+                time.monotonic()
+                + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+                + 4
+            )
             job = launchd_job(root / "job")
             job.root.mkdir()
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
@@ -3566,7 +3645,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = simulator_args(root)
-            args.wall_deadline = time.monotonic() + 10
+            args.wall_deadline = (
+                time.monotonic()
+                + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+                + 4
+            )
             job = launchd_job(root / "job")
             job.root.mkdir()
             primary = run_xcode_tests.SimulatorLifecycleError("invalid xcodebuild status")
@@ -3593,7 +3676,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
     def test_run_attempt_keeps_xcodebuild_launchd_contained(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             args = simulator_args(Path(directory))
-            args.wall_deadline = time.monotonic() + 10
+            args.wall_deadline = (
+                time.monotonic()
+                + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+                + 4
+            )
             job = launchd_job(Path(directory) / "job")
             job.root.mkdir()
             with mock.patch.object(
@@ -3751,7 +3838,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
         return int(match.group(1))
 
     def completed_contained_output(self, command: list[str]) -> str:
-        deadline = time.monotonic() + 10
+        deadline = (
+            time.monotonic()
+            + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+            + 4
+        )
         job = run_xcode_tests.spawn_contained_job(
             command,
             False,
@@ -3788,7 +3879,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
         return False
 
     def terminate_ready_contained_job(self, command: list[str], pid_path: Path) -> int:
-        deadline = time.monotonic() + 10
+        deadline = (
+            time.monotonic()
+            + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+            + 4
+        )
         job = run_xcode_tests.spawn_contained_job(
             command,
             False,
@@ -3827,7 +3922,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
             shutil.rmtree(job.root, ignore_errors=True)
 
     def cleanup_after_sidecar_tamper(self, replacement: str | None) -> int:
-        deadline = time.monotonic() + 12
+        deadline = (
+            time.monotonic()
+            + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS
+            + 6
+        )
         source = (
             "import subprocess,sys,time; "
             "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],"
@@ -4053,7 +4152,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 diagnostics_dir=root / "diagnostics",
                 command=["fake-xcodebuild"],
                 idle_timeout=1,
-                wall_timeout=10,
+                wall_timeout=run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS + 4,
             )
             with mock.patch.object(Path, "open", return_value=bad_log), mock.patch.object(
                 run_xcode_tests, "spawn_contained_job", return_value=job
@@ -4409,7 +4508,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 pass
 
     def run_fake_xcode(
-        self, source: str, idle_timeout: float = 1, wall_timeout: float = 10
+        self,
+        source: str,
+        idle_timeout: float = 1,
+        wall_timeout: float = run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS + 4,
     ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, str]]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -4473,7 +4575,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIn("classification=test-execution-timeout", result.stderr)
 
     def test_wall_timeout_writes_both_timeout_evidence_files(self) -> None:
-        wall_timeout = 10
+        wall_timeout = run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS + 4
         started = time.monotonic()
         result, _, evidence = self.run_fake_xcode(
             """
