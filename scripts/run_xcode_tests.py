@@ -3127,7 +3127,14 @@ def await_peer_identity_covering_wrapper_report(
 
     def inspect() -> ProcessIdentity | None:
         while time.monotonic() < retry_deadline:
-            current = stable_darwin_peer_identity(descriptor, reported.pid)
+            try:
+                current = deadline_call(
+                    lambda: stable_darwin_peer_identity(descriptor, reported.pid),
+                    retry_deadline,
+                    "direct wrapper identity sample deadline expired",
+                )
+            except OperationDeadlineExpired:
+                return None
             if current is not None:
                 if peer_identity_covers_exec_report(reported, current):
                     return current

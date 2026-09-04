@@ -260,13 +260,15 @@ def restore_caller_alarm(restore: dict) -> None:
     previous_timer, suspended_at, caller_pending = restore["caller"]
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
     signal.setitimer(signal.ITIMER_REAL, 0)
-    if not caller_pending and signal.SIGALRM in signal.sigpending():
+    if signal.SIGALRM in signal.sigpending():
         signal.sigwait({signal.SIGALRM})
     signal.signal(signal.SIGALRM, restore["previous"])
     restore_caller_timer(previous_timer, suspended_at, caller_pending)
     restore["phase"] = ALARM_CALLER_MASK
     signal.pthread_sigmask(signal.SIG_SETMASK, restore["previous_mask"])
     restore["phase"] = ALARM_RESTORED
+    if caller_pending:
+        signal.raise_signal(signal.SIGALRM)
 
 
 def valid_capture_alarm_token(token) -> bool:

@@ -1495,6 +1495,31 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         self.assertAlmostEqual(events[1][2], 0.02)
         self.assertEqual(events[1][3], 0.04)
 
+    def test_pending_caller_alarm_replays_after_restoration(self):
+        previous_mask = set()
+        restore = {
+            "caller": ((0.0, 0.0), 10.0, True),
+            "previous": object(),
+            "previous_mask": previous_mask,
+            "phase": capture.ALARM_CALLER,
+        }
+        replay_phases = []
+        with patch.object(
+            capture.signal, "sigpending", return_value={capture.signal.SIGALRM}
+        ), patch.object(capture.signal, "sigwait") as wait, patch.object(
+            capture.signal, "pthread_sigmask"
+        ), patch.object(capture.signal, "setitimer"), patch.object(
+            capture.signal, "signal"
+        ), patch.object(capture, "restore_caller_timer"), patch.object(
+            capture.signal,
+            "raise_signal",
+            side_effect=lambda _value: replay_phases.append(restore["phase"]),
+        ) as replay:
+            capture.restore_caller_alarm(restore)
+        wait.assert_called_once_with({capture.signal.SIGALRM})
+        replay.assert_called_once_with(capture.signal.SIGALRM)
+        self.assertEqual(replay_phases, [capture.ALARM_RESTORED])
+
     def test_primary_exception_survives_cleanup_failure(self):
         class Client:
             deadline = capture.time.monotonic() + 60
