@@ -268,7 +268,7 @@ for interval in (0.0, 0.2):
                 frame.f_trace_opcodes = True
                 if event == "opcode" and frame.f_lasti == boundary.offset and not hits:
                     hits.append(boundary.offset)
-                    time.sleep(0.03)
+                    signal.pause()
             return trace
         signal.setitimer(signal.ITIMER_REAL, 0.01, interval)
         sys.settrace(trace)
@@ -315,7 +315,7 @@ for interval in (0.0, 0.2):
         if frame.f_code is code and event == "line" \
                 and line == "claim_capture_ownership(token)" and not windows:
             windows.append(line)
-            time.sleep(0.05)
+            signal.pause()
         return trace
     signal.setitimer(signal.ITIMER_REAL, 0.02, interval)
     sys.settrace(trace)
@@ -996,10 +996,7 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
     def test_deadline_at_body_exit_restores_alarm_before_rejecting(self):
         source = textwrap.dedent(
             f"""
-            import linecache
-            import signal
-            import sys
-            import time
+            import linecache, signal, sys, time
             sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
             import capture_completed_native_log as capture
 
@@ -1429,8 +1426,7 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         self.assertEqual(result.stdout, "pending preserved\n")
 
     def test_repeating_caller_alarm_phase_is_preserved(self):
-        source = textwrap.dedent(
-            f"""
+        source = textwrap.dedent(f"""
             import linecache
             import signal
             import sys
@@ -1445,6 +1441,8 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
                                     "capture deadline expired")
             def caller_expired(signum, frame):
                 hits.append(time.monotonic())
+                if len(hits) == 1:
+                    signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGALRM}})
             def trace(frame, event, argument):
                 line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
                 if frame.f_code is capture.claim_capture_alarm.__code__ and event == "line" \
@@ -1464,6 +1462,7 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
             assert hits == [hits[0]], hits
             assert 0.0 < remaining <= 0.04, remaining
             assert 0.039 <= interval <= 0.041, interval
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {{signal.SIGALRM}})
             deadline = time.monotonic() + 0.1
             while len(hits) < 2 and time.monotonic() < deadline:
                 time.sleep(0.002)
@@ -1473,10 +1472,28 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
             """
         )
         result = REAL_SUBPROCESS_RUN(
-            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
-        )
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "interval preserved\n")
+
+    def test_repeating_alarm_phase_uses_post_signal_restore_time(self):
+        events = []
+        with patch.object(
+            capture.time, "monotonic", side_effect=[10.11, 10.16]
+        ), patch.object(
+            capture.signal,
+            "raise_signal",
+            side_effect=lambda value: events.append(("raise", value)),
+        ), patch.object(
+            capture.signal,
+            "setitimer",
+            side_effect=lambda *values: events.append(("timer", *values)),
+        ):
+            capture.restore_caller_timer((0.02, 0.04), 10.0, False)
+        self.assertEqual(events[0], ("raise", capture.signal.SIGALRM))
+        self.assertEqual(events[1][:2], ("timer", capture.signal.ITIMER_REAL))
+        self.assertAlmostEqual(events[1][2], 0.02)
+        self.assertEqual(events[1][3], 0.04)
 
     def test_primary_exception_survives_cleanup_failure(self):
         class Client:

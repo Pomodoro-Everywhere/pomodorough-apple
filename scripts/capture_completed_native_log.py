@@ -242,15 +242,18 @@ def restore_caller_timer(previous_timer: tuple[float, float], suspended_at: floa
     if delay == 0.0:
         return
     elapsed = max(0.0, time.monotonic() - suspended_at)
+    expired = elapsed >= delay
+    if expired and not caller_pending:
+        signal.raise_signal(signal.SIGALRM)
+        elapsed = max(0.0, time.monotonic() - suspended_at)
     if elapsed < delay:
-        signal.setitimer(signal.ITIMER_REAL, max(delay - elapsed, MIN_TIMER_SECONDS), interval)
-        return
-    if interval > 0.0:
+        next_delay = delay - elapsed
+    elif interval > 0.0:
         overdue = elapsed - delay
         next_delay = interval - overdue % interval
-        signal.setitimer(signal.ITIMER_REAL, max(next_delay, MIN_TIMER_SECONDS), interval)
-    if not caller_pending:
-        signal.raise_signal(signal.SIGALRM)
+    else:
+        return
+    signal.setitimer(signal.ITIMER_REAL, max(next_delay, MIN_TIMER_SECONDS), interval)
 
 
 def restore_caller_alarm(restore: dict) -> None:

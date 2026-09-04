@@ -57,6 +57,7 @@ TIMEOUT_EVIDENCE_SECONDS = 0.25
 EVIDENCE_WRITE_SECONDS = 1.0
 EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
 DESCENDANT_POLL_SECONDS = 0.001
+PEER_IDENTITY_COMPLETION_RESERVE_SECONDS = 0.05
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 4.0
@@ -444,6 +445,12 @@ def bounded_wait(deadline: float | None, maximum: float) -> float:
 
 def reserved_deadline(deadline: float | None, reserve: float) -> float | None:
     return None if deadline is None else deadline - reserve
+
+
+def peer_identity_poll_deadline(deadline: float) -> float:
+    remaining = max(0.0, deadline - time.monotonic())
+    reserve = min(PEER_IDENTITY_COMPLETION_RESERVE_SECONDS, remaining / 2.0)
+    return deadline - max(DESCENDANT_POLL_SECONDS, reserve)
 
 
 def deadline_call(
@@ -3116,7 +3123,7 @@ def await_peer_identity_covering_exec_report(
 def await_peer_identity_covering_wrapper_report(
     descriptor: int, reported: ProcessIdentity, deadline: float
 ) -> ProcessIdentity | None:
-    retry_deadline = deadline - DESCENDANT_POLL_SECONDS
+    retry_deadline = peer_identity_poll_deadline(deadline)
 
     def inspect() -> ProcessIdentity | None:
         while time.monotonic() < retry_deadline:

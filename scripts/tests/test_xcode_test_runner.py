@@ -2402,6 +2402,26 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIsNone(current)
         closed.assert_not_called()
 
+    def test_wrapper_peer_identity_reserves_completion_after_slow_sample(self) -> None:
+        reported = darwin_direct_identity(2222, 10, 20)
+
+        def slow_missing_identity(*_arguments: object) -> None:
+            time.sleep(0.03)
+
+        with mock.patch.object(
+            run_xcode_tests,
+            "stable_darwin_peer_identity",
+            side_effect=slow_missing_identity,
+        ) as inspect, mock.patch.object(
+            run_xcode_tests, "direct_peer_closed", return_value=True
+        ) as closed:
+            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
+                91, reported, time.monotonic() + 0.05
+            )
+        self.assertIsNone(current)
+        self.assertEqual(inspect.call_count, 1)
+        closed.assert_not_called()
+
     def test_stable_darwin_peer_identity_rejects_missing_descriptor(self) -> None:
         with self.assertRaisesRegex(
             run_xcode_tests.SimulatorLifecycleError,
