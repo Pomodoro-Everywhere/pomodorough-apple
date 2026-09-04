@@ -252,10 +252,10 @@ class Client:
 def caller_alarm(signum, frame):
     raise CallerAlarm("caller alarm")
 
-code = capture.capture_deadline.__wrapped__.__code__
+code = capture.claim_capture_alarm_entry.__code__
 instructions = list(dis.get_instructions(code))
-load = next(index for index, item in enumerate(instructions)
-            if item.opname == "LOAD_GLOBAL" and item.argval == "claim_capture_ownership")
+load = max(index for index, item in enumerate(instructions)
+           if item.opname == "LOAD_GLOBAL" and item.argval == "claim_capture_ownership")
 call = next(index for index in range(load, len(instructions))
             if instructions[index].opname == "CALL")
 original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
@@ -288,6 +288,56 @@ for interval in (0.0, 0.2):
         signal.setitimer(signal.ITIMER_REAL, 0)
         with capture.capture_deadline(Client()): pass
 print("ownership alarms recovered")
+"""
+
+
+ENTRY_ALARM_BOUNDARY_SOURCE = """
+import linecache, signal, sys, time
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+class Client:
+    deadline = time.monotonic() + 60
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+caller_hits = []
+def caller_alarm(signum, frame):
+    caller_hits.append(signum)
+
+code = capture.claim_capture_alarm_entry.__code__
+original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+signal.signal(signal.SIGALRM, caller_alarm)
+for interval in (0.0, 0.2):
+    windows = []
+    def trace(frame, event, argument):
+        line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+        if frame.f_code is code and event == "line" \
+                and line == "claim_capture_ownership(token)" and not windows:
+            windows.append(line)
+            time.sleep(0.05)
+        return trace
+    signal.setitimer(signal.ITIMER_REAL, 0.02, interval)
+    sys.settrace(trace)
+    try:
+        with capture.capture_deadline(Client()):
+            raise AssertionError("capture entered")
+    except capture.CaptureError as error:
+        assert str(error) == "existing process deadline", error
+    finally:
+        sys.settrace(None)
+    remaining, repeating = signal.getitimer(signal.ITIMER_REAL)
+    assert windows == ["claim_capture_ownership(token)"], windows
+    assert caller_hits.pop(0) == signal.SIGALRM
+    assert capture.CAPTURE_ALARM_OWNER is None
+    assert capture.CAPTURE_ALARM_RESTORE is None
+    assert signal.getsignal(signal.SIGALRM) is caller_alarm
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask
+    assert repeating == interval and (interval == 0.0 or remaining > 0.0)
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    with capture.capture_deadline(Client()): pass
+assert caller_hits == [], caller_hits
+print("entry alarms preserved")
 """
 
 
@@ -1192,6 +1242,10 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
     def test_ownership_call_store_preserves_one_shot_and_repeating_alarms(self):
         source = capture_subprocess_source(OWNERSHIP_ALARM_BOUNDARY_SOURCE)
         assert_subprocess_success(self, source, "ownership alarms recovered\n")
+
+    def test_entry_alarm_expiry_cannot_be_mistaken_for_an_idle_timer(self):
+        source = capture_subprocess_source(ENTRY_ALARM_BOUNDARY_SOURCE)
+        assert_subprocess_success(self, source, "entry alarms preserved\n")
 
     def test_live_alarm_state_survives_disarm_failure_until_recovery(self):
         source = capture_subprocess_source(DISARM_RECOVERY_SOURCE)

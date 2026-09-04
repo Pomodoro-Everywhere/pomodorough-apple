@@ -541,6 +541,15 @@ def darwin_direct_identity(
     return run_xcode_tests.ProcessIdentity(pid, (start_abstime, 0), tuple(audit_token))
 
 
+def darwin_unique_info(
+    unique_id: int, pid_version: int
+) -> run_xcode_tests.ProcUniqueIdentifierInfo:
+    info = run_xcode_tests.ProcUniqueIdentifierInfo()
+    info.p_uniqueid = unique_id
+    info.p_idversion = pid_version
+    return info
+
+
 def spawn_execing_socket_peer(
     socket_path: Path, gate_descriptor: int
 ) -> subprocess.Popen[bytes]:
@@ -2239,8 +2248,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin", "requires Darwin process identity")
     def test_darwin_wrapper_identity_survives_task_token_unavailability(self) -> None:
         with mock.patch.object(
-            run_xcode_tests, "darwin_task_audit_token", return_value=None
-        ):
+            run_xcode_tests,
+            "darwin_process_audit_token",
+            side_effect=AssertionError("private token lookup used"),
+        ) as private_token:
             identity = run_xcode_tests.direct_wrapper_process_identity(os.getpid())
         self.assertIsNotNone(identity)
         assert identity is not None
@@ -2249,6 +2260,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         assert identity.audit_token is not None
         self.assertEqual(identity.audit_token[5], os.getpid())
         self.assertGreater(identity.audit_token[7], 0)
+        private_token.assert_not_called()
 
     def test_darwin_task_audit_token_rejects_malformed_identity(self) -> None:
         cases = ((2223, 20, 8, 0), (2222, 0, 8, 0), (2222, 20, 7, 0), (2222, 20, 8, 5))
@@ -2295,25 +2307,34 @@ class XcodeTestRunnerTests(unittest.TestCase):
             side_effect=[10, 10],
         ), mock.patch.object(
             run_xcode_tests,
-            "darwin_process_audit_token",
-            return_value=expected.audit_token,
-        ):
+            "unique_identifier_info",
+            side_effect=[darwin_unique_info(30, 20), darwin_unique_info(30, 20)],
+        ), mock.patch.object(
+            run_xcode_tests, "darwin_process_audit_token"
+        ) as private_token:
             identity = run_xcode_tests.direct_wrapper_process_identity(2222)
         self.assertEqual(identity, expected)
+        private_token.assert_not_called()
 
     def test_darwin_wrapper_identity_rejects_birth_or_token_substitution(self) -> None:
-        valid = darwin_direct_identity(2222, 10, 20).audit_token
-        wrong_pid = darwin_direct_identity(3333, 10, 20).audit_token
-        cases = (([10, 11], valid), ([10, 10], wrong_pid), ([10, 10], None))
-        for starts, token in cases:
-            with self.subTest(starts=starts, token=token), mock.patch.object(
+        stable = darwin_unique_info(30, 20)
+        cases = (
+            ("start churn", [10, 11], [stable, stable]),
+            ("unique ID churn", [10, 10], [stable, darwin_unique_info(31, 20)]),
+            ("version churn", [10, 10], [stable, darwin_unique_info(30, 21)]),
+            ("zero unique ID", [10, 10], [darwin_unique_info(0, 20)] * 2),
+            ("zero version", [10, 10], [darwin_unique_info(30, 0)] * 2),
+            ("missing sample", [10, 10], [stable, None]),
+        )
+        for name, starts, identifiers in cases:
+            with self.subTest(name=name), mock.patch.object(
                 run_xcode_tests, "LIBPROC", object()
             ), mock.patch.object(
                 run_xcode_tests,
                 "darwin_process_start_abstime",
                 side_effect=starts,
             ), mock.patch.object(
-                run_xcode_tests, "darwin_process_audit_token", return_value=token
+                run_xcode_tests, "unique_identifier_info", side_effect=identifiers
             ):
                 identity = run_xcode_tests.direct_wrapper_process_identity(2222)
             self.assertIsNone(identity)
@@ -2548,14 +2569,41 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "accept_direct_peer", return_value=92
         ), mock.patch.object(
             run_xcode_tests,
-            "bounded_peer_process_identity",
-            return_value=after_exec,
-        ), mock.patch.object(run_xcode_tests.os, "close") as close:
+            "stable_darwin_peer_identity",
+            side_effect=[None, after_exec],
+        ) as inspect, mock.patch.object(
+            run_xcode_tests, "direct_peer_closed", return_value=False
+        ), mock.patch.object(
+            run_xcode_tests.time, "sleep"
+        ) as sleep, mock.patch.object(run_xcode_tests.os, "close") as close:
             descriptor = run_xcode_tests.bind_direct_peer_identity(
                 91, Path("target.sock"), before_exec, time.monotonic() + 1
             )
         self.assertEqual(descriptor, 92)
         close.assert_called_once_with(91)
+        self.assertEqual(inspect.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_darwin_peer_binding_rejects_stable_wrong_process(self) -> None:
+        reported = darwin_direct_identity(2222, 30, 40)
+        replacement = darwin_direct_identity(2222, 31, 40)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity", return_value=replacement
+        ) as inspect, mock.patch.object(
+            run_xcode_tests.time, "sleep"
+        ) as sleep, mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "forged direct peer identity",
+            ):
+                run_xcode_tests.bind_direct_peer_identity(
+                    91, Path("target.sock"), reported, time.monotonic() + 1
+                )
+        inspect.assert_called_once_with(92, reported.pid)
+        sleep.assert_not_called()
+        self.assertEqual(close.call_args_list, [mock.call(92)])
 
     def test_darwin_peer_binding_closes_real_peer_after_identity_timeout(self) -> None:
         identity = darwin_direct_identity(2222, 30, 40)

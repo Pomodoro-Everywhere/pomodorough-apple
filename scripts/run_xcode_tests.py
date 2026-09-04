@@ -870,11 +870,23 @@ def direct_wrapper_process_identity(pid: int) -> ProcessIdentity | None:
     if LIBPROC is None:
         return direct_process_identity(pid)
     first_start = darwin_process_start_abstime(pid)
-    token = darwin_process_audit_token(pid)
+    first_info = unique_identifier_info(pid)
+    second_info = unique_identifier_info(pid)
     second_start = darwin_process_start_abstime(pid)
-    if token is None or first_start is None or first_start != second_start:
+    if (
+        first_start is None
+        or first_start != second_start
+        or first_info is None
+        or second_info is None
+        or first_info.p_uniqueid <= 0
+        or first_info.p_uniqueid != second_info.p_uniqueid
+        or first_info.p_idversion <= 0
+        or first_info.p_idversion != second_info.p_idversion
+    ):
         return None
-    identity = ProcessIdentity(pid, (first_start, 0), token)
+    identity = ProcessIdentity(
+        pid, (first_start, 0), unique_process_identity(pid, first_info).audit_token
+    )
     return identity if direct_audit_pid_version(identity) is not None else None
 
 
@@ -3058,6 +3070,26 @@ def direct_peer_closed(descriptor: int) -> bool:
         peer.detach()
 
 
+def await_peer_identity_matching_wrapper(
+    descriptor: int, reported: ProcessIdentity, deadline: float
+) -> ProcessIdentity | None:
+    retry_deadline = deadline - DESCENDANT_POLL_SECONDS
+
+    def inspect() -> ProcessIdentity | None:
+        while time.monotonic() < retry_deadline:
+            current = stable_darwin_peer_identity(descriptor, reported.pid)
+            if current is not None:
+                return current if same_direct_process(current, reported) else None
+            if direct_peer_closed(descriptor):
+                return None
+            time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
+        return None
+
+    return deadline_call(
+        inspect, deadline, "direct process identity deadline expired"
+    )
+
+
 def await_peer_identity_covering_exec_report(
     descriptor: int, reported: ProcessIdentity, deadline: float
 ) -> ProcessIdentity | None:
@@ -3118,8 +3150,8 @@ def bind_direct_peer_identity(
     peer_deadline = direct_message_deadline(deadline)
     peer_descriptor = accept_direct_peer(listener_descriptor, peer_deadline)
     try:
-        current = bounded_peer_process_identity(
-            peer_descriptor, identity.pid, peer_deadline
+        current = await_peer_identity_matching_wrapper(
+            peer_descriptor, identity, peer_deadline
         )
         if current is None or not same_direct_process(current, identity):
             raise SimulatorLifecycleError("forged direct peer identity")

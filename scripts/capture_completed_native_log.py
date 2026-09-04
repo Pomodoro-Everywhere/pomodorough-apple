@@ -399,11 +399,14 @@ def prepare_caller_alarm(restore: dict) -> tuple[tuple[float, float], bool]:
     return previous_timer, caller_pending
 
 
-def claim_capture_alarm(client: CaptureHTTP, expired, token: object) -> dict:
+def claim_capture_alarm(
+    client: CaptureHTTP, expired, token: object, observed_timer: tuple[float, float]
+) -> dict:
     client.check()
     restore = capture_alarm_context(token)
     previous_timer, caller_pending = prepare_caller_alarm(restore)
     conflict = (signal.SIGALRM in restore["previous_mask"]
+                or observed_timer != (0.0, 0.0)
                 or previous_timer != (0.0, 0.0) or caller_pending)
     require(not conflict, "existing process deadline")
     remaining = client.deadline - time.monotonic()
@@ -512,6 +515,18 @@ def claim_capture_ownership(token: object) -> None:
     CAPTURE_ALARM_OWNER = [os.getpid(), token, OWNER_ACTIVE]
 
 
+def claim_capture_alarm_entry(token: object) -> tuple[float, float]:
+    existing = CAPTURE_ALARM_OWNER is not None or CAPTURE_ALARM_RESTORE is not None
+    if existing:
+        if not valid_capture_alarm_recovery(CAPTURE_ALARM_OWNER, CAPTURE_ALARM_RESTORE):
+            reject_malformed_capture_alarm_state()
+        claim_capture_ownership(token)
+        return signal.getitimer(signal.ITIMER_REAL)
+    observed_timer = signal.getitimer(signal.ITIMER_REAL)
+    claim_capture_ownership(token)
+    return observed_timer
+
+
 def mark_capture_ownership_recoverable(token: object) -> None:
     if owns_capture_alarm(token):
         CAPTURE_ALARM_OWNER[2] = OWNER_RECOVERABLE
@@ -581,8 +596,8 @@ def capture_deadline(client: CaptureHTTP):
         alarm["teardown"] = True
         raise alarm["deadline"]
     try:
-        claim_capture_ownership(token)
-        claimed_alarm = claim_capture_alarm(client, expired, token)
+        observed_timer = claim_capture_alarm_entry(token)
+        claimed_alarm = claim_capture_alarm(client, expired, token, observed_timer)
         yield
         client.check()
         alarm["teardown"] = True
