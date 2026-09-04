@@ -545,8 +545,29 @@ def darwin_peer_audit_token(descriptor: int, pid: int) -> tuple[int, ...] | None
     return token_values
 
 
+def darwin_socketpair_audit_token(pid: int) -> tuple[int, ...] | None:
+    try:
+        local, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        return None
+    token = None
+    closed = True
+    try:
+        token = darwin_peer_audit_token(local.fileno(), pid)
+    except OSError:
+        token = None
+    finally:
+        for endpoint in (local, peer):
+            try:
+                endpoint.close()
+            except OSError:
+                closed = False
+    return token if closed else None
+
+
 def darwin_self_audit_token(pid: int) -> tuple[int, ...] | None:
-    return darwin_task_audit_token(LIBSYSTEM.mach_task_self(), pid)
+    token = darwin_task_audit_token(LIBSYSTEM.mach_task_self(), pid)
+    return token if token is not None else darwin_socketpair_audit_token(pid)
 
 
 def darwin_process_audit_token(pid: int) -> tuple[int, ...] | None:

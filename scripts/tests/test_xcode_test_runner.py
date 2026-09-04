@@ -2175,6 +2175,81 @@ class XcodeTestRunnerTests(unittest.TestCase):
         task_token.assert_called_once_with(99, os.getpid())
         socketpair.assert_not_called()
 
+    def test_darwin_self_identity_falls_back_to_socketpair_peer_token(self) -> None:
+        expected = darwin_direct_identity(os.getpid(), 8, 20).audit_token
+        local, peer = mock.Mock(), mock.Mock()
+        local.fileno.return_value = 91
+        library = mock.Mock()
+        library.mach_task_self.return_value = 99
+        with mock.patch.object(
+            run_xcode_tests, "LIBSYSTEM", library
+        ), mock.patch.object(
+            run_xcode_tests, "darwin_task_audit_token", return_value=None
+        ), mock.patch.object(
+            run_xcode_tests.socket, "socketpair", return_value=(local, peer)
+        ) as socketpair, mock.patch.object(
+            run_xcode_tests, "darwin_peer_audit_token", return_value=expected
+        ) as peer_token:
+            observed = run_xcode_tests.darwin_process_audit_token(os.getpid())
+        self.assertEqual(observed, expected)
+        socketpair.assert_called_once_with(socket.AF_UNIX, socket.SOCK_STREAM)
+        peer_token.assert_called_once_with(91, os.getpid())
+        local.close.assert_called_once_with()
+        peer.close.assert_called_once_with()
+
+    def test_darwin_self_identity_rejects_failed_socketpair_fallback(self) -> None:
+        cases = (
+            (None, None),
+            (OSError("query failed"), None),
+            (None, OSError("close failed")),
+        )
+        for query_result, close_error in cases:
+            local, peer = mock.Mock(), mock.Mock()
+            local.fileno.return_value = 91
+            local.close.side_effect = close_error
+            peer_effect = query_result if isinstance(query_result, OSError) else None
+            with self.subTest(
+                query_result=query_result, close_error=close_error
+            ), mock.patch.object(
+                run_xcode_tests, "darwin_task_audit_token", return_value=None
+            ), mock.patch.object(
+                run_xcode_tests.socket, "socketpair", return_value=(local, peer)
+            ), mock.patch.object(
+                run_xcode_tests,
+                "darwin_peer_audit_token",
+                side_effect=peer_effect,
+                return_value=query_result,
+            ):
+                observed = run_xcode_tests.darwin_self_audit_token(os.getpid())
+            self.assertIsNone(observed)
+            local.close.assert_called_once_with()
+            peer.close.assert_called_once_with()
+
+    def test_darwin_self_identity_rejects_socketpair_creation_failure(self) -> None:
+        with mock.patch.object(
+            run_xcode_tests, "darwin_task_audit_token", return_value=None
+        ), mock.patch.object(
+            run_xcode_tests.socket,
+            "socketpair",
+            side_effect=OSError("socketpair unavailable"),
+        ):
+            observed = run_xcode_tests.darwin_self_audit_token(os.getpid())
+        self.assertIsNone(observed)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin process identity")
+    def test_darwin_wrapper_identity_survives_task_token_unavailability(self) -> None:
+        with mock.patch.object(
+            run_xcode_tests, "darwin_task_audit_token", return_value=None
+        ):
+            identity = run_xcode_tests.direct_wrapper_process_identity(os.getpid())
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity.pid, os.getpid())
+        self.assertIsNotNone(identity.audit_token)
+        assert identity.audit_token is not None
+        self.assertEqual(identity.audit_token[5], os.getpid())
+        self.assertGreater(identity.audit_token[7], 0)
+
     def test_darwin_task_audit_token_rejects_malformed_identity(self) -> None:
         cases = ((2223, 20, 8, 0), (2222, 0, 8, 0), (2222, 20, 7, 0), (2222, 20, 8, 5))
         for observed_pid, version, count, result in cases:

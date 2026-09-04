@@ -130,6 +130,397 @@ def native_job(names):
                       for number, name in enumerate(["Set up job", *names, "Complete job"], 1)]}
 
 
+def assert_subprocess_success(test, source, output, timeout=5):
+    result = REAL_SUBPROCESS_RUN(
+        [sys.executable, "-c", source], capture_output=True, text=True, timeout=timeout
+    )
+    test.assertEqual(result.returncode, 0, result.stderr)
+    test.assertEqual(result.stdout, output)
+
+
+def capture_subprocess_source(source):
+    module_dir = repr(str(Path(capture.__file__).parent))
+    return textwrap.dedent(source).replace("__CAPTURE_MODULE_DIR__", module_dir)
+
+
+FORK_BOUNDARY_SOURCE = """
+import os, signal, sys, time, traceback
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+parent_pid = os.getpid()
+boundary_children = []
+forked = []
+ownership_forked = []
+real_mask = signal.pthread_sigmask
+real_claim = capture.claim_capture_ownership
+
+class Client:
+    def __init__(self, timeout=3):
+        self.deadline = time.monotonic() + timeout
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+def caller_alarm(signum, frame):
+    raise AssertionError("caller alarm fired")
+
+def child_check():
+    try:
+        assert capture.CAPTURE_ALARM_OWNER is None
+        assert capture.CAPTURE_ALARM_RESTORE is None
+        assert signal.getsignal(signal.SIGALRM) is caller_alarm
+        assert signal.SIGALRM not in real_mask(signal.SIG_BLOCK, set())
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+        with capture.capture_deadline(Client(1)):
+            pass
+        assert capture.CAPTURE_ALARM_OWNER is None
+        assert capture.CAPTURE_ALARM_RESTORE is None
+        assert signal.getsignal(signal.SIGALRM) is caller_alarm
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    except BaseException:
+        traceback.print_exc()
+        os._exit(1)
+    os._exit(0)
+
+def fork_checked():
+    child = os.fork()
+    if child == 0:
+        child_check()
+    return child
+
+def wait_child(child):
+    waited, status = os.waitpid(child, 0)
+    assert waited == child and os.waitstatus_to_exitcode(status) == 0, status
+
+def claim_with_fork(token):
+    real_claim(token)
+    if os.getpid() == parent_pid and not ownership_forked:
+        ownership_forked.append("owned")
+        boundary_children.append(fork_checked())
+
+def intercept_mask(how, mask):
+    previous = real_mask(how, mask)
+    boundary = how == signal.SIG_BLOCK and mask == {signal.SIGALRM}
+    if boundary and os.getpid() == parent_pid and not forked:
+        forked.append("blocked")
+        boundary_children.append(fork_checked())
+    return previous
+
+signal.signal(signal.SIGALRM, caller_alarm)
+original_mask = real_mask(signal.SIG_BLOCK, set())
+wait_child(fork_checked())
+capture.claim_capture_ownership = claim_with_fork
+capture.signal.pthread_sigmask = intercept_mask
+try:
+    with capture.capture_deadline(Client()):
+        assert len(boundary_children) == 2, boundary_children
+        for child in boundary_children:
+            wait_child(child)
+        owner = capture.CAPTURE_ALARM_OWNER
+        assert ownership_forked == ["owned"] and forked == ["blocked"]
+        assert owner[0] == parent_pid, owner
+        assert capture.CAPTURE_ALARM_RESTORE["token"] is owner[1]
+        assert signal.getsignal(signal.SIGALRM) is not caller_alarm
+        assert real_mask(signal.SIG_BLOCK, set()) == original_mask
+        assert signal.getitimer(signal.ITIMER_REAL)[0] > 0.0
+        wait_child(fork_checked())
+        assert capture.CAPTURE_ALARM_OWNER == owner
+        assert capture.CAPTURE_ALARM_RESTORE["token"] is owner[1]
+finally:
+    capture.claim_capture_ownership = real_claim
+    capture.signal.pthread_sigmask = real_mask
+assert capture.CAPTURE_ALARM_OWNER is None
+assert capture.CAPTURE_ALARM_RESTORE is None
+assert signal.getsignal(signal.SIGALRM) is caller_alarm
+assert real_mask(signal.SIG_BLOCK, set()) == original_mask
+assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+print("fork boundaries preserved")
+"""
+
+
+OWNERSHIP_ALARM_BOUNDARY_SOURCE = """
+import dis, signal, sys, time
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+class CallerAlarm(Exception): pass
+class Client:
+    deadline = time.monotonic() + 60
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+def caller_alarm(signum, frame):
+    raise CallerAlarm("caller alarm")
+
+code = capture.capture_deadline.__wrapped__.__code__
+instructions = list(dis.get_instructions(code))
+load = next(index for index, item in enumerate(instructions)
+            if item.opname == "LOAD_GLOBAL" and item.argval == "claim_capture_ownership")
+call = next(index for index in range(load, len(instructions))
+            if instructions[index].opname == "CALL")
+original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+signal.signal(signal.SIGALRM, caller_alarm)
+for interval in (0.0, 0.2):
+    for boundary in (instructions[call], instructions[call + 1]):
+        hits = []
+        def trace(frame, event, argument):
+            if frame.f_code is code:
+                frame.f_trace_opcodes = True
+                if event == "opcode" and frame.f_lasti == boundary.offset and not hits:
+                    hits.append(boundary.offset)
+                    time.sleep(0.03)
+            return trace
+        signal.setitimer(signal.ITIMER_REAL, 0.01, interval)
+        sys.settrace(trace)
+        try:
+            with capture.capture_deadline(Client()):
+                raise AssertionError("capture entered")
+        except CallerAlarm:
+            pass
+        finally:
+            sys.settrace(None)
+        remaining, repeating = signal.getitimer(signal.ITIMER_REAL)
+        assert hits == [boundary.offset] and capture.CAPTURE_ALARM_OWNER is None
+        assert capture.CAPTURE_ALARM_RESTORE is None
+        assert signal.getsignal(signal.SIGALRM) is caller_alarm
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask
+        assert repeating == interval and (interval == 0.0 or remaining > 0.0)
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        with capture.capture_deadline(Client()): pass
+print("ownership alarms recovered")
+"""
+
+
+DISARM_RECOVERY_SOURCE = """
+import os, signal, sys, time
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+class Client:
+    deadline = time.monotonic() + 60
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+def caller_alarm(signum, frame):
+    raise AssertionError("caller alarm fired")
+
+real_setitimer = signal.setitimer
+original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+signal.signal(signal.SIGALRM, caller_alarm)
+armed = []
+failures = []
+def fail_live_disarm(which, seconds, interval=0.0):
+    if seconds > 0.0:
+        armed.append(seconds)
+    if armed and seconds == 0.0:
+        failures.append(seconds)
+        raise OSError("disarm failed")
+    return real_setitimer(which, seconds, interval)
+
+capture.signal.setitimer = fail_live_disarm
+try:
+    try:
+        with capture.capture_deadline(Client()):
+            raise ValueError("primary")
+    except ValueError as error:
+        assert str(error) == "primary"
+        assert error.__notes__ == ["capture alarm cleanup failed: disarm failed"]
+    else:
+        raise AssertionError("primary exception lost")
+    owner = capture.CAPTURE_ALARM_OWNER
+    restore = capture.CAPTURE_ALARM_RESTORE
+    assert failures == [0.0, 0.0] and owner[0] == os.getpid()
+    assert owner[2] == capture.OWNER_RECOVERABLE
+    assert restore["token"] is owner[1] and restore["phase"] == capture.ALARM_CAPTURE
+    assert signal.getsignal(signal.SIGALRM) is not caller_alarm
+    assert signal.getitimer(signal.ITIMER_REAL)[0] > 0.0
+    assert signal.SIGALRM in signal.pthread_sigmask(signal.SIG_BLOCK, set())
+finally:
+    capture.signal.setitimer = real_setitimer
+with capture.capture_deadline(Client()): pass
+assert capture.CAPTURE_ALARM_OWNER is None and capture.CAPTURE_ALARM_RESTORE is None
+assert signal.getsignal(signal.SIGALRM) is caller_alarm
+assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask
+print("live disarm recovered")
+"""
+
+
+CALLER_RESTORE_RAISE_SOURCE = """
+import linecache, signal, sys, time
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+class CallerAlarm(Exception): pass
+class Client:
+    deadline = time.monotonic() + 60
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+for interval in (0.0, 0.2):
+    delayed, hits = [], []
+    def caller_alarm(signum, frame):
+        hits.append(signum)
+        raise CallerAlarm("caller alarm")
+    def trace(frame, event, argument):
+        line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+        if frame.f_code is capture.claim_capture_alarm.__code__ and event == "line" \
+                and line.startswith("conflict =") and not delayed:
+            delayed.append(line)
+            time.sleep(0.03)
+        return trace
+    signal.signal(signal.SIGALRM, caller_alarm)
+    signal.setitimer(signal.ITIMER_REAL, 0.01, interval)
+    sys.settrace(trace)
+    try:
+        with capture.capture_deadline(Client()):
+            raise AssertionError("capture entered")
+    except capture.CaptureError as error:
+        assert str(error) == "existing process deadline", error
+        assert error.__notes__ == ["capture alarm cleanup failed: caller alarm"], error.__notes__
+    finally:
+        sys.settrace(None)
+    remaining, repeating = signal.getitimer(signal.ITIMER_REAL)
+    assert delayed and hits == [signal.SIGALRM], (delayed, hits)
+    assert capture.CAPTURE_ALARM_OWNER is None and capture.CAPTURE_ALARM_RESTORE is None
+    assert signal.getsignal(signal.SIGALRM) is caller_alarm
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask
+    assert repeating == interval and (interval == 0.0 or remaining > 0.0)
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    with capture.capture_deadline(Client()): pass
+print("raising caller alarms recovered")
+"""
+
+
+MALFORMED_RECOVERY_SOURCE = """
+import os, signal, sys, time
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+SIGNAL_APIS = ("getsignal", "getitimer", "pthread_sigmask", "raise_signal", "setitimer",
+               "signal", "sigpending", "sigwait")
+
+class Client:
+    def __init__(self):
+        self.deadline = time.monotonic() + 60
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+class Marker: pass
+
+def valid_restore(token):
+    return {
+        "token": token,
+        "previous": signal.getsignal(signal.SIGALRM),
+        "previous_mask": signal.pthread_sigmask(signal.SIG_BLOCK, set()),
+        "phase": capture.ALARM_CAPTURE,
+        "caller": ((0.0, 0.0), time.monotonic(), False),
+        "deadline_pending": False,
+    }
+
+def without_signal_calls(action):
+    originals = {name: getattr(capture.signal, name) for name in SIGNAL_APIS}
+    calls = []
+    def unsafe(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("signal API used for malformed state")
+    try:
+        for name in SIGNAL_APIS:
+            setattr(capture.signal, name, unsafe)
+        action()
+    finally:
+        for name, implementation in originals.items():
+            setattr(capture.signal, name, implementation)
+    assert calls == [], calls
+
+def reject_once(owner, restore):
+    capture.CAPTURE_ALARM_OWNER = owner
+    capture.CAPTURE_ALARM_RESTORE = restore
+    def reject():
+        try:
+            with capture.capture_deadline(Client()):
+                raise AssertionError("malformed state accepted")
+        except capture.CaptureError as error:
+            assert str(error) == "invalid capture alarm recovery state", error
+        else:
+            raise AssertionError("malformed state accepted")
+    without_signal_calls(reject)
+    assert capture.CAPTURE_ALARM_OWNER is None
+    assert capture.CAPTURE_ALARM_RESTORE is None
+    with capture.capture_deadline(Client()): pass
+
+def reset_once(owner, restore):
+    capture.CAPTURE_ALARM_OWNER = owner
+    capture.CAPTURE_ALARM_RESTORE = restore
+    without_signal_calls(capture.reset_capture_alarm_after_fork)
+    assert capture.CAPTURE_ALARM_OWNER is None
+    assert capture.CAPTURE_ALARM_RESTORE is None
+    with capture.capture_deadline(Client()): pass
+
+def reject_restore(**changes):
+    token = object()
+    restore = valid_restore(token)
+    restore.update(changes)
+    reject_once([os.getpid(), token, capture.OWNER_RECOVERABLE], restore)
+
+bad_owners = (
+    [], [os.getpid()], [os.getpid(), object()],
+    [os.getpid(), object(), capture.OWNER_ACTIVE, None],
+    (os.getpid(), object(), capture.OWNER_ACTIVE),
+    [0, object(), capture.OWNER_ACTIVE],
+    [True, object(), capture.OWNER_ACTIVE],
+    [os.getpid(), None, capture.OWNER_ACTIVE],
+    [os.getpid(), 7, capture.OWNER_RECOVERABLE],
+    [os.getpid(), Marker(), capture.OWNER_RECOVERABLE],
+    [os.getpid(), object(), []],
+    [os.getpid(), object(), "invalid"],
+)
+for bad_owner in bad_owners:
+    reject_once(bad_owner, None)
+
+token = object()
+reject_once(None, valid_restore(token))
+reject_once([os.getpid(), 7, capture.OWNER_RECOVERABLE], valid_restore(token))
+reject_restore(token=None)
+reject_restore(token=7)
+reject_restore(token=Marker())
+reject_restore(token=object())
+reject_restore(phase=[])
+reject_restore(phase="invalid")
+reject_restore(previous=None)
+reject_restore(previous=object())
+reject_restore(previous=2)
+reject_restore(previous_mask=[])
+reject_restore(previous_mask={object()})
+reject_restore(previous_mask={signal.SIGALRM, "invalid"})
+reject_restore(previous_mask={0})
+reject_restore(caller=[])
+reject_restore(caller=((0.0,), time.monotonic(), False))
+reject_restore(caller=((0.0, 0.0), time.monotonic(), 0))
+reject_restore(deadline_pending=0)
+
+for bad_timer in (float("nan"), float("inf"), float("-inf"), -1.0):
+    reject_restore(caller=((bad_timer, 0.0), time.monotonic(), False))
+    reject_restore(caller=((0.0, bad_timer), time.monotonic(), False))
+    reject_restore(caller=((0.0, 0.0), bad_timer, False))
+
+for missing in tuple(valid_restore(object())):
+    token = object()
+    restore = valid_restore(token)
+    del restore[missing]
+    reject_once([os.getpid(), token, capture.OWNER_RECOVERABLE], restore)
+
+token = object()
+restore = valid_restore(token)
+restore["extra"] = False
+reject_once([os.getpid(), token, capture.OWNER_RECOVERABLE], restore)
+reset_once([os.getpid(), 7, capture.OWNER_RECOVERABLE], None)
+reset_once([os.getpid(), object(), capture.OWNER_RECOVERABLE], valid_restore(object()))
+print("malformed recovery rejected")
+"""
+
+
 class CompletedNativeLogCaptureTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -452,6 +843,57 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             capture.capture(client, self.context, self.names, self.root)
 
+    def test_worker_capture_rejects_without_touching_caller_alarm(self):
+        source = textwrap.dedent(
+            f"""
+            import signal
+            import sys
+            import threading
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+
+            failures = []
+            class Client:
+                deadline = time.monotonic() + 60
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+            def caller_expired(signum, frame):
+                raise AssertionError("caller timer unexpectedly fired")
+            def worker():
+                try:
+                    with capture.capture_deadline(Client()):
+                        raise AssertionError("worker capture entered")
+                except BaseException as error:
+                    failures.append(error)
+
+            signal.signal(signal.SIGALRM, caller_expired)
+            original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            signal.setitimer(signal.ITIMER_REAL, 1.0)
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join()
+            remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+            assert len(failures) == 1, failures
+            assert isinstance(failures[0], capture.CaptureError), failures
+            assert str(failures[0]) == "capture deadline requires main thread", failures
+            assert signal.getsignal(signal.SIGALRM) is caller_expired
+            assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask
+            assert 0.0 < remaining <= 1.0 and interval == 0.0, (remaining, interval)
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            with capture.capture_deadline(Client()):
+                pass
+            assert capture.CAPTURE_ALARM_OWNER is None
+            print("worker rejected")
+            """
+        )
+        result = REAL_SUBPROCESS_RUN(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "worker rejected\n")
+
     def test_stalled_http_alarm_restores_process_watchdog(self):
         client, opener = self.client(self.responses())
         prior = capture.signal.getsignal(capture.signal.SIGALRM)
@@ -473,17 +915,23 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
             import capture_completed_native_log as capture
 
             class Client:
-                deadline = 0
+                deadline = 0.0
                 def check(self):
                     capture.require(time.monotonic() < self.deadline,
                                     "capture deadline expired")
 
             for _ in range(100):
+                client = Client()
+                client.deadline = time.monotonic() + 0.002
                 try:
-                    with capture.capture_deadline(Client()):
-                        raise AssertionError("expired deadline entered")
+                    with capture.capture_deadline(client):
+                        time.sleep(0.02)
                 except capture.CaptureError:
                     pass
+                else:
+                    raise AssertionError("deadline did not interrupt")
+                time.sleep(0.001)
+                assert capture.signal.SIGALRM not in capture.signal.sigpending()
             assert capture.signal.getsignal(capture.signal.SIGALRM) == capture.signal.SIG_DFL
             assert capture.signal.getitimer(capture.signal.ITIMER_REAL) == (0.0, 0.0)
             print("survived")
@@ -494,6 +942,506 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "survived\n")
+
+    def test_deadline_at_body_exit_restores_alarm_before_rejecting(self):
+        source = textwrap.dedent(
+            f"""
+            import linecache
+            import signal
+            import sys
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+
+            windows = []
+            class Client:
+                def __init__(self, timeout):
+                    self.deadline = time.monotonic() + timeout
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+            def trace(frame, event, argument):
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if frame.f_code is capture.capture_deadline.__wrapped__.__code__ \
+                        and event == "line" and line == 'alarm["teardown"] = True' \
+                        and not windows:
+                    windows.append(line)
+                    time.sleep(0.05)
+                return trace
+
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client(0.03)):
+                    pass
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            else:
+                raise AssertionError("body-exit deadline was swallowed")
+            finally:
+                sys.settrace(None)
+            assert windows == ['alarm["teardown"] = True'], windows
+            assert signal.getsignal(signal.SIGALRM) == signal.SIG_DFL
+            assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            assert signal.SIGALRM not in signal.sigpending()
+            assert capture.CAPTURE_ALARM_OWNER is None
+            with capture.capture_deadline(Client(1)):
+                pass
+            print("body exit restored")
+            """
+        )
+        assert_subprocess_success(self, source, "body exit restored\n")
+
+    def test_caller_alarm_expiring_between_pending_and_timer_read_is_preserved(self):
+        source = textwrap.dedent(
+            f"""
+            import linecache
+            import signal
+            import sys
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            class Client:
+                deadline = time.monotonic() + 60
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+            markers = ("previous_timer, caller_pending = prepare_caller_alarm(restore)",
+                       "caller_pending = signal.SIGALRM in signal.sigpending()",
+                       'conflict = (signal.SIGALRM in restore["previous_mask"]')
+            for marker in markers:
+                caller_hits, windows = [], []
+                def caller_expired(signum, frame):
+                    caller_hits.append(signum)
+                def trace(frame, event, argument):
+                    line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                    alarm_codes = (capture.claim_capture_alarm.__code__,
+                                   capture.prepare_caller_alarm.__code__)
+                    if frame.f_code in alarm_codes and event == "line" \
+                            and marker in line and not windows:
+                        windows.append(marker)
+                        time.sleep(0.05)
+                    return trace
+                signal.signal(signal.SIGALRM, caller_expired)
+                signal.setitimer(signal.ITIMER_REAL, 0.03)
+                sys.settrace(trace)
+                try:
+                    with capture.capture_deadline(Client()):
+                        raise AssertionError("caller deadline was replaced")
+                except capture.CaptureError as error:
+                    assert str(error) == "existing process deadline", error
+                finally:
+                    sys.settrace(None)
+                assert windows == [marker], (marker, windows)
+                assert caller_hits == [signal.SIGALRM], (marker, caller_hits)
+                assert signal.getsignal(signal.SIGALRM) is caller_expired
+                assert signal.SIGALRM not in signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            print("preserved")
+            """
+        )
+        assert_subprocess_success(self, source, "preserved\n")
+
+    def test_pending_deadline_not_drained_silently(self):
+        class Client:
+            deadline = capture.time.monotonic() + 60
+
+            def check(self):
+                capture.require(capture.time.monotonic() < self.deadline,
+                                "capture deadline expired")
+
+        with self.assertRaisesRegex(capture.CaptureError, "deadline"):
+            with capture.capture_deadline(Client()):
+                capture.signal.pthread_sigmask(capture.signal.SIG_BLOCK,
+                                               {capture.signal.SIGALRM})
+                capture.signal.setitimer(capture.signal.ITIMER_REAL, 0.001)
+                capture.time.sleep(0.01)
+                self.assertIn(capture.signal.SIGALRM, capture.signal.sigpending())
+        self.assertNotIn(capture.signal.SIGALRM, capture.signal.sigpending())
+        self.assertEqual(capture.signal.getitimer(capture.signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_deadline_crosses_after_cleanup_disarm(self):
+        source = textwrap.dedent(
+            f"""
+            import linecache, signal, sys, time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+
+            delayed = []
+            class Client:
+                deadline = time.monotonic() + 0.03
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+            def trace(frame, event, argument):
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if frame.f_code is capture.release_capture_alarm.__code__ and event == "line" \
+                        and line.startswith("pending_deadline =") and not delayed:
+                    delayed.append(line)
+                    time.sleep(0.05)
+                return trace
+
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client()):
+                    pass
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            else:
+                raise AssertionError("cleanup deadline was swallowed")
+            finally:
+                sys.settrace(None)
+            assert len(delayed) == 1, delayed
+            assert signal.getsignal(signal.SIGALRM) == signal.SIG_DFL
+            assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            assert signal.SIGALRM not in signal.sigpending()
+            assert capture.CAPTURE_ALARM_OWNER is None
+            print("cleanup deadline rejected")
+            """
+        )
+        assert_subprocess_success(self, source, "cleanup deadline rejected\n")
+
+    def test_alarm_expiring_during_teardown_rejects_after_cleanup(self):
+        source = textwrap.dedent(
+            f"""
+            import linecache
+            import sys
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+
+            window = []
+
+            class Client:
+                deadline = time.monotonic() + 0.03
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+
+            def trace(frame, event, argument):
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if frame.f_code is capture.release_capture_alarm.__code__ \
+                        and event == "line" and "signal.pthread_sigmask" in line and not window:
+                    window.append(time.monotonic())
+                    time.sleep(0.05)
+                return trace
+
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client()):
+                    pass
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            else:
+                raise AssertionError("teardown deadline was swallowed")
+            finally:
+                sys.settrace(None)
+            assert len(window) == 1, window
+            assert capture.signal.getsignal(capture.signal.SIGALRM) == capture.signal.SIG_DFL
+            assert capture.signal.getitimer(capture.signal.ITIMER_REAL) == (0.0, 0.0)
+            assert capture.signal.SIGALRM not in capture.signal.sigpending()
+            time.sleep(0.03)
+            print("deadline rejected")
+            """
+        )
+        result = REAL_SUBPROCESS_RUN(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "deadline rejected\n")
+
+    def test_call_store_alarm_interrupt_releases_owned_state(self):
+        source = textwrap.dedent(f"""
+            import dis, signal, sys, time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            class Client:
+                deadline = time.monotonic() + 60
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+            code = capture.capture_deadline.__wrapped__.__code__
+            instructions = list(dis.get_instructions(code))
+            store = next(item for index, item in enumerate(instructions)
+                         if "claimed_alarm" in item.argrepr
+                         and instructions[index - 1].opname == "CALL")
+            injected = []
+            def trace(frame, event, argument):
+                if frame.f_code is code:
+                    frame.f_trace_opcodes = True
+                    if event == "opcode" and frame.f_lasti == store.offset and not injected:
+                        injected.append(frame.f_lasti)
+                        signal.raise_signal(signal.SIGALRM)
+                return trace
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client()):
+                    raise AssertionError("capture entered")
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            finally:
+                sys.settrace(None)
+            assert injected == [store.offset], injected
+            assert signal.getsignal(signal.SIGALRM) == signal.SIG_DFL
+            assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            assert capture.CAPTURE_ALARM_OWNER is None
+            assert capture.CAPTURE_ALARM_RESTORE is None
+            with capture.capture_deadline(Client()): pass
+            print("call store recovered")
+            """)
+        assert_subprocess_success(self, source, "call store recovered\n")
+
+    def test_ownership_call_store_preserves_one_shot_and_repeating_alarms(self):
+        source = capture_subprocess_source(OWNERSHIP_ALARM_BOUNDARY_SOURCE)
+        assert_subprocess_success(self, source, "ownership alarms recovered\n")
+
+    def test_live_alarm_state_survives_disarm_failure_until_recovery(self):
+        source = capture_subprocess_source(DISARM_RECOVERY_SOURCE)
+        assert_subprocess_success(self, source, "live disarm recovered\n")
+
+    def test_raising_caller_alarm_during_mask_restore_releases_ownership(self):
+        source = capture_subprocess_source(CALLER_RESTORE_RAISE_SOURCE)
+        assert_subprocess_success(self, source, "raising caller alarms recovered\n")
+
+    def test_malformed_alarm_recovery_fails_closed_without_wedge(self):
+        source = capture_subprocess_source(MALFORMED_RECOVERY_SOURCE)
+        assert_subprocess_success(self, source, "malformed recovery rejected\n", timeout=10)
+
+    def test_deadline_crossing_after_release_final_check_rejects(self):
+        source = textwrap.dedent(f"""
+            import linecache, signal, sys, time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            class Client:
+                def __init__(self): self.deadline = time.monotonic() + 0.1
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+            delayed = []
+            def trace(frame, event, argument):
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if frame.f_code is capture.release_capture_alarm.__code__ and event == "line" \
+                        and line == "return deadline_failure" and not delayed:
+                    delayed.append(line)
+                    time.sleep(0.15)
+                return trace
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client()): pass
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            else:
+                raise AssertionError("post-check deadline was swallowed")
+            finally:
+                sys.settrace(None)
+            assert delayed == ["return deadline_failure"], delayed
+            assert signal.getsignal(signal.SIGALRM) == signal.SIG_DFL
+            assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            assert capture.CAPTURE_ALARM_OWNER is None
+            print("post-check rejected")
+            """)
+        assert_subprocess_success(self, source, "post-check rejected\n")
+
+    def test_post_drain_pending_alarm_avoids_restored_handler(self):
+        source = textwrap.dedent(f"""
+            import linecache, signal, sys, time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            class Client:
+                deadline = time.monotonic() + 60
+                def check(self): pass
+            caller_hits, events = [], []
+            def caller_expired(signum, frame): caller_hits.append(signum)
+            def trace(frame, event, argument):
+                if frame.f_code is not capture.release_capture_alarm.__code__ or event != "line":
+                    return trace
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if line == "signal.sigwait({{signal.SIGALRM}})": events.append("drain")
+                elif events == ["drain"]:
+                    events.append("pending")
+                    signal.raise_signal(signal.SIGALRM)
+                return trace
+            signal.signal(signal.SIGALRM, caller_expired)
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client()):
+                    signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGALRM}})
+                    signal.setitimer(signal.ITIMER_REAL, 0.001)
+                    time.sleep(0.01)
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            finally:
+                sys.settrace(None)
+            assert events == ["drain", "pending"], events
+            assert caller_hits == [], caller_hits
+            assert signal.getsignal(signal.SIGALRM) is caller_expired
+            assert signal.SIGALRM not in signal.sigpending()
+            assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            assert capture.CAPTURE_ALARM_OWNER is None
+            print("post-drain quarantined")
+            """)
+        assert_subprocess_success(self, source, "post-drain quarantined\n")
+
+    def test_nested_deadline_rejects_without_consuming_outer_alarm(self):
+        source = textwrap.dedent(f"""
+            import linecache, signal, sys, time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            class Client:
+                def __init__(self, timeout): self.deadline = time.monotonic() + timeout
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+            events, windows = [], []
+            def delay_inner_cleanup(frame, event, argument):
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if frame.f_code is capture.claim_capture_alarm.__code__ and event == "line" \
+                        and line == "signal.signal(signal.SIGALRM, expired)":
+                    windows.append(line)
+                    time.sleep(0.16)
+                return delay_inner_cleanup
+            started = time.monotonic()
+            try:
+                with capture.capture_deadline(Client(0.08)):
+                    events.append("outer entered")
+                    sys.settrace(delay_inner_cleanup)
+                    try:
+                        with capture.capture_deadline(Client(60)):
+                            raise AssertionError("nested deadline entered")
+                    except capture.CaptureError as error:
+                        assert str(error) == "existing process deadline", error
+                        assert getattr(error, "__notes__", []) == [], error.__notes__
+                        events.append("nested rejected")
+                    finally:
+                        sys.settrace(None)
+                    remaining = signal.getitimer(signal.ITIMER_REAL)[0]
+                    assert remaining > 0.0, (windows, remaining)
+                    assert windows == [], windows
+                    time.sleep(1)
+            except capture.CaptureError as error:
+                assert str(error) == "capture deadline expired", error
+            else:
+                raise AssertionError("outer deadline did not interrupt")
+            assert events == ["outer entered", "nested rejected"], events
+            assert time.monotonic() - started < 0.3
+            assert signal.getsignal(signal.SIGALRM) == signal.SIG_DFL
+            assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+            print("nested deadline preserved")
+            """)
+        result = REAL_SUBPROCESS_RUN(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "nested deadline preserved\n")
+
+    def test_forks_before_during_and_after_alarm_claim_preserve_state(self):
+        source = capture_subprocess_source(FORK_BOUNDARY_SOURCE)
+        assert_subprocess_success(self, source, "fork boundaries preserved\n", timeout=8)
+
+    def test_blocked_pending_caller_alarm_is_preserved(self):
+        source = textwrap.dedent(
+            f"""
+            import signal
+            import sys
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            hits = []
+            class Client:
+                deadline = time.monotonic() + 60
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+            def caller_expired(signum, frame):
+                hits.append(signum)
+            signal.signal(signal.SIGALRM, caller_expired)
+            original = signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGALRM}})
+            signal.raise_signal(signal.SIGALRM)
+            try:
+                try:
+                    with capture.capture_deadline(Client()):
+                        raise AssertionError("blocked caller deadline was replaced")
+                except capture.CaptureError as error:
+                    assert str(error) == "existing process deadline", error
+                assert signal.SIGALRM in signal.sigpending()
+                assert signal.SIGALRM in signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                assert signal.getsignal(signal.SIGALRM) is caller_expired
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, original)
+            assert hits == [signal.SIGALRM], hits
+            print("pending preserved")
+            """
+        )
+        result = REAL_SUBPROCESS_RUN(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "pending preserved\n")
+
+    def test_repeating_caller_alarm_phase_is_preserved(self):
+        source = textwrap.dedent(
+            f"""
+            import linecache
+            import signal
+            import sys
+            import time
+            sys.path.insert(0, {str(Path(capture.__file__).parent)!r})
+            import capture_completed_native_log as capture
+            hits = []
+            class Client:
+                deadline = time.monotonic() + 60
+                def check(self):
+                    capture.require(time.monotonic() < self.deadline,
+                                    "capture deadline expired")
+            def caller_expired(signum, frame):
+                hits.append(time.monotonic())
+            def trace(frame, event, argument):
+                line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                if frame.f_code is capture.claim_capture_alarm.__code__ and event == "line" \
+                        and line.startswith("conflict ="):
+                    sys.settrace(None)
+                    time.sleep(0.11)
+                return trace
+            signal.signal(signal.SIGALRM, caller_expired)
+            signal.setitimer(signal.ITIMER_REAL, 0.02, 0.04)
+            sys.settrace(trace)
+            try:
+                with capture.capture_deadline(Client()):
+                    raise AssertionError("caller interval was replaced")
+            except capture.CaptureError as error:
+                assert str(error) == "existing process deadline", error
+            remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+            assert hits == [hits[0]], hits
+            assert 0.0 < remaining <= 0.04, remaining
+            assert 0.039 <= interval <= 0.041, interval
+            deadline = time.monotonic() + 0.1
+            while len(hits) < 2 and time.monotonic() < deadline:
+                time.sleep(0.002)
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            assert len(hits) >= 2, hits
+            print("interval preserved")
+            """
+        )
+        result = REAL_SUBPROCESS_RUN(
+            [sys.executable, "-c", source], capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "interval preserved\n")
+
+    def test_primary_exception_survives_cleanup_failure(self):
+        class Client:
+            deadline = capture.time.monotonic() + 60
+
+            def check(self):
+                capture.require(capture.time.monotonic() < self.deadline,
+                                "capture deadline expired")
+
+        release = capture.release_capture_alarm
+        def fail_after_release(*arguments):
+            release(*arguments)
+            raise RuntimeError("cleanup failed")
+        with patch.object(capture, "release_capture_alarm", side_effect=fail_after_release):
+            with self.assertRaisesRegex(ValueError, "primary") as caught:
+                with capture.capture_deadline(Client()):
+                    raise ValueError("primary")
+        self.assertEqual(caught.exception.__notes__,
+                         ["capture alarm cleanup failed: cleanup failed"])
 
     def test_main_errors_never_print_secret_or_signed_url(self):
         client, _ = self.client([OSError(TOKEN + " " + SIGNED)])

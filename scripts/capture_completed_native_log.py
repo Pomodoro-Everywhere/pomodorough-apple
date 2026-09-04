@@ -7,10 +7,12 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import re
 import signal
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -24,7 +26,20 @@ MAX_JSON_BYTES = 16 * 1024**2
 MAX_LOG_BYTES = 512 * 1024**2
 MAX_JOBS = 1000
 CHUNK_BYTES = 64 * 1024
-ALARM_DRAIN_SECONDS = 0.01
+MIN_TIMER_SECONDS = 0.000001
+CAPTURE_ALARM_OWNER = None
+CAPTURE_ALARM_RESTORE = None
+ALARM_CONTEXT = "context"
+ALARM_CALLER = "caller"
+ALARM_CAPTURE = "capture"
+ALARM_MASK = "mask"
+ALARM_CALLER_MASK = "caller-mask"
+ALARM_RESTORED = "restored"
+OWNER_ACTIVE = "active"
+OWNER_RECOVERABLE = "recoverable"
+ALARM_PHASES = frozenset((ALARM_CONTEXT, ALARM_CALLER, ALARM_CAPTURE, ALARM_MASK,
+                          ALARM_CALLER_MASK, ALARM_RESTORED))
+VALID_SIGNALS = frozenset(signal.valid_signals())
 
 
 class CaptureError(RuntimeError):
@@ -221,60 +236,369 @@ def redirect_url(value: str) -> str:
     return value
 
 
-def restore_capture_alarm(previous, previous_mask: set[signal.Signals]) -> None:
+def restore_caller_timer(previous_timer: tuple[float, float], suspended_at: float,
+                         caller_pending: bool) -> None:
+    delay, interval = previous_timer
+    if delay == 0.0:
+        return
+    elapsed = max(0.0, time.monotonic() - suspended_at)
+    if elapsed < delay:
+        signal.setitimer(signal.ITIMER_REAL, max(delay - elapsed, MIN_TIMER_SECONDS), interval)
+        return
+    if interval > 0.0:
+        overdue = elapsed - delay
+        next_delay = interval - overdue % interval
+        signal.setitimer(signal.ITIMER_REAL, max(next_delay, MIN_TIMER_SECONDS), interval)
+    if not caller_pending:
+        signal.raise_signal(signal.SIGALRM)
+
+
+def restore_caller_alarm(restore: dict) -> None:
+    previous_timer, suspended_at, caller_pending = restore["caller"]
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    if not caller_pending and signal.SIGALRM in signal.sigpending():
+        signal.sigwait({signal.SIGALRM})
+    signal.signal(signal.SIGALRM, restore["previous"])
+    restore_caller_timer(previous_timer, suspended_at, caller_pending)
+    restore["phase"] = ALARM_CALLER_MASK
+    signal.pthread_sigmask(signal.SIG_SETMASK, restore["previous_mask"])
+    restore["phase"] = ALARM_RESTORED
+
+
+def valid_capture_alarm_token(token) -> bool:
+    return type(token) is object
+
+
+def valid_signal_handler(handler) -> bool:
+    return handler is signal.SIG_DFL or handler is signal.SIG_IGN or callable(handler)
+
+
+def valid_signal_mask(mask) -> bool:
+    if type(mask) is not set:
+        return False
+    return all((type(value) is int or type(value) is signal.Signals)
+               and value in VALID_SIGNALS for value in mask)
+
+
+def valid_timer_value(value) -> bool:
+    return type(value) is float and math.isfinite(value) and value >= 0.0
+
+
+def valid_capture_alarm_owner(owner) -> bool:
+    return (type(owner) is list and len(owner) == 3
+            and type(owner[0]) is int and owner[0] > 0
+            and valid_capture_alarm_token(owner[1])
+            and type(owner[2]) is str
+            and owner[2] in (OWNER_ACTIVE, OWNER_RECOVERABLE))
+
+
+def valid_caller_alarm_restore(caller) -> bool:
+    if type(caller) is not tuple or len(caller) != 3:
+        return False
+    previous_timer, suspended_at, caller_pending = caller
+    return (type(previous_timer) is tuple and len(previous_timer) == 2
+            and all(valid_timer_value(value) for value in previous_timer)
+            and valid_timer_value(suspended_at)
+            and type(caller_pending) is bool)
+
+
+def valid_capture_alarm_restore(restore) -> bool:
+    fields = {"token", "previous", "previous_mask", "phase", "caller",
+              "deadline_pending"}
+    if type(restore) is not dict or restore.keys() != fields:
+        return False
+    return (valid_capture_alarm_token(restore["token"])
+            and valid_signal_handler(restore["previous"])
+            and valid_signal_mask(restore["previous_mask"])
+            and type(restore["phase"]) is str
+            and restore["phase"] in ALARM_PHASES
+            and valid_caller_alarm_restore(restore["caller"])
+            and type(restore["deadline_pending"]) is bool)
+
+
+def valid_capture_alarm_recovery(owner, restore) -> bool:
+    if not valid_capture_alarm_owner(owner):
+        return False
+    return (restore is None
+            or (valid_capture_alarm_restore(restore) and restore["token"] is owner[1]))
+
+
+def owns_capture_alarm(token: object) -> bool:
+    owner = CAPTURE_ALARM_OWNER
+    return (valid_capture_alarm_owner(owner)
+            and owner[0] == os.getpid() and owner[1] is token)
+
+
+def remember_capture_alarm(token: object, previous,
+                           previous_mask: set[signal.Signals]) -> dict:
+    global CAPTURE_ALARM_RESTORE
+    require(owns_capture_alarm(token), "existing process deadline")
+    restore = {
+        "token": token,
+        "previous": previous,
+        "previous_mask": previous_mask,
+        "phase": ALARM_CONTEXT,
+        "caller": ((0.0, 0.0), time.monotonic(), False),
+        "deadline_pending": False,
+    }
+    CAPTURE_ALARM_RESTORE = restore
+    return restore
+
+
+def capture_alarm_context(token: object) -> dict:
+    previous = signal.getsignal(signal.SIGALRM)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    restore = remember_capture_alarm(token, previous, previous_mask)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    return restore
+
+
+def capture_alarm_restore(token: object) -> dict | None:
+    restore = CAPTURE_ALARM_RESTORE
+    if (not owns_capture_alarm(token) or not valid_capture_alarm_restore(restore)
+            or restore["token"] is not token):
+        return None
+    return restore
+
+
+def forget_capture_alarm_restore(token: object) -> None:
+    global CAPTURE_ALARM_RESTORE
+    restore = CAPTURE_ALARM_RESTORE
+    if valid_capture_alarm_restore(restore) and restore["token"] is token:
+        CAPTURE_ALARM_RESTORE = None
+
+
+def reset_capture_alarm_after_fork() -> None:
+    global CAPTURE_ALARM_OWNER, CAPTURE_ALARM_RESTORE
+    inherited_owner = CAPTURE_ALARM_OWNER
+    inherited = CAPTURE_ALARM_RESTORE
+    CAPTURE_ALARM_OWNER, CAPTURE_ALARM_RESTORE = None, None
+    if (inherited_owner is None and inherited is None):
+        return
+    if (not valid_capture_alarm_recovery(inherited_owner, inherited)
+            or inherited is None or inherited["phase"] == ALARM_RESTORED):
+        return
+    if inherited["phase"] == ALARM_CAPTURE:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, inherited["previous"])
+    signal.pthread_sigmask(signal.SIG_SETMASK, inherited["previous_mask"])
+
+
+os.register_at_fork(after_in_child=reset_capture_alarm_after_fork)
+
+
+def prepare_caller_alarm(restore: dict) -> tuple[tuple[float, float], bool]:
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    suspended_at = time.monotonic()
+    restore["caller"] = (previous_timer, suspended_at, False)
+    restore["phase"] = ALARM_CALLER
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    caller_pending = signal.SIGALRM in signal.sigpending()
+    restore["caller"] = (previous_timer, suspended_at, caller_pending)
+    return previous_timer, caller_pending
+
+
+def claim_capture_alarm(client: CaptureHTTP, expired, token: object) -> dict:
+    client.check()
+    restore = capture_alarm_context(token)
+    previous_timer, caller_pending = prepare_caller_alarm(restore)
+    conflict = (signal.SIGALRM in restore["previous_mask"]
+                or previous_timer != (0.0, 0.0) or caller_pending)
+    require(not conflict, "existing process deadline")
+    remaining = client.deadline - time.monotonic()
+    require(remaining > 0, "capture deadline expired")
+    restore["phase"] = ALARM_CAPTURE
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, remaining)
+    signal.pthread_sigmask(signal.SIG_SETMASK, restore["previous_mask"])
+    client.check()
+    return restore
+
+
+def restore_capture_context(restore: dict) -> None:
+    signal.signal(signal.SIGALRM, restore["previous"])
+    signal.pthread_sigmask(signal.SIG_SETMASK, restore["previous_mask"])
+    restore["phase"] = ALARM_RESTORED
+
+
+def release_capture_alarm(restore: dict, deadline: float) -> CaptureError | None:
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    pending_deadline = signal.SIGALRM in signal.sigpending()
+    restore["deadline_pending"] |= pending_deadline
+    if pending_deadline:
+        signal.sigwait({signal.SIGALRM})
+    signal.signal(signal.SIGALRM, signal.SIG_IGN)
+    signal.signal(signal.SIGALRM, restore["previous"])
+    restore["phase"] = ALARM_MASK
+    signal.pthread_sigmask(signal.SIG_SETMASK, restore["previous_mask"])
+    restore["phase"] = ALARM_RESTORED
+    deadline_failure = None
+    if restore["deadline_pending"] or time.monotonic() >= deadline:
+        deadline_failure = CaptureError("capture deadline expired")
+    return deadline_failure
+
+
+def recover_capture_alarm(token: object, deadline: float) -> CaptureError | None:
+    restore = capture_alarm_restore(token)
+    if restore is None:
+        return None
+    phase = restore["phase"]
+    if phase in (ALARM_CONTEXT, ALARM_MASK, ALARM_CALLER_MASK):
+        restore_capture_context(restore)
+    elif phase == ALARM_CALLER:
+        restore_caller_alarm(restore)
+    elif phase == ALARM_CAPTURE:
+        return release_capture_alarm(restore, deadline)
+    if restore["deadline_pending"] or time.monotonic() >= deadline:
+        return CaptureError("capture deadline expired")
+    return None
+
+
+def finish_capture_alarm(token: object, deadline: float) -> CaptureError | None:
+    deadline_failure = None
+    cleanup_failures = []
+    for _ in range(2):
+        try:
+            recovered_deadline = recover_capture_alarm(token, deadline)
+        except CaptureError as error:
+            deadline_failure = deadline_failure or error
+        except BaseException as error:
+            cleanup_failures.append(error)
+        else:
+            deadline_failure = deadline_failure or recovered_deadline
+            break
+    if cleanup_failures:
+        for secondary in cleanup_failures[1:]:
+            cleanup_failures[0].add_note(f"capture alarm cleanup failed: {secondary}")
+        raise cleanup_failures[0]
+    return deadline_failure
+
+
+def reject_malformed_capture_alarm_state() -> None:
+    global CAPTURE_ALARM_OWNER, CAPTURE_ALARM_RESTORE
+    CAPTURE_ALARM_OWNER, CAPTURE_ALARM_RESTORE = None, None
+    raise CaptureError("invalid capture alarm recovery state")
+
+
+def recover_stale_capture_ownership() -> None:
+    owner = CAPTURE_ALARM_OWNER
+    restore = CAPTURE_ALARM_RESTORE
+    if owner is None and restore is None:
+        return
+    if not valid_capture_alarm_recovery(owner, restore):
+        reject_malformed_capture_alarm_state()
+    if owner[0] != os.getpid():
+        reset_capture_alarm_after_fork()
+        return
+    recovered = restore is not None and restore["phase"] == ALARM_RESTORED
+    if owner[2] != OWNER_RECOVERABLE and not recovered:
+        return
     try:
-        signal.signal(signal.SIGALRM, signal.SIG_IGN)
-        remaining, _ = signal.setitimer(signal.ITIMER_REAL, 0)
-        if remaining == 0.0:
-            time.sleep(ALARM_DRAIN_SECONDS)
-        signal.signal(signal.SIGALRM, previous)
+        finish_capture_alarm(owner[1], float("inf"))
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        restore = capture_alarm_restore(owner[1])
+        if restore is None or restore["phase"] == ALARM_RESTORED:
+            release_capture_ownership(owner[1])
+
+
+def claim_capture_ownership(token: object) -> None:
+    global CAPTURE_ALARM_OWNER
+    require(threading.current_thread() is threading.main_thread(),
+            "capture deadline requires main thread")
+    recover_stale_capture_ownership()
+    require(CAPTURE_ALARM_OWNER is None, "existing process deadline")
+    CAPTURE_ALARM_OWNER = [os.getpid(), token, OWNER_ACTIVE]
+
+
+def mark_capture_ownership_recoverable(token: object) -> None:
+    if owns_capture_alarm(token):
+        CAPTURE_ALARM_OWNER[2] = OWNER_RECOVERABLE
+
+
+def release_capture_ownership(token: object) -> None:
+    global CAPTURE_ALARM_OWNER, CAPTURE_ALARM_RESTORE
+    if not owns_capture_alarm(token):
+        return
+    restore = capture_alarm_restore(token)
+    require(restore is None or restore["phase"] == ALARM_RESTORED,
+            "capture alarm cleanup incomplete")
+    CAPTURE_ALARM_OWNER = None
+    if CAPTURE_ALARM_RESTORE is restore:
+        CAPTURE_ALARM_RESTORE = None
+
+
+def complete_capture_alarm(token: object, deadline: float) -> CaptureError | None:
+    deadline_failure = None
+    try:
+        if capture_alarm_restore(token) is not None:
+            deadline_failure = finish_capture_alarm(token, deadline)
+    except BaseException as error:
+        mark_capture_ownership_recoverable(token)
+        restore = capture_alarm_restore(token)
+        if restore is not None and restore["phase"] == ALARM_RESTORED:
+            try:
+                release_capture_ownership(token)
+            except BaseException as release_error:
+                error.add_note(f"capture alarm cleanup failed: {release_error}")
+        raise
+    mark_capture_ownership_recoverable(token)
+    release_capture_ownership(token)
+    return deadline_failure
+
+
+def raise_capture_failure(failure: BaseException | None,
+                          deadline_failure: CaptureError | None,
+                          cleanup_failure: BaseException | None,
+                          deadline: float) -> None:
+    if failure is not None:
+        for secondary in (deadline_failure, cleanup_failure):
+            if secondary is not None and secondary is not failure:
+                failure.add_note(f"capture alarm cleanup failed: {secondary}")
+        raise failure
+    if deadline_failure is not None:
+        if cleanup_failure is not None:
+            deadline_failure.add_note(f"capture alarm cleanup failed: {cleanup_failure}")
+        raise deadline_failure
+    if cleanup_failure is not None:
+        raise cleanup_failure
+    require(time.monotonic() < deadline, "capture deadline expired")
 
 
 @contextlib.contextmanager
 def capture_deadline(client: CaptureHTTP):
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
-    previous = None
+    token = object()
+    alarm = {"deadline": None, "teardown": False}
+    claimed_alarm = None
     failure: BaseException | None = None
+    cleanup_failure: BaseException | None = None
     def expired(signum, frame):
-        raise CaptureError("capture deadline expired")
+        if alarm["deadline"] is None:
+            alarm["deadline"] = CaptureError("capture deadline expired")
+        if alarm["teardown"]:
+            return
+        alarm["teardown"] = True
+        raise alarm["deadline"]
     try:
-        require(signal.SIGALRM not in previous_mask
-                and signal.SIGALRM not in signal.sigpending()
-                and signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0),
-                "existing process deadline")
-        previous = signal.getsignal(signal.SIGALRM)
-        signal.signal(signal.SIGALRM, expired)
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        remaining = client.deadline - time.monotonic()
-        require(remaining > 0, "capture deadline expired")
-        signal.setitimer(signal.ITIMER_REAL, remaining)
-        client.check()
+        claim_capture_ownership(token)
+        claimed_alarm = claim_capture_alarm(client, expired, token)
         yield
         client.check()
+        alarm["teardown"] = True
     except BaseException as error:
         failure = error
-        raise
+        alarm["teardown"] = True
     finally:
-        try:
-            if previous is None:
-                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-            else:
-                alarm_failure = None
-                for _ in range(2):
-                    try:
-                        restore_capture_alarm(previous, previous_mask)
-                        break
-                    except CaptureError as error:
-                        alarm_failure = error
-                if alarm_failure is not None:
-                    raise alarm_failure
-        except BaseException as error:
-            if failure is None:
-                raise
-            failure.add_note(f"capture alarm cleanup failed: {error}")
+        alarm["teardown"] = True
+        if owns_capture_alarm(token):
+            try:
+                cleanup_deadline = complete_capture_alarm(token, client.deadline)
+                if alarm["deadline"] is None:
+                    alarm["deadline"] = cleanup_deadline
+            except BaseException as error:
+                cleanup_failure = error
+    raise_capture_failure(failure, alarm["deadline"], cleanup_failure, client.deadline)
 
 
 def attempt_jobs(client: CaptureHTTP, base: str, run_id: int) -> list[dict]:
