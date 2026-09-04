@@ -1610,6 +1610,62 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(inspect_peer.call_count, 30)
         self.assertEqual(len(channel.target_identities), 31)
 
+    def test_authenticated_target_peer_releases_exact_reported_process(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        target = darwin_direct_identity(900, 10, 7100837)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"authenticated",
+            wrapper=wrapper,
+            target_listener=91,
+            target_socket_path=Path("target.sock"),
+            peer_identity_required=True,
+        )
+        with mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=7100837
+        ), mock.patch.object(
+            run_xcode_tests, "bind_direct_peer_identity", return_value=92
+        ) as bind, mock.patch.object(
+            run_xcode_tests.os, "write", return_value=1
+        ) as release:
+            run_xcode_tests.apply_direct_target_payload(
+                channel,
+                {"event": "target", "identity": run_xcode_tests.identity_payload(target)},
+                "target",
+                time.monotonic() + 1,
+            )
+        bind.assert_called_once_with(91, Path("target.sock"), target, mock.ANY)
+        release.assert_called_once_with(92, b"1")
+        self.assertEqual(channel.target_peer, 92)
+        self.assertEqual(channel.target, target)
+
+    def test_authenticated_target_peer_rejects_failed_release(self) -> None:
+        target = darwin_direct_identity(900, 10, 7100837)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"authenticated",
+            wrapper=darwin_direct_identity(800, 8, 7000000),
+            target_listener=91,
+            target_socket_path=Path("target.sock"),
+            peer_identity_required=True,
+        )
+        with mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=7100837
+        ), mock.patch.object(
+            run_xcode_tests, "bind_direct_peer_identity", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests.os, "write", return_value=0
+        ), self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError,
+            "direct target acknowledgement unavailable",
+        ):
+            run_xcode_tests.apply_direct_target_payload(
+                channel,
+                {"event": "target", "identity": run_xcode_tests.identity_payload(target)},
+                "target",
+                time.monotonic() + 1,
+            )
+
     def test_hosted_exec_report_waits_for_parent_peer_generation(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
         before_exec = darwin_direct_identity(900, 10, 7100837)
@@ -4492,8 +4548,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
         authenticate_by, command_seconds, cleanup_by = (
             run_xcode_tests.launchctl_deadlines(10.0, 26.0, 10.0, None)
         )
-        self.assertEqual(authenticate_by, 14.0)
-        self.assertEqual(command_seconds, 10.0)
+        self.assertEqual(authenticate_by, 17.0)
+        self.assertEqual(command_seconds, 7.0)
         self.assertEqual(cleanup_by, 26.0)
         self.assertEqual(
             cleanup_by - authenticate_by - command_seconds,
@@ -4514,7 +4570,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
 
     def test_timeout_evidence_probe_cannot_enter_cleanup_reserve(self) -> None:
         clock = [18.0]
-        wall_deadline = 33.75
+        wall_deadline = (
+            clock[0] + run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS + 0.25
+        )
         with mock.patch.object(
             run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
         ), mock.patch.object(run_xcode_tests, "launchctl_result") as launch:
@@ -4524,7 +4582,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             evidence = run_xcode_tests.launchd_job_evidence(
                 launchd_job(Path("/tmp/ap13-evidence")), evidence_deadline
             )
-        self.assertEqual(evidence_deadline - clock[0], 0.25)
+        self.assertAlmostEqual(evidence_deadline - clock[0], 0.25)
         self.assertEqual(
             wall_deadline - evidence_deadline,
             run_xcode_tests.CONTAINED_JOB_CLEANUP_SECONDS,
@@ -4801,7 +4859,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "complete_direct_job", return_value=completion
         ) as complete:
             run_xcode_tests.bootout_job(launchd_job(job.root), bootout_by, cleanup_by)
-        self.assertEqual(authentication_windows, [4.0])
+        self.assertEqual(
+            authentication_windows,
+            [run_xcode_tests.DIRECT_WRAPPER_HANDSHAKE_SECONDS],
+        )
         complete.assert_called_once_with(job, 1.5, cleanup_by, 2.0)
 
     def test_absence_reserves_full_direct_authentication_after_bootout(self) -> None:
@@ -4835,7 +4896,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests.confirm_job_absent(
                 launchd_job(job.root), confirmation_by
             )
-        self.assertEqual(authentication_windows, [4.0])
+        self.assertEqual(
+            authentication_windows,
+            [run_xcode_tests.DIRECT_WRAPPER_HANDSHAKE_SECONDS],
+        )
         complete.assert_called_once_with(job, 1.0, confirmation_by, 2.0)
 
     def test_launchctl_fails_closed_on_direct_identity_setup_error(self) -> None:
@@ -6966,7 +7030,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(set(evidence), expected)
         for content in evidence.values():
             self.assertIn("classification=test-execution-timeout", content)
-            self.assertIn(f"wall-timeout={wall_timeout}s", content)
+            self.assertIn(f"wall-timeout={wall_timeout:g}s", content)
         self.assertLess(elapsed, wall_timeout + 2)
 
     def test_timeout_evidence_write_is_bounded_and_reaps_writer(self) -> None:

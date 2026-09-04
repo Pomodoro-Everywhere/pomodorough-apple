@@ -61,12 +61,15 @@ PEER_IDENTITY_COMPLETION_RESERVE_SECONDS = 0.05
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 4.0
+DIRECT_WRAPPER_HANDSHAKE_SECONDS = 8.0
 LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 2.0
-LAUNCHCTL_AUTHENTICATION_SECONDS = CONTAINMENT_HANDSHAKE_SECONDS
+LAUNCHCTL_AUTHENTICATION_SECONDS = DIRECT_WRAPPER_HANDSHAKE_SECONDS
 LAUNCHCTL_RETRY_SECONDS = 1.0
 LAUNCHCTL_BOOTOUT_SECONDS = 1.5
 CONTAINMENT_SIGNAL_RESERVE_SECONDS = 0.75
-CONTAINMENT_DRAIN_RESERVE_SECONDS = 0.25
+CONTAINMENT_DRAIN_RESERVE_SECONDS = (
+    2 * CONTAINMENT_SIGNAL_RESERVE_SECONDS + DESCENDANT_QUIESCENCE_SECONDS
+)
 CONTAINMENT_BOOTOUT_RESERVE_SECONDS = (
     LAUNCHCTL_AUTHENTICATION_SECONDS + LAUNCHCTL_BOOTOUT_SECONDS
 )
@@ -1852,7 +1855,7 @@ def spawn_gated_direct_target(
     wrapper_socket_path: str,
     marker: str | None = None,
 ) -> tuple[subprocess.Popen[bytes], ProcessIdentity, int]:
-    gate_read, gate_write = os.pipe()
+    gate_read, gate_write = os.pipe() if LIBPROC is None else (-1, -1)
     listener = open_direct_listener(Path(wrapper_socket_path))
     peer_descriptor = -1
     arguments = direct_target_arguments(
@@ -1867,11 +1870,12 @@ def spawn_gated_direct_target(
         process = subprocess.Popen(
             arguments,
             env=environment,
-            pass_fds=(gate_read,),
+            pass_fds=(gate_read,) if gate_read >= 0 else (),
             start_new_session=True,
         )
-        os.close(gate_read)
-        gate_read = -1
+        if gate_read >= 0:
+            os.close(gate_read)
+            gate_read = -1
         handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
         peer_descriptor = accept_direct_peer(listener.fileno(), handshake_by)
         listener.close()
@@ -1881,9 +1885,10 @@ def spawn_gated_direct_target(
         report_direct_event(
             reporter, {"event": "target", "identity": identity_payload(identity)}
         )
-        os.write(gate_write, b"1")
-        os.close(gate_write)
-        gate_write = -1
+        if gate_write >= 0:
+            os.write(gate_write, b"1")
+            os.close(gate_write)
+            gate_write = -1
         completed = True
         return process, identity, peer_descriptor
     finally:
@@ -2111,7 +2116,7 @@ def authenticate_direct_wrapper(
         {"event": "wrapper", "identity": identity_payload(identity)},
     )
     ready, _, _ = select.select(
-        [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
+        [acknowledgement_descriptor], [], [], DIRECT_WRAPPER_HANDSHAKE_SECONDS
     )
     if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
         raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
@@ -2180,12 +2185,14 @@ def direct_target(
         ]
         for descriptor in peers:
             os.set_inheritable(descriptor, True)
+        acknowledgement_descriptor = peers[0] if gate_descriptor < 0 else gate_descriptor
         ready, _, _ = select.select(
-            [gate_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
+            [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
         )
-        if not ready or os.read(gate_descriptor, 1) != b"1":
+        if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
             raise SimulatorLifecycleError("direct target acknowledgement unavailable")
-        os.close(gate_descriptor)
+        if gate_descriptor >= 0:
+            os.close(gate_descriptor)
         trace_direct_target_execs()
         os.execvp(command[0], command)
     except (OSError, SimulatorLifecycleError) as error:
@@ -2886,6 +2893,8 @@ def apply_direct_target_payload(
                 deadline,
             )
             channel.target_listener = -1
+            if os.write(channel.target_peer, b"1") != 1:
+                raise SimulatorLifecycleError("direct target acknowledgement unavailable")
         channel.target_exec_required = target_version is not None
     else:
         previous = channel.target
@@ -3215,7 +3224,7 @@ def await_direct_identity(
     deadline: float | None,
     cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
 ) -> ProcessIdentity:
-    handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+    handshake_by = time.monotonic() + DIRECT_WRAPPER_HANDSHAKE_SECONDS
     setup_deadline = reserved_deadline(deadline, cleanup_reserve)
     if setup_deadline is not None:
         handshake_by = min(handshake_by, setup_deadline)

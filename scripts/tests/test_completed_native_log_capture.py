@@ -1052,7 +1052,8 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
                 def check(self):
                     capture.require(time.monotonic() < self.deadline,
                                     "capture deadline expired")
-            markers = ("previous_timer, caller_pending = prepare_caller_alarm(restore)",
+            markers = ("previous_timer = signal.getitimer(signal.ITIMER_REAL)",
+                       "previous_timer, caller_pending = prepare_caller_alarm(restore)",
                        "caller_pending = signal.SIGALRM in signal.sigpending()",
                        'conflict = (signal.SIGALRM in restore["previous_mask"]')
             for marker in markers:
@@ -1061,7 +1062,8 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
                     caller_hits.append(signum)
                 def trace(frame, event, argument):
                     line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
-                    alarm_codes = (capture.claim_capture_alarm.__code__,
+                    alarm_codes = (capture.capture_alarm_context.__code__,
+                                   capture.claim_capture_alarm.__code__,
                                    capture.prepare_caller_alarm.__code__)
                     if frame.f_code in alarm_codes and event == "line" \
                             and marker in line and not windows:

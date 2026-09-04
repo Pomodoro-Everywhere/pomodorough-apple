@@ -368,6 +368,9 @@ def capture_alarm_context(token: object) -> dict:
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
     restore = remember_capture_alarm(token, previous, previous_mask)
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    suspended_at = time.monotonic()
+    restore["caller"] = (previous_timer, suspended_at, False)
     return restore
 
 
@@ -406,9 +409,7 @@ os.register_at_fork(after_in_child=reset_capture_alarm_after_fork)
 
 
 def prepare_caller_alarm(restore: dict) -> tuple[tuple[float, float], bool]:
-    previous_timer = signal.getitimer(signal.ITIMER_REAL)
-    suspended_at = time.monotonic()
-    restore["caller"] = (previous_timer, suspended_at, False)
+    previous_timer, suspended_at, _ = restore["caller"]
     restore["phase"] = ALARM_CALLER
     signal.setitimer(signal.ITIMER_REAL, 0)
     caller_pending = signal.SIGALRM in signal.sigpending()
