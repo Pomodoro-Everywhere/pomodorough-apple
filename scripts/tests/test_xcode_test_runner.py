@@ -2422,6 +2422,40 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(inspect.call_count, 1)
         closed.assert_not_called()
 
+    def test_wrapper_peer_identity_avoids_outer_deadline_worker(self) -> None:
+        reported = darwin_direct_identity(2222, 10, 20)
+        timeout_messages = []
+        original_deadline_call = run_xcode_tests.deadline_call
+
+        def record_deadline_call(operation, deadline, timeout_message):
+            timeout_messages.append(timeout_message)
+            return original_deadline_call(operation, deadline, timeout_message)
+
+        with mock.patch.object(
+            run_xcode_tests, "deadline_call", side_effect=record_deadline_call
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity", return_value=None
+        ):
+            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
+                91, reported, time.monotonic() + 0.02
+            )
+        self.assertIsNone(current)
+        self.assertNotIn("direct wrapper identity deadline expired", timeout_messages)
+        self.assertIn("direct wrapper identity sample deadline expired", timeout_messages)
+
+    def test_wrapper_peer_identity_preserves_expired_deadline_error(self) -> None:
+        reported = darwin_direct_identity(2222, 10, 20)
+        with mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity"
+        ) as inspect, self.assertRaisesRegex(
+            run_xcode_tests.OperationDeadlineExpired,
+            "direct wrapper identity deadline expired",
+        ):
+            run_xcode_tests.await_peer_identity_covering_wrapper_report(
+                91, reported, time.monotonic() - 1
+            )
+        inspect.assert_not_called()
+
     def test_wrapper_peer_identity_bounds_stalled_sample(self) -> None:
         reported = darwin_direct_identity(2222, 10, 20)
         release = threading.Event()

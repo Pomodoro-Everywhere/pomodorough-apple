@@ -3123,29 +3123,25 @@ def await_peer_identity_covering_exec_report(
 def await_peer_identity_covering_wrapper_report(
     descriptor: int, reported: ProcessIdentity, deadline: float
 ) -> ProcessIdentity | None:
+    if time.monotonic() >= deadline:
+        raise OperationDeadlineExpired("direct wrapper identity deadline expired")
     retry_deadline = peer_identity_poll_deadline(deadline)
-
-    def inspect() -> ProcessIdentity | None:
-        while time.monotonic() < retry_deadline:
-            try:
-                current = deadline_call(
-                    lambda: stable_darwin_peer_identity(descriptor, reported.pid),
-                    retry_deadline,
-                    "direct wrapper identity sample deadline expired",
-                )
-            except OperationDeadlineExpired:
+    while time.monotonic() < retry_deadline:
+        try:
+            current = deadline_call(
+                lambda: stable_darwin_peer_identity(descriptor, reported.pid),
+                retry_deadline,
+                "direct wrapper identity sample deadline expired",
+            )
+        except OperationDeadlineExpired:
+            return None
+        if current is not None:
+            if peer_identity_covers_exec_report(reported, current):
+                return current
+            if not peer_identity_precedes_exec_report(reported, current):
                 return None
-            if current is not None:
-                if peer_identity_covers_exec_report(reported, current):
-                    return current
-                if not peer_identity_precedes_exec_report(reported, current):
-                    return None
-            time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
-        return None
-
-    return deadline_call(
-        inspect, deadline, "direct wrapper identity deadline expired"
-    )
+        time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
+    return None
 
 
 def direct_message_deadline(deadline: float | None) -> float:

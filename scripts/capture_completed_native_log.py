@@ -237,23 +237,33 @@ def redirect_url(value: str) -> str:
 
 
 def restore_caller_timer(previous_timer: tuple[float, float], suspended_at: float,
-                         caller_pending: bool) -> None:
+                         caller_pending: bool) -> bool:
     delay, interval = previous_timer
     if delay == 0.0:
-        return
+        return False
     elapsed = max(0.0, time.monotonic() - suspended_at)
     expired = elapsed >= delay
-    if expired and not caller_pending:
-        signal.raise_signal(signal.SIGALRM)
-        elapsed = max(0.0, time.monotonic() - suspended_at)
     if elapsed < delay:
         next_delay = delay - elapsed
     elif interval > 0.0:
         overdue = elapsed - delay
         next_delay = interval - overdue % interval
     else:
-        return
+        return expired and not caller_pending
     signal.setitimer(signal.ITIMER_REAL, max(next_delay, MIN_TIMER_SECONDS), interval)
+    return expired and not caller_pending
+
+
+def replay_caller_alarm(previous, previous_mask: set[signal.Signals]) -> None:
+    if signal.SIGALRM in previous_mask:
+        signal.raise_signal(signal.SIGALRM)
+        return
+    if previous is signal.SIG_IGN:
+        return
+    if callable(previous):
+        previous(signal.SIGALRM, sys._getframe(1))
+        return
+    signal.raise_signal(signal.SIGALRM)
 
 
 def restore_caller_alarm(restore: dict) -> None:
@@ -263,12 +273,14 @@ def restore_caller_alarm(restore: dict) -> None:
     if signal.SIGALRM in signal.sigpending():
         signal.sigwait({signal.SIGALRM})
     signal.signal(signal.SIGALRM, restore["previous"])
-    restore_caller_timer(previous_timer, suspended_at, caller_pending)
+    timer_expired = restore_caller_timer(
+        previous_timer, suspended_at, caller_pending
+    )
     restore["phase"] = ALARM_CALLER_MASK
     signal.pthread_sigmask(signal.SIG_SETMASK, restore["previous_mask"])
     restore["phase"] = ALARM_RESTORED
-    if caller_pending:
-        signal.raise_signal(signal.SIGALRM)
+    if caller_pending or timer_expired:
+        replay_caller_alarm(restore["previous"], restore["previous_mask"])
 
 
 def valid_capture_alarm_token(token) -> bool:

@@ -1476,48 +1476,65 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "interval preserved\n")
 
-    def test_repeating_alarm_phase_uses_post_signal_restore_time(self):
+    def test_repeating_alarm_rearms_and_requests_one_replay(self):
         events = []
         with patch.object(
-            capture.time, "monotonic", side_effect=[10.11, 10.16]
-        ), patch.object(
-            capture.signal,
-            "raise_signal",
-            side_effect=lambda value: events.append(("raise", value)),
+            capture.time, "monotonic", return_value=10.11
         ), patch.object(
             capture.signal,
             "setitimer",
             side_effect=lambda *values: events.append(("timer", *values)),
         ):
-            capture.restore_caller_timer((0.02, 0.04), 10.0, False)
-        self.assertEqual(events[0], ("raise", capture.signal.SIGALRM))
-        self.assertEqual(events[1][:2], ("timer", capture.signal.ITIMER_REAL))
-        self.assertAlmostEqual(events[1][2], 0.02)
-        self.assertEqual(events[1][3], 0.04)
+            replay = capture.restore_caller_timer((0.02, 0.04), 10.0, False)
+        self.assertTrue(replay)
+        self.assertEqual(events[0][:2], ("timer", capture.signal.ITIMER_REAL))
+        self.assertAlmostEqual(events[0][2], 0.03)
+        self.assertEqual(events[0][3], 0.04)
 
     def test_pending_caller_alarm_replays_after_restoration(self):
         previous_mask = set()
+        replay_phases = []
+
+        def previous(_signum, _frame):
+            replay_phases.append(restore["phase"])
+
         restore = {
             "caller": ((0.0, 0.0), 10.0, True),
-            "previous": object(),
+            "previous": previous,
             "previous_mask": previous_mask,
             "phase": capture.ALARM_CALLER,
         }
-        replay_phases = []
         with patch.object(
             capture.signal, "sigpending", return_value={capture.signal.SIGALRM}
         ), patch.object(capture.signal, "sigwait") as wait, patch.object(
             capture.signal, "pthread_sigmask"
         ), patch.object(capture.signal, "setitimer"), patch.object(
             capture.signal, "signal"
-        ), patch.object(capture, "restore_caller_timer"), patch.object(
-            capture.signal,
-            "raise_signal",
-            side_effect=lambda _value: replay_phases.append(restore["phase"]),
-        ) as replay:
+        ), patch.object(
+            capture, "restore_caller_timer", return_value=False
+        ), patch.object(capture.signal, "raise_signal") as replay:
             capture.restore_caller_alarm(restore)
         wait.assert_called_once_with({capture.signal.SIGALRM})
-        replay.assert_called_once_with(capture.signal.SIGALRM)
+        replay.assert_not_called()
+        self.assertEqual(replay_phases, [capture.ALARM_RESTORED])
+
+    def test_expired_caller_timer_replays_after_restoration(self):
+        replay_phases = []
+        restore = {
+            "caller": ((0.02, 0.0), 10.0, False),
+            "previous": lambda _signum, _frame: replay_phases.append(restore["phase"]),
+            "previous_mask": set(),
+            "phase": capture.ALARM_CALLER,
+        }
+        with patch.object(
+            capture.signal, "sigpending", return_value=set()
+        ), patch.object(capture.signal, "pthread_sigmask"), patch.object(
+            capture.signal, "setitimer"
+        ), patch.object(capture.signal, "signal"), patch.object(
+            capture, "restore_caller_timer", return_value=True
+        ), patch.object(capture.signal, "raise_signal") as replay:
+            capture.restore_caller_alarm(restore)
+        replay.assert_not_called()
         self.assertEqual(replay_phases, [capture.ALARM_RESTORED])
 
     def test_primary_exception_survives_cleanup_failure(self):
