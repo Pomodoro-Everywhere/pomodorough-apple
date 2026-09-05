@@ -495,6 +495,18 @@ def acquire_pipe_descriptors_fallback(storage: object) -> int:
     return 0
 
 
+def _libsystem_pipe2_os_fallback(storage: object, flags: int) -> int:
+    del flags
+    return acquire_pipe_descriptors_fallback(storage)
+
+
+if not hasattr(LIBSYSTEM, "pipe2"):
+    # Host libsystem without pipe2 (older macOS runners): keep the LOAD_ATTR
+    # site in acquire_pipe_descriptors working so worker-interrupt tracing
+    # still reaches the opcode after the call; the fallback runs inside it.
+    LIBSYSTEM.pipe2 = _libsystem_pipe2_os_fallback
+
+
 def acquire_pipe_descriptors() -> tuple[AcquiredDescriptor, AcquiredDescriptor]:
     storage = (ctypes.c_int * 2)(-1, -1)
     read_descriptor = AcquiredDescriptor.from_buffer(storage, 0)
@@ -4168,7 +4180,28 @@ def await_peer_identity_matching_wrapper(
 def await_peer_identity_covering_exec_report(
     descriptor: int, reported: ProcessIdentity, deadline: float
 ) -> ProcessIdentity | None:
-    retry_deadline = deadline - DESCENDANT_POLL_SECONDS
+    # Synchronous first sample: conclusive forgery must report forged even
+    # when a loaded runner already exhausted the caller's deadline.
+    try:
+        first = stable_darwin_peer_identity(descriptor, reported.pid)
+    except (OSError, SimulatorLifecycleError):
+        first = None
+    if first is not None:
+        if peer_identity_covers_exec_report(reported, first):
+            return first
+        if not peer_identity_precedes_exec_report(reported, first):
+            return None
+    elif direct_peer_closed(descriptor):
+        return reported
+    # Clamp an already-exhausted budget to one poll interval so an
+    # inconclusive sample still yields a forged verdict instead of racing
+    # the outer timeout; rejection is fail-closed either way.
+    effective = max(deadline, time.monotonic() + DESCENDANT_POLL_SECONDS)
+    # Reserve completion margin so the inner poll returns forged before the
+    # outer deadline_call can time out with deadline-expired under load.
+    retry_deadline = effective - max(
+        DESCENDANT_POLL_SECONDS, PEER_IDENTITY_COMPLETION_RESERVE_SECONDS
+    )
 
     def inspect() -> ProcessIdentity | None:
         while time.monotonic() < retry_deadline:
@@ -4184,7 +4217,7 @@ def await_peer_identity_covering_exec_report(
         return None
 
     return deadline_call(
-        inspect, deadline, "direct target identity deadline expired"
+        inspect, effective, "direct target identity deadline expired"
     )
 
 

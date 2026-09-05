@@ -1216,6 +1216,16 @@ def remove_test_launchd_service(
 
 
 class XcodeTestRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Flush cyclic garbage (exception tracebacks holding descriptor
+        # owners) before each test so a late finalizer cannot fire inside a
+        # later test's os.close recording window.
+        gc.collect()
+
+    def tearDown(self) -> None:
+        # Release this test's traceback-held owners now, outside any mock.
+        gc.collect()
+
     def test_available_simulator_prefers_booted_and_binds_exact_udid(self) -> None:
         inventory = {
             "devices": {
