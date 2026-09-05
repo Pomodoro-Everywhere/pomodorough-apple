@@ -435,8 +435,13 @@ LIBSYSTEM.openat.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
 LIBSYSTEM.openat.restype = AcquiredDescriptor
 LIBSYSTEM.fcntl.argtypes = (ctypes.c_int, ctypes.c_int)
 LIBSYSTEM.fcntl.restype = AcquiredDescriptor
-LIBSYSTEM.pipe2.argtypes = (ctypes.POINTER(ctypes.c_int), ctypes.c_int)
-LIBSYSTEM.pipe2.restype = ctypes.c_int
+try:
+    # pipe2 is absent from older macOS libsystem; import must survive so the
+    # os.pipe fallback in acquire_pipe_descriptors can run there.
+    LIBSYSTEM.pipe2.argtypes = (ctypes.POINTER(ctypes.c_int), ctypes.c_int)
+    LIBSYSTEM.pipe2.restype = ctypes.c_int
+except AttributeError:
+    pass
 
 
 def require_acquired_descriptor(
@@ -472,6 +477,24 @@ def acquire_duplicate_descriptor(descriptor: int) -> AcquiredDescriptor:
     return require_acquired_descriptor(result)
 
 
+def acquire_pipe_descriptors_fallback(storage: object) -> int:
+    read_fd, write_fd = os.pipe()
+    try:
+        for descriptor in (read_fd, write_fd):
+            flags = fcntl.fcntl(descriptor, fcntl.F_GETFD)
+            fcntl.fcntl(descriptor, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+    except BaseException:
+        for descriptor in (read_fd, write_fd):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+    storage[0] = read_fd  # type: ignore[index]
+    storage[1] = write_fd  # type: ignore[index]
+    return 0
+
+
 def acquire_pipe_descriptors() -> tuple[AcquiredDescriptor, AcquiredDescriptor]:
     storage = (ctypes.c_int * 2)(-1, -1)
     read_descriptor = AcquiredDescriptor.from_buffer(storage, 0)
@@ -481,6 +504,20 @@ def acquire_pipe_descriptors() -> tuple[AcquiredDescriptor, AcquiredDescriptor]:
     ctypes.set_errno(0)
     try:
         result = LIBSYSTEM.pipe2(storage, getattr(os, "O_CLOEXEC", 0))
+    except AttributeError:
+        # Host libsystem without pipe2 (older macOS runners): os.pipe plus
+        # explicit CLOEXEC keeps the same owned-descriptor contract.
+        try:
+            result = acquire_pipe_descriptors_fallback(storage)
+        except BaseException as fallback_error:
+            complete_owned_cleanup(
+                [
+                    ("direct pipe read close failed", read_descriptor.close),
+                    ("direct pipe write close failed", write_descriptor.close),
+                ],
+                fallback_error,
+            )
+            raise
     except BaseException as error:
         complete_owned_cleanup(
             [
