@@ -1068,6 +1068,8 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
                     if frame.f_code in alarm_codes and event == "line" \
                             and marker in line and not windows:
                         windows.append(marker)
+                        caller_hits.clear()
+                        signal.setitimer(signal.ITIMER_REAL, 0.03)
                         time.sleep(0.05)
                     return trace
                 signal.signal(signal.SIGALRM, caller_expired)
