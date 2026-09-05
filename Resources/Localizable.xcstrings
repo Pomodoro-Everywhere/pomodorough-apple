@@ -1445,6 +1445,16 @@
         }
       }
     },
+    "Local change could not be saved. The previous state was restored.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local change could not be saved. The previous state was restored."
+          }
+        }
+      }
+    },
     "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.": {
       "localizations": {
         "en": {

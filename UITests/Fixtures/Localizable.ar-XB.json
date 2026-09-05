@@ -1214,6 +1214,12 @@
         "value": "‏⟦Local account and timer data will be removed from this device.⟧"
       }
     },
+    "Local change could not be saved. The previous state was restored.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Local change could not be saved. The previous state was restored.⟧"
+      }
+    },
     "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.": {
       "stringUnit": {
         "state": "translated",
