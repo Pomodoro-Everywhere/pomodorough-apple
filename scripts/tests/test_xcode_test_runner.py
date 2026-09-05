@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from dataclasses import replace
+import dis
+import gc
 import io
 import os
 from pathlib import Path
@@ -28,6 +31,490 @@ from scripts import run_xcode_tests
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "run_xcode_tests.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SYSTEM_SOCKET_TYPE = socket.socket
+SYSTEM_OS_CLOSE = os.close
+FINALIZER_LOCK_CASE_SOURCE = textwrap.dedent(
+    """
+    import errno
+    import os
+    import sys
+    from scripts import run_xcode_tests as runner
+
+    descriptor, peer = os.pipe()
+    direct = sys.argv[1] == "direct"
+    armed = sys.argv[2] == "armed"
+    owner = (runner.DirectDescriptorOwner(descriptor) if direct
+             else runner.AcquiredDescriptor(descriptor))
+    if not armed:
+        if direct:
+            owner._armed = False
+        else:
+            assert owner.release() == descriptor
+    with runner.DESCRIPTOR_CLOSE_LOCK:
+        owner.__del__()
+    if armed:
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            assert error.errno == errno.EBADF
+        else:
+            raise AssertionError("armed descriptor remained open")
+    else:
+        os.fstat(descriptor)
+        os.close(descriptor)
+    owner.__del__()
+    os.close(peer)
+    """
+)
+
+
+def reuse_descriptor_number(descriptor: int) -> None:
+    replacement = os.open(os.devnull, os.O_RDONLY)
+    if replacement == descriptor:
+        return
+    os.dup2(replacement, descriptor)
+    SYSTEM_OS_CLOSE(replacement)
+
+
+def close_test_descriptor(descriptor: int) -> None:
+    try:
+        SYSTEM_OS_CLOSE(descriptor)
+    except OSError:
+        pass
+
+
+class DirectSpawnCleanupSignal(BaseException):
+    pass
+
+
+class HostileCleanupSignal(BaseException):
+    def __init__(self, detail: str) -> None:
+        BaseException.__init__(self, detail)
+        self.string_calls = 0
+        self.representation_calls = 0
+        self.argument_reads = 0
+
+    @property
+    def args(self) -> tuple[object, ...]:
+        self.argument_reads += 1
+        raise RuntimeError("hostile args property")
+
+    @args.setter
+    def args(self, _value: object) -> None:
+        raise RuntimeError("hostile args setter")
+
+    def __str__(self) -> str:
+        self.string_calls += 1
+        raise RuntimeError("hostile string formatter")
+
+    def __repr__(self) -> str:
+        self.representation_calls += 1
+        raise RuntimeError("hostile representation formatter")
+
+
+class HostileFormattingError(OSError):
+    def __init__(self, detail: str) -> None:
+        BaseException.__init__(self, detail)
+        self.string_calls = 0
+        self.representation_calls = 0
+        self.argument_reads = 0
+        self.format_calls = 0
+
+    @property
+    def args(self) -> tuple[object, ...]:
+        self.argument_reads += 1
+        raise RuntimeError("hostile args property")
+
+    @args.setter
+    def args(self, _value: object) -> None:
+        raise RuntimeError("hostile args setter")
+
+    def __str__(self) -> str:
+        self.string_calls += 1
+        raise RuntimeError("hostile string formatter")
+
+    def __repr__(self) -> str:
+        self.representation_calls += 1
+        raise RuntimeError("hostile representation formatter")
+
+    def __format__(self, _specification: str) -> str:
+        self.format_calls += 1
+        raise RuntimeError("hostile format protocol")
+
+
+class HostileDirectSocket:
+    def __init__(self, primary: BaseException, cleanup: BaseException) -> None:
+        self.primary = primary
+        self.cleanup = cleanup
+        self.close_calls = 0
+
+    def bind(self, _path: str) -> None:
+        raise self.primary
+
+    def connect(self, _path: str) -> None:
+        raise self.primary
+
+    def close(self) -> None:
+        self.close_calls += 1
+        raise self.cleanup
+
+
+class HostileDetachSocket(socket.socket):
+    def accept(self) -> tuple[socket.socket, object]:
+        descriptor, address = self._accept()
+        return SYSTEM_SOCKET_TYPE(fileno=descriptor), address
+
+    def detach(self) -> int:
+        raise HostileCleanupSignal("borrowed descriptor detach interrupted")
+
+
+class InterruptingDescriptorSet(set[int]):
+    def __init__(self, values: set[int]) -> None:
+        super().__init__(values)
+        self.remove_calls = 0
+
+    def remove(self, descriptor: int) -> None:
+        super().remove(descriptor)
+        self.remove_calls += 1
+        if self.remove_calls == 1:
+            raise KeyboardInterrupt("descriptor transfer interrupted")
+
+
+class PublishingThenInterruptingDescriptorSet(set[int]):
+    def __init__(self, primary: BaseException) -> None:
+        super().__init__()
+        self.primary = primary
+        self.add_calls = 0
+
+    def add(self, descriptor: int) -> None:
+        super().add(descriptor)
+        self.add_calls += 1
+        if self.add_calls == 1:
+            raise self.primary
+
+
+class PartiallyRestoringDescriptorSet(set[int]):
+    def __init__(
+        self,
+        values: set[int],
+        primary: BaseException,
+        restore_errors: tuple[BaseException, BaseException],
+    ) -> None:
+        super().__init__(values)
+        self.primary = primary
+        self.restore_errors = restore_errors
+        self.remove_calls = 0
+        self.add_calls = 0
+
+    def remove(self, descriptor: int) -> None:
+        super().remove(descriptor)
+        self.remove_calls += 1
+        if self.remove_calls == 2:
+            raise self.primary
+
+    def add(self, descriptor: int) -> None:
+        self.add_calls += 1
+        if self.add_calls == 1:
+            super().add(descriptor)
+            raise self.restore_errors[0]
+        if self.add_calls == 2:
+            raise self.restore_errors[1]
+        super().add(descriptor)
+
+
+def interrupt_with_base_exception_at_opcode(
+    function: Callable[..., object],
+    offset: int,
+    operation: Callable[[], object],
+    primary: BaseException,
+) -> BaseException:
+    code, previous = function.__code__, sys.gettrace()
+
+    def trace(frame: object, event: str, _argument: object) -> object:
+        if frame.f_code is code:
+            frame.f_trace_opcodes = True
+            if event == "opcode" and frame.f_lasti == offset:
+                raise primary
+        return trace
+
+    sys.settrace(trace)
+    try:
+        operation()
+    except BaseException as error:
+        if error is not primary:
+            raise AssertionError("interrupt identity changed") from error
+    else:
+        raise AssertionError(f"opcode {offset} was not interrupted")
+    finally:
+        sys.settrace(previous)
+    return primary
+
+
+def interrupt_worker_with_base_exception_at_opcode(
+    function: Callable[..., object],
+    offset: int,
+    operation: Callable[[], object],
+    primary: BaseException,
+    occurrence: int = 1,
+) -> BaseException:
+    code, previous = function.__code__, threading.gettrace()
+    reached = threading.Event()
+    hits = 0
+
+    def trace(frame: object, event: str, _argument: object) -> object:
+        nonlocal hits
+        if frame.f_code is code:
+            frame.f_trace_opcodes = True
+            if event == "opcode" and frame.f_lasti == offset:
+                hits += 1
+                if hits == occurrence:
+                    reached.set()
+                    raise primary
+        return trace
+
+    threading.settrace(trace)
+    try:
+        operation()
+    except BaseException as error:
+        if error is not primary:
+            raise AssertionError("worker interrupt identity changed") from error
+    else:
+        raise AssertionError(f"worker opcode {offset} was not interrupted")
+    finally:
+        threading.settrace(previous)
+    if not reached.is_set():
+        raise AssertionError(f"worker opcode {offset} was not reached")
+    return primary
+
+
+def swallow_worker_base_exception_at_opcode(
+    function: Callable[..., object],
+    offset: int,
+    operation: Callable[[], object],
+    primary: BaseException,
+) -> None:
+    code, previous = function.__code__, threading.gettrace()
+    reached = threading.Event()
+
+    def trace(frame: object, event: str, _argument: object) -> object:
+        if frame.f_code is code:
+            frame.f_trace_opcodes = True
+            if event == "opcode" and frame.f_lasti == offset:
+                reached.set()
+                raise primary
+        return trace
+
+    threading.settrace(trace)
+    try:
+        operation()
+    finally:
+        threading.settrace(previous)
+    if not reached.is_set():
+        raise AssertionError(f"worker opcode {offset} was not reached")
+
+
+def swallow_current_base_exception_at_opcode(
+    function: Callable[..., object],
+    offset: int,
+    operation: Callable[[], object],
+    primary: BaseException,
+) -> None:
+    code, previous = function.__code__, sys.gettrace()
+    reached = False
+
+    def trace(frame: object, event: str, _argument: object) -> object:
+        nonlocal reached
+        if frame.f_code is code:
+            frame.f_trace_opcodes = True
+            if event == "opcode" and frame.f_lasti == offset:
+                reached = True
+                raise primary
+        return trace
+
+    sys.settrace(trace)
+    try:
+        operation()
+    finally:
+        sys.settrace(previous)
+    if not reached:
+        raise AssertionError(f"current opcode {offset} was not reached")
+
+
+def interrupt_at_opcode(
+    function: Callable[..., object],
+    offset: int,
+    operation: Callable[[], object],
+    detail: str,
+) -> KeyboardInterrupt:
+    primary = KeyboardInterrupt(detail)
+    interrupt_with_base_exception_at_opcode(function, offset, operation, primary)
+    return primary
+
+
+def unique_opcode_offset(
+    function: Callable[..., object], opname: str, argval: object = None
+) -> int:
+    offsets = [
+        instruction.offset
+        for instruction in dis.get_instructions(function)
+        if instruction.opname == opname
+        and (argval is None or instruction.argval == argval)
+    ]
+    if len(offsets) != 1:
+        raise AssertionError((function.__name__, opname, argval, offsets))
+    return offsets[0]
+
+
+def opcode_after_named_call(function: Callable[..., object], name: str) -> int:
+    instructions = list(dis.get_instructions(function))
+    load_index = next(
+        index
+        for index, instruction in enumerate(instructions)
+        if instruction.opname in {"LOAD_ATTR", "LOAD_METHOD"}
+        and instruction.argval == name
+    )
+    store_index = next(
+        index
+        for index in range(load_index + 1, len(instructions))
+        if instructions[index].opname.startswith("STORE_")
+    )
+    call_index = max(
+        index
+        for index in range(load_index + 1, store_index)
+        if instructions[index].opname == "CALL"
+    )
+    return instructions[call_index + 1].offset
+
+
+def opcode_after_store(function: Callable[..., object], name: str) -> int:
+    instructions = list(dis.get_instructions(function))
+    store_index = next(
+        index
+        for index, instruction in enumerate(instructions)
+        if instruction.opname.startswith("STORE_") and instruction.argval == name
+    )
+    return instructions[store_index + 1].offset
+
+
+def live_descriptor_numbers() -> set[int]:
+    descriptors: set[int] = set()
+    for name in os.listdir("/dev/fd"):
+        if not name.isdigit():
+            continue
+        descriptor = int(name)
+        try:
+            os.fstat(descriptor)
+        except OSError:
+            continue
+        descriptors.add(descriptor)
+    return descriptors
+
+
+def recorded_descriptor_acquisition(
+    acquisition: Callable[..., run_xcode_tests.AcquiredDescriptor],
+    captured: list[int],
+) -> Callable[..., run_xcode_tests.AcquiredDescriptor]:
+    def record(*arguments: object, **options: object) -> run_xcode_tests.AcquiredDescriptor:
+        owner = acquisition(*arguments, **options)
+        captured.append(owner.fileno())
+        return owner
+
+    return record
+
+
+def recorded_pipe_acquisition(
+    acquisition: Callable[
+        [], tuple[run_xcode_tests.AcquiredDescriptor, run_xcode_tests.AcquiredDescriptor]
+    ],
+    captured: list[int],
+) -> Callable[
+    [], tuple[run_xcode_tests.AcquiredDescriptor, run_xcode_tests.AcquiredDescriptor]
+]:
+    def record() -> tuple[
+        run_xcode_tests.AcquiredDescriptor, run_xcode_tests.AcquiredDescriptor
+    ]:
+        owners = acquisition()
+        captured.extend(owner.fileno() for owner in owners)
+        return owners
+
+    return record
+
+
+def assert_repeated_worker_boundary_closes(
+    test: unittest.TestCase,
+    function: Callable[..., object],
+    offset: int,
+    operation_factory: Callable[[], tuple[Callable[[], object], Callable[[], None]]],
+    occurrence: int = 1,
+    repetitions: int = 25,
+) -> None:
+    for repetition in range(repetitions):
+        operation, cleanup = operation_factory()
+        before = live_descriptor_numbers()
+        primary = DirectSpawnCleanupSignal(f"worker boundary {repetition}")
+        try:
+            interrupt_worker_with_base_exception_at_opcode(
+                function, offset, operation, primary, occurrence
+            )
+            primary.__traceback__ = None
+            gc.collect()
+            after = live_descriptor_numbers()
+            leaked = after - before
+            closed = before - after
+            for descriptor in leaked:
+                os.close(descriptor)
+            test.assertEqual(leaked, set(), f"leaked at repetition {repetition}")
+            test.assertEqual(closed, set(), f"closed input at repetition {repetition}")
+        finally:
+            cleanup()
+
+
+def interrupt_before_attribute_store(
+    function: Callable[..., object],
+    attribute: str,
+    operation: Callable[[], object],
+) -> KeyboardInterrupt:
+    offsets = [
+        instruction.offset
+        for instruction in dis.get_instructions(function)
+        if instruction.opname == "STORE_ATTR" and instruction.argval == attribute
+    ]
+    if len(offsets) != 1:
+        raise AssertionError((attribute, offsets))
+    return interrupt_at_opcode(
+        function, offsets[0], operation, f"interrupted before {attribute}"
+    )
+
+
+def traced_opcode_offsets(
+    function: Callable[..., object], operation: Callable[[], object]
+) -> tuple[list[int], object]:
+    offsets: list[int] = []
+    code, previous = function.__code__, sys.gettrace()
+
+    def trace(frame: object, event: str, _argument: object) -> object:
+        if frame.f_code is code:
+            frame.f_trace_opcodes = True
+            if event == "opcode":
+                offsets.append(frame.f_lasti)
+        return trace
+
+    sys.settrace(trace)
+    try:
+        outcome = operation()
+    finally:
+        sys.settrace(previous)
+    return list(dict.fromkeys(offsets)), outcome
+
+
+def exception_evidence(error: BaseException) -> str:
+    arguments = BaseException.args.__get__(error, BaseException)
+    try:
+        notes = object.__getattribute__(error, "__notes__")
+    except AttributeError:
+        notes = ()
+    values = [value for value in (*arguments, *notes) if type(value) is str]
+    return "; ".join(values)
 
 
 def simulator_args(root: Path) -> argparse.Namespace:
@@ -354,8 +841,10 @@ def assert_displaced_temp_replacement_rejected(
             run_xcode_tests,
             "rename_atomic_entries",
             side_effect=replace_after_rename,
-        ), test.assertRaisesRegex(OSError, "rollback identity changed"):
+        ), test.assertRaises(OSError) as raised:
             run_xcode_tests.write_atomic_bytes(target, b"replacement", temporary)
+        test.assertNotIn("rollback identity changed", str(raised.exception))
+        test.assertIn("rollback identity changed", exception_evidence(raised.exception))
         test.assertEqual(target.read_bytes(), b"replacement")
         test.assertNotEqual(target.stat().st_ino, attacker.stat().st_ino)
         test.assertTrue(temporary.exists() or temporary.is_symlink())
@@ -398,8 +887,12 @@ def assert_rollback_substitution_rejected(
             side_effect=substitute_before_rollback,
         ), mock.patch.object(
             run_xcode_tests.os, "fsync", side_effect=fail_commit_sync
-        ), test.assertRaisesRegex(OSError, "rollback failed.*identity changed"):
+        ), test.assertRaises(OSError) as raised:
             run_xcode_tests.write_atomic_bytes(target, b"replacement", temporary)
+        test.assertEqual(str(raised.exception), "forced commit fsync failure")
+        test.assertRegex(
+            exception_evidence(raised.exception), "rollback failed.*identity changed"
+        )
         if raced_entry == "destination":
             test.assertEqual(temporary.read_bytes(), b"original")
         else:
@@ -575,115 +1068,53 @@ def spawn_execing_socket_peer(
     )
 
 
-def spawn_reporting_execing_socket_peer(
-    socket_path: Path, report_descriptor: int
-) -> subprocess.Popen[bytes]:
-    exec_source = "import os,sys,time;os.write(int(sys.argv[1]),b'x');time.sleep(30)"
-    child_source = textwrap.dedent(
-        """
-        import os
-        import socket
-        import sys
-        import time
-
-        sys.path.insert(0, sys.argv[1])
-        from scripts import run_xcode_tests as runner
-
-        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        peer.connect(sys.argv[2])
-        peer.set_inheritable(True)
-        deadline = time.monotonic() + 5
-        identity = None
-        while identity is None and time.monotonic() < deadline:
-            identity = runner.direct_process_identity(os.getpid())
-        if identity is None:
-            raise SystemExit(125)
-        report = runner.json.dumps(runner.identity_payload(identity)).encode()
-        os.write(int(sys.argv[3]), report)
-        os.set_inheritable(int(sys.argv[3]), False)
-        os.execv(sys.executable, [sys.executable, "-c", sys.argv[4], str(peer.fileno())])
-        """
-    )
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            child_source,
-            str(ROOT),
-            str(socket_path),
-            str(report_descriptor),
-            exec_source,
-        ],
-        pass_fds=(report_descriptor,),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def read_reported_wrapper_identity(
-    descriptor: int, deadline: float
-) -> run_xcode_tests.ProcessIdentity:
-    content = bytearray()
-    while time.monotonic() < deadline:
-        ready, _, _ = select.select([descriptor], [], [], 0.1)
-        if not ready:
-            continue
-        chunk = os.read(descriptor, 4096)
-        if not chunk:
-            break
-        content.extend(chunk)
-    payload = run_xcode_tests.json.loads(content)
-    return run_xcode_tests.process_identity_from_payload(payload, "wrapper stress")
-
-
 def await_execed_wrapper_identity(
     process: subprocess.Popen[bytes],
-    reported: run_xcode_tests.ProcessIdentity,
+    accepted: run_xcode_tests.ProcessIdentity,
     deadline: float,
 ) -> run_xcode_tests.ProcessIdentity:
     while time.monotonic() < deadline:
         current = run_xcode_tests.direct_process_identity(process.pid)
-        if current is not None and current.audit_token != reported.audit_token:
-            if run_xcode_tests.peer_identity_covers_exec_report(reported, current):
+        if current is not None and current.audit_token != accepted.audit_token:
+            if run_xcode_tests.peer_identity_covers_exec_report(accepted, current):
                 return current
         time.sleep(run_xcode_tests.bounded_wait(deadline, 0.01))
     raise AssertionError("wrapper exec identity unavailable")
 
 
-def exercise_real_wrapper_exec_convergence() -> tuple[
-    run_xcode_tests.ProcessIdentity,
-    run_xcode_tests.ProcessIdentity,
-    run_xcode_tests.ProcessIdentity,
+def exercise_real_wrapper_peer_binding() -> tuple[
+    run_xcode_tests.ProcessIdentity, run_xcode_tests.ProcessIdentity
 ]:
     with tempfile.TemporaryDirectory() as directory:
         socket_path = Path(directory) / "wrapper.sock"
         listener = run_xcode_tests.open_direct_listener(socket_path)
-        report_read, report_write = os.pipe()
-        process = spawn_reporting_execing_socket_peer(socket_path, report_write)
-        os.close(report_write)
-        channel = run_xcode_tests.DirectChannel(-1, b"key")
+        gate_read, gate_write = os.pipe()
+        process = spawn_execing_socket_peer(socket_path, gate_read)
+        os.close(gate_read)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper_ready=True,
+            wrapper_listener=listener.detach(),
+            wrapper_socket_path=socket_path,
+            peer_identity_required=True,
+        )
         try:
             deadline = time.monotonic() + 5
-            reported = read_reported_wrapper_identity(report_read, deadline)
-            current = await_execed_wrapper_identity(process, reported, deadline)
-            channel.wrapper = reported
-            channel.wrapper_listener = listener.detach()
-            channel.wrapper_socket_path = socket_path
-            channel.peer_identity_required = True
             with mock.patch.object(run_xcode_tests, "pump_direct_channel"):
                 accepted = run_xcode_tests.await_direct_identity(
                     channel, process, deadline
                 )
-            ready, _, _ = select.select([channel.wrapper_peer], [], [], 1)
-            if ready != [channel.wrapper_peer] or os.read(channel.wrapper_peer, 1) != b"x":
+            os.write(gate_write, b"1")
+            peer_descriptor = run_xcode_tests.direct_descriptor(channel.wrapper_peer)
+            ready, _, _ = select.select([peer_descriptor], [], [], 1)
+            if ready != [peer_descriptor] or os.read(peer_descriptor, 1) != b"x":
                 raise AssertionError("exec wrapper peer unavailable")
-            return reported, current, accepted
+            return accepted, await_execed_wrapper_identity(process, accepted, deadline)
         finally:
             listener.close()
-            os.close(report_read)
-            for descriptor in (channel.wrapper_listener, channel.wrapper_peer):
-                if descriptor >= 0:
-                    os.close(descriptor)
+            os.close(gate_write)
+            run_xcode_tests.close_direct_channel(channel)
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=5)
@@ -1146,23 +1577,26 @@ class XcodeTestRunnerTests(unittest.TestCase):
             root = Path(directory) / "spawn"
             acquired: list[int] = []
             failure = OSError("key pipe failed")
-            real_pipe = os.pipe
+            real_pipe = run_xcode_tests.acquire_pipe_descriptors
 
             def create_root(**_options: object) -> str:
                 root.mkdir()
                 return str(root)
 
-            def fail_after_first_pipe() -> tuple[int, int]:
+            def fail_after_first_pipe() -> tuple[
+                run_xcode_tests.AcquiredDescriptor,
+                run_xcode_tests.AcquiredDescriptor,
+            ]:
                 if acquired:
                     raise failure
-                descriptors = real_pipe()
-                acquired.extend(descriptors)
-                return descriptors
+                return recorded_pipe_acquisition(real_pipe, acquired)()
 
             with mock.patch.object(
                 run_xcode_tests.tempfile, "mkdtemp", side_effect=create_root
             ), mock.patch.object(
-                run_xcode_tests.os, "pipe", side_effect=fail_after_first_pipe
+                run_xcode_tests,
+                "acquire_pipe_descriptors",
+                side_effect=fail_after_first_pipe,
             ), mock.patch.object(
                 run_xcode_tests, "LIBPROC", None
             ):
@@ -1178,7 +1612,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "spawn"
             acquired: list[int] = []
-            real_pipe = os.pipe
+            real_pipe = run_xcode_tests.acquire_pipe_descriptors
             process = mock.Mock(spec=subprocess.Popen)
             primary = run_xcode_tests.SimulatorLifecycleError("identity failed")
             cleanup = run_xcode_tests.SimulatorLifecycleError("abort timed out")
@@ -1187,15 +1621,14 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 root.mkdir()
                 return str(root)
 
-            def capture_pipe() -> tuple[int, int]:
-                descriptors = real_pipe()
-                acquired.extend(descriptors)
-                return descriptors
+            capture_pipe = recorded_pipe_acquisition(real_pipe, acquired)
 
             with mock.patch.object(
                 run_xcode_tests.tempfile, "mkdtemp", side_effect=create_root
             ), mock.patch.object(
-                run_xcode_tests.os, "pipe", side_effect=capture_pipe
+                run_xcode_tests,
+                "acquire_pipe_descriptors",
+                side_effect=capture_pipe,
             ), mock.patch.object(
                 run_xcode_tests.os, "write", side_effect=lambda _fd, content: len(content)
             ), mock.patch.object(
@@ -1207,17 +1640,657 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "abort_direct_spawn", side_effect=cleanup
             ) as abort:
-                with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError,
-                    "identity failed; direct setup cleanup error: abort timed out",
+                with self.assertRaises(
+                    run_xcode_tests.SimulatorLifecycleError
                 ) as raised:
                     run_xcode_tests.spawn_direct_job(["target"], None)
             self.assertIs(raised.exception, primary)
+            self.assertEqual(str(primary), "identity failed")
+            self.assertIn(
+                "direct setup cleanup error: abort timed out",
+                exception_evidence(primary),
+            )
             abort.assert_called_once_with(process, None)
             self.assertFalse(root.exists())
             for descriptor in acquired:
                 with self.assertRaises(OSError):
                     os.fstat(descriptor)
+
+    def assert_spawn_resource_cleanup_preserves_primary(
+        self, primary: BaseException
+    ) -> None:
+        root = Path("/private/tmp/nonexistent-ap13-round41-job")
+        channel = run_xcode_tests.DirectChannel(-1, b"key", peer_identity_required=True)
+        process = mock.Mock(spec=subprocess.Popen)
+        current = darwin_direct_identity(3333, 30, 40)
+
+        def prepare(
+            resources: run_xcode_tests.DirectSpawnResources, _command: list[str]
+        ) -> run_xcode_tests.PendingDirectJob:
+            resources.descriptors = {93, 94}
+            return run_xcode_tests.PendingDirectJob(
+                root, root / "out", root / "err", process, channel, 93
+            )
+
+        def transfer(*_args: object, **_kwargs: object) -> run_xcode_tests.ProcessIdentity:
+            channel.wrapper_peer = 92
+            channel.wrapper = current
+            return current
+
+        cleanup = HostileCleanupSignal("resource-93")
+        later_cleanup = HostileCleanupSignal("resource-94")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 93:
+                raise cleanup
+            if descriptor == 94:
+                raise later_cleanup
+
+        with mock.patch.object(
+            run_xcode_tests, "prepare_direct_job", side_effect=prepare
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_identity", side_effect=transfer
+        ), mock.patch.object(
+            run_xcode_tests, "direct_job_marker", return_value="marker"
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(type(primary)) as raised:
+                run_xcode_tests.spawn_direct_job(
+                    ["xcodebuild"],
+                    time.monotonic() + 1,
+                    authenticated=mock.Mock(side_effect=primary),
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(calls, [92, 93, 94])
+        self.assertIn("resource-93", exception_evidence(primary))
+        self.assertIn("resource-94", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(cleanup, later_cleanup)
+
+    def assert_hostile_formatters_unused(
+        self, *errors: HostileCleanupSignal
+    ) -> None:
+        for error in errors:
+            self.assertEqual(
+                (error.string_calls, error.representation_calls, error.argument_reads),
+                (0, 0, 0),
+            )
+
+    def assert_hostile_os_formatters_unused(
+        self, *errors: HostileFormattingError
+    ) -> None:
+        for error in errors:
+            self.assertEqual(
+                (
+                    error.string_calls,
+                    error.representation_calls,
+                    error.argument_reads,
+                    error.format_calls,
+                ),
+                (0, 0, 0, 0),
+            )
+
+    def test_safe_os_error_text_preserves_ordinary_filename_message(self) -> None:
+        error = OSError(2, "missing", "/tmp/input")
+        self.assertEqual(
+            run_xcode_tests.safe_exception_text(error),
+            "[Errno 2] missing: /tmp/input",
+        )
+
+    def test_spawn_resource_cleanup_preserves_custom_baseexception(self) -> None:
+        self.assert_spawn_resource_cleanup_preserves_primary(
+            DirectSpawnCleanupSignal("spawn primary")
+        )
+
+    def test_spawn_resource_cleanup_preserves_keyboard_interrupt(self) -> None:
+        self.assert_spawn_resource_cleanup_preserves_primary(
+            KeyboardInterrupt("spawn primary")
+        )
+
+    def test_spawn_resource_cleanup_preserves_system_exit(self) -> None:
+        self.assert_spawn_resource_cleanup_preserves_primary(
+            SystemExit("spawn primary")
+        )
+
+    def test_spawn_resource_cleanup_preserves_hostile_primary(self) -> None:
+        primary = HostileCleanupSignal("spawn primary")
+        self.assert_spawn_resource_cleanup_preserves_primary(primary)
+        self.assertEqual(
+            (primary.string_calls, primary.representation_calls, primary.argument_reads),
+            (0, 0, 0),
+        )
+
+    def test_spawn_resource_cleanup_attempts_all_owned_resources_once(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        root = Path("/private/tmp/nonexistent-ap13-round41-root")
+        resources = run_xcode_tests.DirectSpawnResources(
+            root=root,
+            descriptors={93, 94},
+            process=process,
+        )
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 93:
+                raise DirectSpawnCleanupSignal("resource-93")
+            raise SystemExit("resource-94")
+
+        with mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=close
+        ), mock.patch.object(
+            run_xcode_tests,
+            "abort_direct_spawn",
+            side_effect=KeyboardInterrupt("process cleanup"),
+        ) as abort, mock.patch.object(
+            run_xcode_tests.shutil,
+            "rmtree",
+            side_effect=SystemExit("root cleanup"),
+        ) as remove:
+            errors = run_xcode_tests.cleanup_direct_spawn(resources, None)
+            repeated = run_xcode_tests.cleanup_direct_spawn(resources, None)
+        self.assertEqual(calls, [93, 94])
+        abort.assert_called_once_with(process, None)
+        remove.assert_called_once_with(root)
+        self.assertEqual(
+            errors,
+            ["resource-93", "resource-94", "process cleanup", "root cleanup"],
+        )
+        self.assertEqual(repeated, [])
+        self.assertEqual(resources.descriptors, set())
+        self.assertIsNone(resources.process)
+        self.assertIsNone(resources.root)
+
+    def test_spawn_cleanup_never_formats_hostile_failures(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        root = Path("/private/tmp/nonexistent-ap13-round42-root")
+        resources = run_xcode_tests.DirectSpawnResources(root, {93, 94}, process)
+        failures = [HostileCleanupSignal(label) for label in (
+            "descriptor-93", "descriptor-94", "process", "root"
+        )]
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            raise failures[descriptor - 93]
+
+        with mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=close
+        ), mock.patch.object(
+            run_xcode_tests, "abort_direct_spawn", side_effect=failures[2]
+        ), mock.patch.object(
+            run_xcode_tests.shutil, "rmtree", side_effect=failures[3]
+        ):
+            errors = run_xcode_tests.cleanup_direct_spawn(resources, None)
+            repeated = run_xcode_tests.cleanup_direct_spawn(resources, None)
+        self.assertEqual(calls, [93, 94])
+        self.assertEqual(errors, ["descriptor-93", "descriptor-94", "process", "root"])
+        self.assertEqual(repeated, [])
+        self.assertTrue(all(
+            (item.string_calls, item.representation_calls, item.argument_reads)
+            == (0, 0, 0) for item in failures
+        ))
+
+    def test_owned_descriptor_cleanup_uses_total_diagnostics(self) -> None:
+        primary = HostileCleanupSignal("primary")
+        cleanup = HostileCleanupSignal("descriptor")
+        with mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup):
+            run_xcode_tests.close_owned_direct_descriptor(91, primary, "close failed")
+        self.assertIn("close failed: descriptor", exception_evidence(primary))
+        self.assertEqual(
+            (primary.string_calls, primary.representation_calls, primary.argument_reads),
+            (0, 0, 0),
+        )
+        self.assertEqual(
+            (cleanup.string_calls, cleanup.representation_calls, cleanup.argument_reads),
+            (0, 0, 0),
+        )
+
+    def test_owned_descriptor_cleanup_closes_duplicate_once(self) -> None:
+        descriptors = [90, 90, 91]
+        closed: list[int] = []
+        with mock.patch.object(run_xcode_tests.os, "close", side_effect=closed.append):
+            run_xcode_tests.close_owned_direct_descriptors(
+                descriptors, None, "close failed"
+            )
+        self.assertEqual(closed, [90, 91])
+        self.assertEqual(descriptors, [])
+
+    def test_gated_target_spawn_owns_process_until_handshake_completes(self) -> None:
+        primary = HostileCleanupSignal("accept failed")
+        process = mock.Mock(spec=subprocess.Popen)
+        closed: list[int] = []
+
+        def acquire_pipe(resources: run_xcode_tests.DirectSpawnResources) -> tuple[int, int]:
+            resources.descriptors.update((90, 91))
+            return 90, 91
+
+        def acquire_listener(
+            resources: run_xcode_tests.DirectSpawnResources, _path: Path
+        ) -> int:
+            resources.descriptors.add(92)
+            return 92
+
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests, "acquire_direct_pipe", side_effect=acquire_pipe
+        ), mock.patch.object(
+            run_xcode_tests, "acquire_direct_listener", side_effect=acquire_listener
+        ), mock.patch.object(
+            run_xcode_tests.subprocess, "Popen", return_value=process
+        ), mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", side_effect=primary
+        ), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=closed.append
+        ), mock.patch.object(run_xcode_tests, "abort_direct_spawn") as abort:
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.spawn_gated_direct_target(
+                    ["target"], mock.Mock(), mock.Mock(), "parent", "wrapper"
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(closed, [90, 91, 92])
+        abort.assert_called_once_with(process, None)
+
+    def test_direct_target_cleanup_attempts_every_peer_and_preserves_primary(self) -> None:
+        primary = HostileCleanupSignal("primary")
+        cleanup = HostileCleanupSignal("first peer")
+        closed: list[int] = []
+
+        def close(descriptor: int) -> None:
+            closed.append(descriptor)
+            if descriptor == 90:
+                raise cleanup
+
+        with mock.patch.object(
+            run_xcode_tests, "connect_direct_peer", side_effect=[90, 91]
+        ), mock.patch.object(run_xcode_tests.os, "set_inheritable"), mock.patch.object(
+            run_xcode_tests.select, "select", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.direct_target(-1, "parent", "wrapper", ["target"])
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(closed, [90, 91])
+        self.assertIn("first peer", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(primary, cleanup)
+
+    def test_direct_target_partial_connect_closes_peer_and_gate_once(self) -> None:
+        primary = HostileCleanupSignal("second connect failed")
+        peer_cleanup = HostileCleanupSignal("first peer close failed")
+        gate_cleanup = HostileCleanupSignal("gate close failed")
+        closed: list[int] = []
+
+        def close(descriptor: int) -> None:
+            closed.append(descriptor)
+            raise peer_cleanup if descriptor == 90 else gate_cleanup
+
+        with mock.patch.object(
+            run_xcode_tests, "connect_direct_peer", side_effect=[90, primary]
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.direct_target(70, "parent", "wrapper", ["target"])
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(closed, [90, 70])
+        self.assertIn("first peer close failed", exception_evidence(primary))
+        self.assertIn("gate close failed", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(primary, peer_cleanup, gate_cleanup)
+
+    def test_direct_target_gate_failure_still_closes_every_peer_once(self) -> None:
+        primary = HostileFormattingError("gate close failed")
+        cleanup = HostileCleanupSignal("peer close failed")
+        closed: list[int] = []
+
+        def close(descriptor: int) -> None:
+            closed.append(descriptor)
+            if descriptor == 70:
+                raise primary
+            if descriptor == 90:
+                raise cleanup
+
+        with mock.patch.object(
+            run_xcode_tests, "connect_direct_peer", side_effect=[90, 91]
+        ), mock.patch.object(run_xcode_tests.os, "set_inheritable"), mock.patch.object(
+            run_xcode_tests.select, "select", return_value=([70], [], [])
+        ), mock.patch.object(run_xcode_tests.os, "read", return_value=b"1"), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=close
+        ), mock.patch.object(run_xcode_tests, "report_stderr_error") as report:
+            result = run_xcode_tests.direct_target(70, "parent", "wrapper", ["target"])
+        self.assertEqual(result, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE)
+        self.assertEqual(closed, [70, 90, 91])
+        report.assert_called_once_with(primary)
+        self.assertIn("peer close failed", exception_evidence(primary))
+        self.assert_hostile_os_formatters_unused(primary)
+        self.assert_hostile_formatters_unused(cleanup)
+
+    def test_direct_child_reports_hostile_operational_error_before_pause(self) -> None:
+        primary = HostileFormattingError("spawn failed")
+        identity = run_xcode_tests.ProcessIdentity(100, (1, 2))
+        payloads: list[dict[str, object]] = []
+        with mock.patch.object(
+            run_xcode_tests, "connect_direct_peer", return_value=90
+        ), mock.patch.object(
+            run_xcode_tests, "read_direct_key", return_value=b"k" * 32
+        ), mock.patch.object(run_xcode_tests.os, "close"), mock.patch.object(
+            run_xcode_tests, "authenticate_direct_wrapper", return_value=identity
+        ), mock.patch.object(
+            run_xcode_tests, "spawn_gated_direct_target", side_effect=primary
+        ), mock.patch.object(
+            run_xcode_tests,
+            "report_direct_event",
+            side_effect=lambda _reporter, payload: payloads.append(payload),
+        ), mock.patch.object(
+            run_xcode_tests.signal,
+            "pause",
+            side_effect=DirectSpawnCleanupSignal("stop pause"),
+        ) as pause:
+            with self.assertRaises(DirectSpawnCleanupSignal):
+                run_xcode_tests.direct_child(
+                    70, 71, 72, "wrapper", "parent", "target", ["command"]
+                )
+        self.assertEqual(payloads, [{"event": "error", "message": "spawn failed"}])
+        pause.assert_called_once_with()
+        self.assertEqual(
+            (primary.string_calls, primary.representation_calls,
+             primary.argument_reads, primary.format_calls),
+            (0, 0, 0, 0),
+        )
+
+    def test_listener_bind_primary_survives_hostile_close(self) -> None:
+        primary = HostileFormattingError("bind failed")
+        cleanup = HostileFormattingError("listener close failed")
+        listener = HostileDirectSocket(primary, cleanup)
+        with mock.patch.object(run_xcode_tests.socket, "socket", return_value=listener):
+            with self.assertRaises(HostileFormattingError) as raised:
+                run_xcode_tests.open_direct_listener(Path("/tmp/ap13-listener.sock"))
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(listener.close_calls, 1)
+        self.assertIn("listener close failed", exception_evidence(primary))
+
+    def test_listener_late_setup_primaries_survive_hostile_close(self) -> None:
+        for stage in ("listen", "setblocking"):
+            with self.subTest(stage=stage):
+                primary = HostileFormattingError(f"{stage} failed")
+                cleanup = HostileFormattingError("listener close failed")
+                listener = mock.Mock()
+                getattr(listener, stage).side_effect = primary
+                listener.close.side_effect = cleanup
+                with mock.patch.object(
+                    run_xcode_tests.socket, "socket", return_value=listener
+                ):
+                    with self.assertRaises(HostileFormattingError) as raised:
+                        run_xcode_tests.open_direct_listener(Path("/tmp/listener.sock"))
+                self.assertIs(raised.exception, primary)
+                listener.close.assert_called_once_with()
+                self.assertIn("listener close failed", exception_evidence(primary))
+                self.assert_hostile_os_formatters_unused(primary, cleanup)
+
+    def test_listener_duplicate_primary_survives_hostile_close(self) -> None:
+        primary = HostileFormattingError("listener duplicate failed")
+        cleanup = HostileFormattingError("listener close failed")
+        listener = mock.Mock()
+        listener.fileno.return_value = 70
+        listener.close.side_effect = cleanup
+        resources = run_xcode_tests.DirectSpawnResources()
+        with mock.patch.object(
+            run_xcode_tests, "open_direct_listener", return_value=listener
+        ), mock.patch.object(
+            run_xcode_tests, "acquire_duplicate_descriptor", side_effect=primary
+        ):
+            with self.assertRaises(HostileFormattingError) as raised:
+                run_xcode_tests.acquire_direct_listener(
+                    resources, Path("/tmp/listener.sock")
+                )
+        self.assertIs(raised.exception, primary)
+        listener.close.assert_called_once_with()
+        self.assertEqual(resources.descriptors, set())
+        self.assertIn("listener close failed", exception_evidence(primary))
+        self.assert_hostile_os_formatters_unused(primary, cleanup)
+
+    def test_peer_connect_primary_survives_hostile_close(self) -> None:
+        primary = HostileFormattingError("connect failed")
+        cleanup = HostileFormattingError("peer close failed")
+        peer = HostileDirectSocket(primary, cleanup)
+        with mock.patch.object(run_xcode_tests.socket, "socket", return_value=peer):
+            with self.assertRaises(HostileFormattingError) as raised:
+                run_xcode_tests.connect_direct_peer(Path("/tmp/ap13-peer.sock"))
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(peer.close_calls, 1)
+        self.assertIn("peer close failed", exception_evidence(primary))
+
+    def test_peer_duplicate_primary_survives_hostile_close(self) -> None:
+        primary = HostileFormattingError("peer duplicate failed")
+        cleanup = HostileFormattingError("peer close failed")
+        peer = mock.Mock()
+        peer.fileno.return_value = 70
+        peer.close.side_effect = cleanup
+        with mock.patch.object(
+            run_xcode_tests.socket, "socket", return_value=peer
+        ), mock.patch.object(
+            run_xcode_tests, "acquire_duplicate_descriptor", side_effect=primary
+        ):
+            with self.assertRaises(HostileFormattingError) as raised:
+                run_xcode_tests.connect_direct_peer(Path("/tmp/peer.sock"))
+        self.assertIs(raised.exception, primary)
+        peer.connect.assert_called_once_with("/tmp/peer.sock")
+        peer.close.assert_called_once_with()
+        self.assertIn("peer close failed", exception_evidence(primary))
+        self.assert_hostile_os_formatters_unused(primary, cleanup)
+
+    def test_accept_primary_survives_duplicate_listener_close_failure(self) -> None:
+        primary = HostileCleanupSignal("accept failed")
+        cleanup = HostileCleanupSignal("listener close failed")
+        listener = mock.Mock()
+        listener.accept.side_effect = primary
+        listener.close.side_effect = cleanup
+        with mock.patch.object(
+            run_xcode_tests.select, "select", return_value=([70], [], [])
+        ), mock.patch.object(
+            run_xcode_tests, "duplicate_direct_socket", return_value=listener
+        ):
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.accept_direct_peer(70, time.monotonic() + 1)
+        self.assertIs(raised.exception, primary)
+        listener.close.assert_called_once_with()
+        self.assertIn("listener close failed", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(primary, cleanup)
+
+    def test_listener_close_primary_attempts_accepted_peer_cleanup(self) -> None:
+        primary = HostileCleanupSignal("listener close failed")
+        peer_cleanup = HostileCleanupSignal("peer close failed")
+        peer = mock.Mock()
+        peer.close.side_effect = peer_cleanup
+        listener = mock.Mock()
+        listener.accept.return_value = (peer, None)
+        listener.close.side_effect = primary
+        with mock.patch.object(
+            run_xcode_tests.select, "select", return_value=([70], [], [])
+        ), mock.patch.object(
+            run_xcode_tests, "duplicate_direct_socket", return_value=listener
+        ):
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.accept_direct_peer(70, time.monotonic() + 1)
+        self.assertIs(raised.exception, primary)
+        peer.close.assert_called_once_with()
+        listener.close.assert_called_once_with()
+        self.assertIn("peer close failed", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(primary, peer_cleanup)
+
+    def test_accept_transfers_peer_after_duplicate_listener_close(self) -> None:
+        peer = mock.Mock()
+        listener = mock.Mock()
+        listener.accept.return_value = (peer, None)
+        with mock.patch.object(
+            run_xcode_tests.select, "select", return_value=([70], [], [])
+        ), mock.patch.object(
+            run_xcode_tests, "duplicate_direct_socket", return_value=listener
+        ):
+            accepted = run_xcode_tests.accept_direct_peer(70, time.monotonic() + 1)
+        self.assertIs(accepted, peer)
+        listener.close.assert_called_once_with()
+        peer.close.assert_not_called()
+
+    def test_direct_peer_closed_preserves_primary_over_duplicate_close_failure(self) -> None:
+        primary = HostileCleanupSignal("peer read failed")
+        cleanup = HostileCleanupSignal("peer close failed")
+        peer = mock.Mock()
+        peer.recv.side_effect = primary
+        peer.close.side_effect = cleanup
+        with mock.patch.object(
+            run_xcode_tests, "duplicate_direct_socket", return_value=peer
+        ):
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.direct_peer_closed(92)
+        self.assertIs(raised.exception, primary)
+        peer.close.assert_called_once_with()
+        self.assertIn("peer close failed", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(primary, cleanup)
+
+    def test_direct_peer_closed_raises_cleanup_only_failure_exactly(self) -> None:
+        cleanup = HostileCleanupSignal("peer close failed")
+        peer = mock.Mock()
+        peer.recv.return_value = b""
+        peer.close.side_effect = cleanup
+        with mock.patch.object(
+            run_xcode_tests, "duplicate_direct_socket", return_value=peer
+        ):
+            with self.assertRaises(HostileCleanupSignal) as raised:
+                run_xcode_tests.direct_peer_closed(92)
+        self.assertIs(raised.exception, cleanup)
+        peer.close.assert_called_once_with()
+        self.assert_hostile_formatters_unused(cleanup)
+
+    def test_audit_probe_preserves_borrowed_descriptor_on_detach_interrupt(self) -> None:
+        local, remote = socket.socketpair()
+        descriptor = local.fileno()
+        borrowed = HostileDetachSocket(fileno=descriptor)
+        try:
+            with mock.patch.object(
+                run_xcode_tests.socket, "socket", return_value=borrowed
+            ):
+                self.assertIsNone(
+                    run_xcode_tests.darwin_peer_audit_token(descriptor, os.getpid())
+                )
+            del borrowed
+            gc.collect()
+            os.fstat(descriptor)
+        finally:
+            remote.close()
+            try:
+                local.close()
+            except OSError:
+                pass
+
+    def test_peer_observer_preserves_borrowed_descriptor_on_detach_interrupt(self) -> None:
+        local, remote = socket.socketpair()
+        descriptor = local.fileno()
+        borrowed = HostileDetachSocket(fileno=descriptor)
+        local.setblocking(False)
+        try:
+            with mock.patch.object(
+                run_xcode_tests.socket, "socket", return_value=borrowed
+            ):
+                with self.assertRaises(HostileCleanupSignal):
+                    run_xcode_tests.direct_peer_closed(descriptor)
+            del borrowed
+            gc.collect()
+            os.fstat(descriptor)
+        finally:
+            remote.close()
+            try:
+                local.close()
+            except OSError:
+                pass
+
+    def test_accept_preserves_borrowed_listener_on_detach_interrupt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "accept.sock"
+            listener = SYSTEM_SOCKET_TYPE(socket.AF_UNIX, socket.SOCK_STREAM)
+            client = SYSTEM_SOCKET_TYPE(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen(1)
+            descriptor = listener.fileno()
+            borrowed = HostileDetachSocket(fileno=descriptor)
+            client.connect(str(path))
+            try:
+                with mock.patch.object(
+                    run_xcode_tests.socket, "socket", return_value=borrowed
+                ):
+                    with self.assertRaises(HostileCleanupSignal):
+                        run_xcode_tests.accept_direct_peer(
+                            descriptor, time.monotonic() + 1
+                        )
+                del borrowed
+                gc.collect()
+                os.fstat(descriptor)
+            finally:
+                client.close()
+                try:
+                    listener.close()
+                except OSError:
+                    pass
+
+    def test_abort_direct_spawn_attempts_kill_and_reap_after_hostile_poll(self) -> None:
+        primary = HostileCleanupSignal("poll failed")
+        kill_error = HostileCleanupSignal("kill failed")
+        reap_error = HostileCleanupSignal("reap failed")
+        process = mock.Mock(spec=subprocess.Popen)
+        process.poll.side_effect = primary
+        process.kill.side_effect = kill_error
+        process.wait.side_effect = reap_error
+        with self.assertRaises(HostileCleanupSignal) as raised:
+            run_xcode_tests.abort_direct_spawn(process, None)
+        self.assertIs(raised.exception, primary)
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once()
+        self.assertIn("kill failed", exception_evidence(primary))
+        self.assertIn("reap failed", exception_evidence(primary))
+        self.assert_hostile_formatters_unused(primary, kill_error, reap_error)
+
+    def assert_transferred_wrapper_peer_cleanup(
+        self, primary: BaseException
+    ) -> None:
+        root = Path("/private/tmp/nonexistent-ap13-round40-job")
+        channel = run_xcode_tests.DirectChannel(
+            -1, b"key", peer_identity_required=True
+        )
+        process = mock.Mock(spec=subprocess.Popen)
+        current = darwin_direct_identity(3333, 30, 40)
+        pending = run_xcode_tests.PendingDirectJob(
+            root, root / "out", root / "err", process, channel, 93
+        )
+
+        def transfer(
+            *_args: object, **_kwargs: object
+        ) -> run_xcode_tests.ProcessIdentity:
+            channel.wrapper_peer = 92
+            channel.wrapper_listener = -1
+            channel.wrapper = current
+            return current
+
+        with mock.patch.object(
+            run_xcode_tests, "prepare_direct_job", return_value=pending
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_identity", side_effect=transfer
+        ), mock.patch.object(
+            run_xcode_tests, "direct_job_marker", return_value="marker"
+        ), mock.patch.object(
+            run_xcode_tests, "cleanup_direct_spawn", return_value=[]
+        ) as cleanup_spawn, mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaises(type(primary)) as raised:
+                run_xcode_tests.spawn_direct_job(
+                    ["xcodebuild"],
+                    time.monotonic() + 1,
+                    authenticated=mock.Mock(side_effect=primary),
+                )
+        self.assertIs(raised.exception, primary)
+        cleanup_spawn.assert_called_once()
+        close.assert_called_once_with(92)
+        run_xcode_tests.close_direct_channel(channel)
+        close.assert_called_once_with(92)
+
+    def test_transferred_wrapper_peer_closes_on_keyboard_interrupt(self) -> None:
+        self.assert_transferred_wrapper_peer_cleanup(KeyboardInterrupt("wrapper"))
+
+    def test_transferred_wrapper_peer_closes_on_system_exit(self) -> None:
+        self.assert_transferred_wrapper_peer_cleanup(SystemExit("wrapper"))
 
     def test_abort_direct_spawn_zero_budget_uses_bounded_reap(self) -> None:
         process = mock.Mock(spec=subprocess.Popen)
@@ -1526,6 +2599,62 @@ class XcodeTestRunnerTests(unittest.TestCase):
         resume.assert_not_called()
         reap.assert_not_called()
 
+    def test_direct_target_monitor_error_closes_peer_once(self) -> None:
+        primary = RuntimeError("monitor failed")
+        with mock.patch.object(run_xcode_tests.signal, "signal"), mock.patch.object(
+            run_xcode_tests, "monitor_direct_command", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaises(RuntimeError) as raised:
+                run_xcode_tests.run_gated_direct_target(
+                    mock.Mock(spec=subprocess.Popen),
+                    darwin_direct_identity(800, 8, 70),
+                    run_xcode_tests.DirectReporter(91, b"key"),
+                    darwin_direct_identity(900, 9, 80),
+                    None,
+                    92,
+                )
+        self.assertIs(raised.exception, primary)
+        close.assert_called_once_with(92)
+
+    def test_direct_target_interrupt_preserves_primary_when_close_interrupts(self) -> None:
+        primary = KeyboardInterrupt("monitor interrupted")
+        cleanup = SystemExit("peer close interrupted")
+        with mock.patch.object(run_xcode_tests.signal, "signal"), mock.patch.object(
+            run_xcode_tests, "monitor_direct_command", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup) as close:
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.run_gated_direct_target(
+                    mock.Mock(spec=subprocess.Popen),
+                    darwin_direct_identity(800, 8, 70),
+                    run_xcode_tests.DirectReporter(91, b"key"),
+                    darwin_direct_identity(900, 9, 80),
+                    None,
+                    92,
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary).splitlines()[0], "monitor interrupted")
+        self.assertIn(
+            "peer close failed: peer close interrupted", exception_evidence(primary)
+        )
+        close.assert_called_once_with(92)
+
+    def test_direct_target_close_interrupt_surfaces_after_success(self) -> None:
+        cleanup = SystemExit("peer close interrupted")
+        with mock.patch.object(run_xcode_tests.signal, "signal"), mock.patch.object(
+            run_xcode_tests, "monitor_direct_command"
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup) as close:
+            with self.assertRaises(SystemExit) as raised:
+                run_xcode_tests.run_gated_direct_target(
+                    mock.Mock(spec=subprocess.Popen),
+                    darwin_direct_identity(800, 8, 70),
+                    run_xcode_tests.DirectReporter(91, b"key"),
+                    darwin_direct_identity(900, 9, 80),
+                    None,
+                    92,
+                )
+        self.assertIs(raised.exception, cleanup)
+        close.assert_called_once_with(92)
+
     def test_authenticated_darwin_status_requires_exec_transition(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
         pre_exec = darwin_direct_identity(900, 10, 7100837)
@@ -1544,6 +2673,46 @@ class XcodeTestRunnerTests(unittest.TestCase):
             )
         self.assertEqual(channel.sequence, 2)
         self.assertIsNone(channel.returncode)
+
+    def test_authenticated_darwin_wrapper_reports_readiness_only(self) -> None:
+        channel = run_xcode_tests.DirectChannel(
+            -1, b"authenticated", peer_identity_required=True
+        )
+        apply_authenticated_direct_payload(channel, {"event": "wrapper"})
+        self.assertTrue(channel.wrapper_ready)
+        self.assertIsNone(channel.wrapper)
+        self.assertEqual(channel.sequence, 1)
+
+    def test_authenticated_darwin_wrapper_rejects_reported_identity(self) -> None:
+        identity = darwin_direct_identity(800, 8, 7000000)
+        channel = run_xcode_tests.DirectChannel(
+            -1, b"authenticated", peer_identity_required=True
+        )
+        with self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError,
+            "invalid direct channel payload",
+        ):
+            apply_authenticated_direct_payload(
+                channel,
+                {
+                    "event": "wrapper",
+                    "identity": run_xcode_tests.identity_payload(identity),
+                },
+            )
+        self.assertFalse(channel.wrapper_ready)
+        self.assertEqual(channel.sequence, 0)
+
+    def test_authenticated_darwin_wrapper_rejects_duplicate_readiness(self) -> None:
+        channel = run_xcode_tests.DirectChannel(
+            -1, b"authenticated", peer_identity_required=True
+        )
+        apply_authenticated_direct_payload(channel, {"event": "wrapper"})
+        with self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError,
+            "duplicate direct wrapper identity",
+        ):
+            apply_authenticated_direct_payload(channel, {"event": "wrapper"})
+        self.assertEqual(channel.sequence, 1)
 
     def test_authenticated_exec_transition_rejects_malformed_versions(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
@@ -1847,16 +3016,1395 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests.os, "close", side_effect=close_error
         ) as close:
-            with self.assertRaisesRegex(
-                run_xcode_tests.SimulatorLifecycleError,
-                "invalid direct channel message; direct channel cleanup error: "
-                "descriptor close failed: descriptor busy",
+            with self.assertRaises(
+                run_xcode_tests.SimulatorLifecycleError
             ) as raised:
                 run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
         self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary), "invalid direct channel message")
+        self.assertIn(
+            "direct channel cleanup error: descriptor close failed: descriptor busy",
+            exception_evidence(primary),
+        )
         self.assertTrue(channel.closed)
         self.assertEqual(channel.descriptor, -1)
         close.assert_called_once_with(91)
+
+    def assert_transferred_target_peer_cleanup(
+        self, primary: BaseException
+    ) -> None:
+        key = b"authenticated"
+        wrapper = darwin_direct_identity(3333, 30, 40)
+        target = darwin_direct_identity(4444, 31, 41)
+        channel = run_xcode_tests.DirectChannel(
+            80,
+            key,
+            buffer=direct_frame(key, 1, {
+                "event": "target",
+                "identity": run_xcode_tests.identity_payload(target),
+            }),
+            wrapper=wrapper,
+            peer_identity_required=True,
+            target_listener=91,
+            target_socket_path=Path("target.sock"),
+        )
+        with mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=40
+        ), mock.patch.object(
+            run_xcode_tests, "bind_direct_peer_identity", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests.os, "write", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaises(type(primary)) as raised:
+                run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
+        self.assertIs(raised.exception, primary)
+        self.assertTrue(channel.closed)
+        self.assertEqual(close.call_args_list, [mock.call(80), mock.call(92)])
+        run_xcode_tests.close_direct_channel(channel)
+        self.assertEqual(close.call_args_list, [mock.call(80), mock.call(92)])
+
+    def test_transferred_target_peer_closes_on_keyboard_interrupt(self) -> None:
+        self.assert_transferred_target_peer_cleanup(KeyboardInterrupt("target"))
+
+    def test_transferred_target_peer_closes_on_system_exit(self) -> None:
+        self.assert_transferred_target_peer_cleanup(SystemExit("target"))
+
+    def test_target_transfer_survives_interrupt_before_final_publication(self) -> None:
+        wrapper = darwin_direct_identity(3333, 30, 40)
+        target = darwin_direct_identity(4444, 31, 41)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper=wrapper,
+            target_listener=91,
+            target_socket_path=Path("target.sock"),
+            peer_identity_required=True,
+        )
+        payload = {
+            "event": "target",
+            "identity": run_xcode_tests.identity_payload(target),
+        }
+        closed: list[int] = []
+        def bind(*_args: object) -> int:
+            run_xcode_tests.os.close(91)
+            return 92
+
+        with mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=40
+        ), mock.patch.object(
+            run_xcode_tests, "bind_direct_peer_identity", side_effect=bind
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=closed.append):
+            interrupt_before_attribute_store(
+                run_xcode_tests.apply_direct_target_payload,
+                "target_peer",
+                lambda: run_xcode_tests.apply_direct_target_payload(
+                    channel, payload, "target", None
+                ),
+            )
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertEqual(sorted(closed), [91, 92])
+
+    def test_wrapper_transfer_survives_interrupt_before_final_publication(self) -> None:
+        identity = darwin_direct_identity(3333, 30, 40)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper_listener=81,
+            wrapper_socket_path=Path("wrapper.sock"),
+            peer_identity_required=True,
+            wrapper_ready=True,
+        )
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = identity.pid
+        closed: list[int] = []
+        def bind(*_args: object) -> tuple[int, run_xcode_tests.ProcessIdentity]:
+            run_xcode_tests.os.close(81)
+            return 82, identity
+
+        with mock.patch.object(
+            run_xcode_tests, "pump_direct_channel"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "bind_direct_wrapper_peer",
+            side_effect=bind,
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=closed.append):
+            interrupt_before_attribute_store(
+                run_xcode_tests.await_direct_identity,
+                "wrapper_peer",
+                lambda: run_xcode_tests.await_direct_identity(channel, process, None),
+            )
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertEqual(sorted(closed), [81, 82])
+
+    def test_target_listener_close_interrupt_is_not_retried(self) -> None:
+        primary = KeyboardInterrupt("target listener close interrupted")
+        wrapper = darwin_direct_identity(3333, 30, 40)
+        target = darwin_direct_identity(4444, 31, 41)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper=wrapper,
+            target_listener=91,
+            target_socket_path=Path("target.sock"),
+            peer_identity_required=True,
+        )
+        payload = {
+            "event": "target",
+            "identity": run_xcode_tests.identity_payload(target),
+        }
+        closed: list[int] = []
+
+        def close(descriptor: int) -> None:
+            closed.append(descriptor)
+            if descriptor == 91:
+                raise primary
+
+        with mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=40
+        ), mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_peer_identity_matching_wrapper", return_value=target
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.apply_direct_target_payload(
+                    channel, payload, "target", None
+                )
+            self.assertIs(raised.exception, primary)
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertEqual(closed.count(91), 1)
+        self.assertEqual(closed.count(92), 1)
+
+    def test_wrapper_listener_close_interrupt_is_not_retried(self) -> None:
+        primary = KeyboardInterrupt("wrapper listener close interrupted")
+        identity = darwin_direct_identity(3333, 30, 40)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper_listener=81,
+            wrapper_socket_path=Path("wrapper.sock"),
+            peer_identity_required=True,
+            wrapper_ready=True,
+        )
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = identity.pid
+        closed: list[int] = []
+
+        def close(descriptor: int) -> None:
+            closed.append(descriptor)
+            if descriptor == 81:
+                raise primary
+
+        with mock.patch.object(
+            run_xcode_tests, "pump_direct_channel"
+        ), mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=82
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_wrapper_peer_identity", return_value=identity
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.await_direct_identity(channel, process, None)
+            self.assertIs(raised.exception, primary)
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertEqual(closed.count(81), 1)
+        self.assertEqual(closed.count(82), 1)
+
+    def direct_adoption_fixture(
+        self, descriptors: set[int] | None = None
+    ) -> tuple[
+        run_xcode_tests.DirectSpawnResources,
+        run_xcode_tests.DirectPeerEndpoints,
+    ]:
+        resources = run_xcode_tests.DirectSpawnResources(
+            descriptors={61, 62, 63} if descriptors is None else descriptors
+        )
+        endpoints = run_xcode_tests.DirectPeerEndpoints(
+            Path("wrapper.sock"),
+            Path("target.sock"),
+            Path("wrapper-target.sock"),
+            62,
+            63,
+        )
+        return resources, endpoints
+
+    def test_adoption_restores_partially_removed_source_owners(self) -> None:
+        descriptors = InterruptingDescriptorSet({61, 62, 63})
+        resources, endpoints = self.direct_adoption_fixture(descriptors)
+        with mock.patch.object(run_xcode_tests.os, "set_blocking"):
+            with self.assertRaises(KeyboardInterrupt):
+                run_xcode_tests.adopt_direct_channel(
+                    resources, 61, b"key", endpoints
+                )
+        closed: list[int] = []
+        with mock.patch.object(run_xcode_tests.os, "close", side_effect=closed.append):
+            run_xcode_tests.cleanup_direct_spawn(resources, None)
+        self.assertEqual(sorted(closed), [61, 62, 63])
+
+    def test_adoption_survives_every_successful_path_opcode_interrupt(self) -> None:
+        resources, endpoints = self.direct_adoption_fixture()
+        baseline_closed: list[int] = []
+        with mock.patch.object(
+            run_xcode_tests.os, "set_blocking"
+        ), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=baseline_closed.append
+        ):
+            offsets, channel = traced_opcode_offsets(
+                run_xcode_tests.adopt_direct_channel,
+                lambda: run_xcode_tests.adopt_direct_channel(
+                    resources, 61, b"key", endpoints
+                ),
+            )
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertEqual(sorted(baseline_closed), [61, 62, 63])
+        for offset in offsets:
+            with self.subTest(offset=offset):
+                resources, endpoints = self.direct_adoption_fixture()
+                closed: list[int] = []
+                with mock.patch.object(
+                    run_xcode_tests.os, "set_blocking"
+                ), mock.patch.object(
+                    run_xcode_tests.os, "close", side_effect=closed.append
+                ):
+                    interrupt_at_opcode(
+                        run_xcode_tests.adopt_direct_channel,
+                        offset,
+                        lambda: run_xcode_tests.adopt_direct_channel(
+                            resources, 61, b"key", endpoints
+                        ),
+                        f"adoption interrupted at {offset}",
+                    )
+                    run_xcode_tests.cleanup_direct_spawn(resources, None)
+                    gc.collect()
+                self.assertEqual(sorted(closed), [61, 62, 63])
+
+    def test_worker_pipe_return_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_pipe_descriptors, "pipe2"
+        )
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            resources = run_xcode_tests.DirectSpawnResources()
+            return (
+                lambda: run_xcode_tests.register_direct_pipe(resources),
+                lambda: run_xcode_tests.cleanup_direct_spawn(resources, None),
+            )
+
+        assert_repeated_worker_boundary_closes(
+            self, run_xcode_tests.acquire_pipe_descriptors, offset, operation_factory
+        )
+
+    def test_worker_listener_duplicate_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_duplicate_descriptor, "fcntl"
+        )
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            directory = tempfile.TemporaryDirectory()
+            resources = run_xcode_tests.DirectSpawnResources()
+            path = Path(directory.name) / "listener.sock"
+
+            def cleanup() -> None:
+                run_xcode_tests.cleanup_direct_spawn(resources, None)
+                directory.cleanup()
+
+            return lambda: run_xcode_tests.acquire_direct_listener(resources, path), cleanup
+
+        assert_repeated_worker_boundary_closes(
+            self, run_xcode_tests.acquire_duplicate_descriptor, offset, operation_factory
+        )
+
+    def test_worker_peer_duplicate_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_duplicate_descriptor, "fcntl"
+        )
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            directory = tempfile.TemporaryDirectory()
+            path = Path(directory.name) / "peer.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen(1)
+
+            def cleanup() -> None:
+                listener.close()
+                directory.cleanup()
+
+            return lambda: run_xcode_tests.connect_direct_peer(path), cleanup
+
+        assert_repeated_worker_boundary_closes(
+            self, run_xcode_tests.acquire_duplicate_descriptor, offset, operation_factory
+        )
+
+    def test_worker_atomic_root_open_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(run_xcode_tests.acquire_open_descriptor, "open")
+        assert_repeated_worker_boundary_closes(
+            self,
+            run_xcode_tests.acquire_open_descriptor,
+            offset,
+            lambda: (lambda: run_xcode_tests.open_atomic_directory(Path("/")), lambda: None),
+        )
+
+    def test_worker_atomic_component_open_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_open_descriptor, "openat"
+        )
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            directory = tempfile.TemporaryDirectory()
+            path = run_xcode_tests.canonical_atomic_path(Path(directory.name))
+            return lambda: run_xcode_tests.open_atomic_directory(path), directory.cleanup
+
+        assert_repeated_worker_boundary_closes(
+            self, run_xcode_tests.acquire_open_descriptor, offset, operation_factory
+        )
+
+    def test_worker_atomic_temporary_open_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_open_descriptor, "openat"
+        )
+        occurrence = len(Path("/private/tmp/ap13").parts)
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            directory = tempfile.TemporaryDirectory(dir="/private/tmp")
+            target = Path(directory.name) / "ack.json"
+            temporary = run_xcode_tests.atomic_temporary_path(target)
+            operation = lambda: run_xcode_tests.open_atomic_write(target, temporary)
+            return operation, directory.cleanup
+
+        assert_repeated_worker_boundary_closes(
+            self,
+            run_xcode_tests.acquire_open_descriptor,
+            offset,
+            operation_factory,
+            occurrence,
+        )
+
+    def test_worker_atomic_duplicate_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_duplicate_descriptor, "fcntl"
+        )
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            read_descriptor, write_descriptor = os.pipe()
+
+            def cleanup() -> None:
+                os.close(read_descriptor)
+                os.close(write_descriptor)
+
+            operation = lambda: run_xcode_tests.open_atomic_stream(read_descriptor)
+            return operation, cleanup
+
+        assert_repeated_worker_boundary_closes(
+            self, run_xcode_tests.acquire_duplicate_descriptor, offset, operation_factory
+        )
+
+    def test_worker_socket_duplicate_is_owned_before_publication(self) -> None:
+        offset = opcode_after_named_call(
+            run_xcode_tests.acquire_duplicate_descriptor, "fcntl"
+        )
+
+        def operation_factory() -> tuple[Callable[[], object], Callable[[], None]]:
+            local, remote = socket.socketpair()
+
+            def cleanup() -> None:
+                local.close()
+                remote.close()
+
+            return lambda: run_xcode_tests.duplicate_direct_socket(local.fileno()), cleanup
+
+        assert_repeated_worker_boundary_closes(
+            self, run_xcode_tests.acquire_duplicate_descriptor, offset, operation_factory
+        )
+
+    def test_duplicate_descriptor_publication_interrupt_closes_real_fd(self) -> None:
+        local, remote = socket.socketpair()
+        duplicates: list[int] = []
+        real_dup = run_xcode_tests.acquire_duplicate_descriptor
+        offsets = [
+            instruction.offset
+            for instruction in dis.get_instructions(
+                run_xcode_tests.duplicate_direct_socket
+            )
+            if instruction.opname == "STORE_FAST" and instruction.argval == "duplicate"
+        ]
+
+        duplicate = recorded_descriptor_acquisition(real_dup, duplicates)
+
+        try:
+            self.assertEqual(len(offsets), 1)
+            with mock.patch.object(
+                run_xcode_tests, "acquire_duplicate_descriptor", side_effect=duplicate
+            ):
+                interrupt_at_opcode(
+                    run_xcode_tests.duplicate_direct_socket,
+                    offsets[0],
+                    lambda: run_xcode_tests.duplicate_direct_socket(local.fileno()),
+                    "duplicate publication interrupted",
+                )
+            gc.collect()
+            os.fstat(local.fileno())
+            with self.assertRaises(OSError):
+                os.fstat(duplicates[0])
+        finally:
+            local.close()
+            remote.close()
+
+    def test_direct_pipe_owner_publication_interrupt_closes_real_fds(self) -> None:
+        resources = run_xcode_tests.DirectSpawnResources()
+        captured: list[int] = []
+        real_pipe = run_xcode_tests.acquire_pipe_descriptors
+        open_pipe = recorded_pipe_acquisition(real_pipe, captured)
+
+        primary = DirectSpawnCleanupSignal("direct pipe owner publication interrupted")
+        offset = unique_opcode_offset(
+            run_xcode_tests.register_direct_pipe, "STORE_FAST", "owners"
+        )
+        with mock.patch.object(
+            run_xcode_tests, "acquire_pipe_descriptors", side_effect=open_pipe
+        ):
+            interrupt_with_base_exception_at_opcode(
+                run_xcode_tests.register_direct_pipe,
+                offset,
+                lambda: run_xcode_tests.register_direct_pipe(resources),
+                primary,
+            )
+        primary.__traceback__ = None
+        gc.collect()
+        self.assertEqual(resources.descriptors, set())
+        for descriptor in captured:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_direct_pipe_return_interrupt_preserves_registered_real_fds(self) -> None:
+        resources = run_xcode_tests.DirectSpawnResources()
+        descriptors: list[int] = []
+        real_pipe = run_xcode_tests.acquire_pipe_descriptors
+        open_pipe = recorded_pipe_acquisition(real_pipe, descriptors)
+
+        primary = DirectSpawnCleanupSignal("direct pipe return interrupted")
+        offset = unique_opcode_offset(run_xcode_tests.acquire_direct_pipe, "RETURN_VALUE")
+        try:
+            with mock.patch.object(
+                run_xcode_tests, "acquire_pipe_descriptors", side_effect=open_pipe
+            ):
+                interrupt_with_base_exception_at_opcode(
+                    run_xcode_tests.acquire_direct_pipe,
+                    offset,
+                    lambda: run_xcode_tests.acquire_direct_pipe(resources),
+                    primary,
+                )
+            self.assertEqual(resources.descriptors, set(descriptors))
+            for descriptor in descriptors:
+                os.fstat(descriptor)
+            self.assertEqual(run_xcode_tests.cleanup_direct_spawn(resources, None), [])
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+        finally:
+            run_xcode_tests.cleanup_direct_spawn(resources, None)
+
+    def test_direct_pipe_partial_publication_preserves_registry_owner(self) -> None:
+        primary = DirectSpawnCleanupSignal("descriptor add interrupted")
+        published = PublishingThenInterruptingDescriptorSet(primary)
+        resources = run_xcode_tests.DirectSpawnResources(descriptors=published)
+        descriptors: list[int] = []
+        real_pipe = run_xcode_tests.acquire_pipe_descriptors
+        open_pipe = recorded_pipe_acquisition(real_pipe, descriptors)
+
+        try:
+            with mock.patch.object(
+                run_xcode_tests, "acquire_pipe_descriptors", side_effect=open_pipe
+            ):
+                with self.assertRaises(DirectSpawnCleanupSignal) as raised:
+                    run_xcode_tests.register_direct_pipe(resources)
+            self.assertIs(raised.exception, primary)
+            self.assertEqual(resources.descriptors, {descriptors[0]})
+            os.fstat(descriptors[0])
+            with self.assertRaises(OSError):
+                os.fstat(descriptors[1])
+            self.assertEqual(run_xcode_tests.cleanup_direct_spawn(resources, None), [])
+        finally:
+            run_xcode_tests.cleanup_direct_spawn(resources, None)
+
+    def test_listener_owner_publication_interrupt_closes_real_fd(self) -> None:
+        resources = run_xcode_tests.DirectSpawnResources()
+        captured: list[int] = []
+        real_duplicate = run_xcode_tests.acquire_duplicate_descriptor
+        duplicate = recorded_descriptor_acquisition(real_duplicate, captured)
+
+        offsets = [
+            instruction.offset
+            for instruction in dis.get_instructions(
+                run_xcode_tests.register_direct_listener
+            )
+            if instruction.opname == "STORE_FAST" and instruction.argval == "owner"
+        ]
+        primary = DirectSpawnCleanupSignal("listener owner publication interrupted")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            run_xcode_tests, "acquire_duplicate_descriptor", side_effect=duplicate
+        ):
+            path = Path(directory) / "listener.sock"
+            interrupt_with_base_exception_at_opcode(
+                run_xcode_tests.register_direct_listener,
+                offsets[-1],
+                lambda: run_xcode_tests.register_direct_listener(resources, path),
+                primary,
+            )
+        primary.__traceback__ = None
+        gc.collect()
+        self.assertEqual(resources.descriptors, set())
+        with self.assertRaises(OSError):
+            os.fstat(captured[0])
+
+    def test_direct_listener_return_interrupt_preserves_registered_real_fd(self) -> None:
+        resources = run_xcode_tests.DirectSpawnResources()
+        captured: list[int] = []
+        real_duplicate = run_xcode_tests.acquire_duplicate_descriptor
+        primary = DirectSpawnCleanupSignal("direct listener return interrupted")
+        duplicate = recorded_descriptor_acquisition(real_duplicate, captured)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "listener.sock"
+            offset = unique_opcode_offset(
+                run_xcode_tests.acquire_direct_listener, "RETURN_VALUE"
+            )
+            with mock.patch.object(
+                run_xcode_tests, "acquire_duplicate_descriptor", side_effect=duplicate
+            ):
+                interrupt_with_base_exception_at_opcode(
+                    run_xcode_tests.acquire_direct_listener,
+                    offset,
+                    lambda: run_xcode_tests.acquire_direct_listener(resources, path),
+                    primary,
+                )
+            self.assertEqual(resources.descriptors, set(captured))
+            os.fstat(captured[0])
+            self.assertEqual(run_xcode_tests.cleanup_direct_spawn(resources, None), [])
+            with self.assertRaises(OSError):
+                os.fstat(captured[0])
+
+    def test_direct_peer_inner_return_interrupt_closes_real_fd(self) -> None:
+        captured: list[int] = []
+        original_init = run_xcode_tests.DirectDescriptorOwner.__init__
+
+        def record_owner(
+            owner: run_xcode_tests.DirectDescriptorOwner,
+            descriptor: int | run_xcode_tests.AcquiredDescriptor,
+        ) -> None:
+            captured.append(
+                descriptor.fileno()
+                if isinstance(descriptor, run_xcode_tests.AcquiredDescriptor)
+                else descriptor
+            )
+            original_init(owner, descriptor)
+
+        primary = DirectSpawnCleanupSignal("direct peer inner return interrupted")
+        offset = unique_opcode_offset(
+            run_xcode_tests.open_direct_peer_owner, "RETURN_VALUE"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "peer.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen(1)
+            try:
+                with mock.patch.object(
+                    run_xcode_tests.DirectDescriptorOwner, "__init__", record_owner
+                ):
+                    interrupt_with_base_exception_at_opcode(
+                        run_xcode_tests.open_direct_peer_owner,
+                        offset,
+                        lambda: run_xcode_tests.open_direct_peer_owner(path),
+                        primary,
+                    )
+                primary.__traceback__ = None
+                gc.collect()
+                with self.assertRaises(OSError):
+                    os.fstat(captured[0])
+            finally:
+                listener.close()
+
+    def test_direct_peer_return_interrupt_closes_unpublished_real_fd(self) -> None:
+        captured: list[int] = []
+        real_open = run_xcode_tests.open_direct_peer_owner
+        primary = DirectSpawnCleanupSignal("direct peer return interrupted")
+
+        def open_peer(path: Path) -> run_xcode_tests.DirectDescriptorOwner:
+            owner = real_open(path)
+            captured.append(owner.fileno())
+            return owner
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "peer.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen(1)
+            try:
+                offset = unique_opcode_offset(
+                    run_xcode_tests.connect_direct_peer, "RETURN_VALUE"
+                )
+                with mock.patch.object(
+                    run_xcode_tests, "open_direct_peer_owner", side_effect=open_peer
+                ):
+                    interrupt_with_base_exception_at_opcode(
+                        run_xcode_tests.connect_direct_peer,
+                        offset,
+                        lambda: run_xcode_tests.connect_direct_peer(path),
+                        primary,
+                    )
+                primary.__traceback__ = None
+                gc.collect()
+                with self.assertRaises(OSError):
+                    os.fstat(captured[0])
+            finally:
+                listener.close()
+
+    def assert_descriptor_closed(self, descriptor: int) -> None:
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+    def assert_direct_post_close_interruption(
+        self, offset: int, primary: BaseException, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = run_xcode_tests.DirectDescriptorOwner(descriptor)
+        try:
+            if finalizer:
+                swallow_worker_base_exception_at_opcode(
+                    run_xcode_tests.DirectDescriptorOwner._close_pending,
+                    offset,
+                    lambda: run_xcode_tests.interruption_safe_call(owner.__del__),
+                    primary,
+                )
+            else:
+                interrupt_worker_with_base_exception_at_opcode(
+                    run_xcode_tests.DirectDescriptorOwner._close_pending,
+                    offset,
+                    owner.close,
+                    primary,
+                )
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            owner.close()
+            os.close(peer)
+
+    def assert_acquired_post_close_interruption(
+        self, offset: int, primary: BaseException, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        acquired = run_xcode_tests.AcquiredDescriptor(descriptor)
+        try:
+            if finalizer:
+                swallow_current_base_exception_at_opcode(
+                    run_xcode_tests.AcquiredDescriptor.close,
+                    offset,
+                    acquired.__del__,
+                    primary,
+                )
+            else:
+                interrupt_worker_with_base_exception_at_opcode(
+                    run_xcode_tests.AcquiredDescriptor.close,
+                    offset,
+                    lambda: run_xcode_tests.interruption_safe_call(acquired.close),
+                    primary,
+                )
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            acquired.close()
+            os.close(peer)
+
+    def test_descriptor_cleanup_survives_post_close_control_exceptions(self) -> None:
+        direct_offset = opcode_after_store(
+            run_xcode_tests.DirectDescriptorOwner._close_pending, "_armed"
+        )
+        acquired_offset = opcode_after_named_call(
+            run_xcode_tests.AcquiredDescriptor.close, "release"
+        )
+        exception_types = (KeyboardInterrupt, SystemExit, DirectSpawnCleanupSignal)
+        for iteration in range(3):
+            for exception_type in exception_types:
+                for finalizer in (False, True):
+                    with self.subTest(
+                        iteration=iteration,
+                        exception_type=exception_type.__name__,
+                        finalizer=finalizer,
+                        owner="direct",
+                    ):
+                        self.assert_direct_post_close_interruption(
+                            direct_offset, exception_type("post-close"), finalizer
+                        )
+                    with self.subTest(
+                        iteration=iteration,
+                        exception_type=exception_type.__name__,
+                        finalizer=finalizer,
+                        owner="acquired",
+                    ):
+                        self.assert_acquired_post_close_interruption(
+                            acquired_offset, exception_type("post-close"), finalizer
+                        )
+
+    def test_descriptor_cleanup_retries_preclose_control_exceptions(self) -> None:
+        direct_offset = unique_opcode_offset(
+            run_xcode_tests.DirectDescriptorOwner._close_pending,
+            "LOAD_GLOBAL",
+            "DESCRIPTOR_CLOSE_LOCK",
+        )
+        acquired_offset = unique_opcode_offset(
+            run_xcode_tests.AcquiredDescriptor._close_owned,
+            "LOAD_GLOBAL",
+            "DESCRIPTOR_CLOSE_LOCK",
+        )
+        for exception_type in (
+            KeyboardInterrupt,
+            SystemExit,
+            DirectSpawnCleanupSignal,
+        ):
+            with self.subTest(exception_type=exception_type.__name__, owner="direct"):
+                descriptor, peer = os.pipe()
+                owner = run_xcode_tests.DirectDescriptorOwner(descriptor)
+                try:
+                    interrupt_worker_with_base_exception_at_opcode(
+                        run_xcode_tests.DirectDescriptorOwner._close_pending,
+                        direct_offset,
+                        owner.close,
+                        exception_type("pre-close"),
+                    )
+                    self.assert_descriptor_closed(descriptor)
+                finally:
+                    owner.close()
+                    os.close(peer)
+            with self.subTest(exception_type=exception_type.__name__, owner="acquired"):
+                descriptor, peer = os.pipe()
+                acquired = run_xcode_tests.AcquiredDescriptor(descriptor)
+                try:
+                    interrupt_worker_with_base_exception_at_opcode(
+                        run_xcode_tests.AcquiredDescriptor._close_owned,
+                        acquired_offset,
+                        acquired.close,
+                        exception_type("pre-close"),
+                    )
+                    self.assert_descriptor_closed(descriptor)
+                finally:
+                    acquired.close()
+                    os.close(peer)
+
+    def test_descriptor_owner_close_interrupt_finishes_real_fd(self) -> None:
+        descriptor, peer = os.pipe()
+        owner = run_xcode_tests.DirectDescriptorOwner(descriptor)
+        offset = unique_opcode_offset(
+            run_xcode_tests.DirectDescriptorOwner._close_owned,
+            "LOAD_ATTR",
+            "_close_pending",
+        )
+        try:
+            interrupt_worker_with_base_exception_at_opcode(
+                run_xcode_tests.DirectDescriptorOwner._close_owned,
+                offset,
+                owner.close,
+                KeyboardInterrupt("descriptor close interrupted after disarm"),
+            )
+            self.assertEqual(owner.fileno(), -1)
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            owner.close()
+            os.close(peer)
+
+    def test_descriptor_owner_does_not_close_reused_fd_after_uncertain_close(
+        self,
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = run_xcode_tests.DirectDescriptorOwner(descriptor)
+        primary = KeyboardInterrupt("real close interrupted")
+        real_close = os.close
+        calls: list[int] = []
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            real_close(candidate)
+            replacement = os.open(os.devnull, os.O_RDONLY)
+            if replacement != candidate:
+                os.dup2(replacement, candidate)
+                real_close(replacement)
+            raise primary
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    owner.close()
+                owner.close()
+            self.assertIs(raised.exception, primary)
+            self.assertEqual(calls, [descriptor])
+            os.fstat(descriptor)
+        finally:
+            real_close(descriptor)
+            real_close(peer)
+
+    def test_acquired_descriptor_does_not_close_reused_fd_after_uncertain_close(
+        self,
+    ) -> None:
+        descriptor, peer = os.pipe()
+        acquired = run_xcode_tests.AcquiredDescriptor(descriptor)
+        primary = SystemExit("real close interrupted")
+        real_close = os.close
+        calls: list[int] = []
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            real_close(candidate)
+            replacement = os.open(os.devnull, os.O_RDONLY)
+            if replacement != candidate:
+                os.dup2(replacement, candidate)
+                real_close(replacement)
+            raise primary
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+                with self.assertRaises(SystemExit) as raised:
+                    acquired.close()
+                acquired.close()
+            self.assertIs(raised.exception, primary)
+            self.assertEqual(calls, [descriptor])
+            os.fstat(descriptor)
+        finally:
+            real_close(descriptor)
+            real_close(peer)
+
+    def assert_control_close_error_is_not_retried(
+        self, exception_type: type[BaseException], direct: bool
+    ) -> None:
+        descriptor = 82
+        primary = exception_type("close interrupted")
+        calls: list[int] = []
+        owner = (
+            run_xcode_tests.DirectDescriptorOwner(descriptor)
+            if direct
+            else run_xcode_tests.AcquiredDescriptor(descriptor)
+        )
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            raise primary
+
+        with mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(exception_type) as raised:
+                owner.close()
+            owner.close()
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(calls, [descriptor])
+
+    def test_descriptor_close_control_error_is_not_retried(self) -> None:
+        for exception_type in (
+            KeyboardInterrupt,
+            SystemExit,
+            DirectSpawnCleanupSignal,
+        ):
+            for direct in (False, True):
+                with self.subTest(
+                    exception_type=exception_type.__name__, direct=direct
+                ):
+                    self.assert_control_close_error_is_not_retried(
+                        exception_type, direct
+                    )
+
+    def assert_control_close_error_retries_open_descriptor(
+        self, exception_type: type[BaseException], direct: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        primary = exception_type("close interrupted while descriptor remained open")
+        calls: list[int] = []
+        owner = (
+            run_xcode_tests.DirectDescriptorOwner(descriptor)
+            if direct
+            else run_xcode_tests.AcquiredDescriptor(descriptor)
+        )
+        real_close = os.close
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            if len(calls) == 1:
+                raise primary
+            real_close(candidate)
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+                with self.assertRaises(exception_type) as raised:
+                    owner.close()
+            self.assertIs(raised.exception, primary)
+            self.assertEqual(calls, [descriptor, descriptor])
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            owner.close()
+            real_close(peer)
+
+    def test_descriptor_close_control_error_retries_open_descriptor(self) -> None:
+        for exception_type in (
+            KeyboardInterrupt,
+            SystemExit,
+            DirectSpawnCleanupSignal,
+        ):
+            for direct in (False, True):
+                with self.subTest(
+                    exception_type=exception_type.__name__, direct=direct
+                ):
+                    self.assert_control_close_error_retries_open_descriptor(
+                        exception_type, direct
+                    )
+
+    def descriptor_owner(
+        self, direct: bool, descriptor: int
+    ) -> run_xcode_tests.DirectDescriptorOwner | run_xcode_tests.AcquiredDescriptor:
+        if direct:
+            return run_xcode_tests.DirectDescriptorOwner(descriptor)
+        return run_xcode_tests.AcquiredDescriptor(descriptor)
+
+    def assert_owner_recoverable(
+        self,
+        owner: run_xcode_tests.DirectDescriptorOwner
+        | run_xcode_tests.AcquiredDescriptor,
+        descriptor: int,
+        direct: bool,
+    ) -> None:
+        if direct:
+            self.assertTrue(owner._armed)
+            self.assertEqual(owner._pending_descriptor, descriptor)
+            state = owner._pending_close_state
+        else:
+            self.assertEqual(owner.value, descriptor)
+            state = owner._descriptor_close_state
+        self.assertIsNotNone(state)
+        self.assertTrue(state.uncertain)
+        self.assertFalse(state.closed)
+
+    def assert_owner_disarmed(
+        self,
+        owner: run_xcode_tests.DirectDescriptorOwner
+        | run_xcode_tests.AcquiredDescriptor,
+        direct: bool,
+    ) -> None:
+        if direct:
+            self.assertFalse(owner._armed)
+            self.assertEqual(owner._pending_descriptor, -1)
+            self.assertIsNone(owner._pending_close_state)
+        else:
+            self.assertEqual(owner.value, -1)
+            self.assertIsNone(owner._descriptor_close_state)
+
+    def test_finalizers_do_not_wait_for_workers_while_close_lock_is_owned(
+        self,
+    ) -> None:
+        for direct in (False, True):
+            for armed in (False, True):
+                with self.subTest(direct=direct, armed=armed):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-c",
+                            FINALIZER_LOCK_CASE_SOURCE,
+                            "direct" if direct else "acquired",
+                            "armed" if armed else "unarmed",
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def assert_unknown_close_state_retains_owner(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        primary = HostileCleanupSignal("close state unknown")
+        state_error = HostileFormattingError("identity check unavailable")
+        calls: list[int] = []
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            raise primary
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(
+                    run_xcode_tests,
+                    "descriptor_close_completed",
+                    side_effect=state_error,
+                ):
+                if finalizer:
+                    owner.__del__()
+                else:
+                    with self.assertRaises(HostileCleanupSignal) as raised:
+                        owner.close()
+                    self.assertIs(raised.exception, primary)
+            self.assertEqual(calls, [descriptor, descriptor])
+            os.fstat(descriptor)
+            self.assert_owner_recoverable(owner, descriptor, direct)
+            evidence = exception_evidence(primary)
+            self.assertTrue(evidence.startswith("close state unknown; "))
+            self.assertIn("descriptor close state check failed", evidence)
+            self.assertIn("descriptor close recovery failed", evidence)
+            self.assert_hostile_formatters_unused(primary)
+            self.assert_hostile_os_formatters_unused(state_error)
+            owner.close()
+            owner.close()
+            owner.__del__()
+            self.assert_owner_disarmed(owner, direct)
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            owner.close()
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+
+    def test_unknown_close_state_preserves_one_recoverable_owner(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_unknown_close_state_retains_owner(direct, finalizer)
+
+    def assert_reused_descriptor_survives_unknown_state(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        primary = DirectSpawnCleanupSignal("close completed before interruption")
+        state_error = HostileFormattingError("post-close identity unavailable")
+        calls: list[int] = []
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            SYSTEM_OS_CLOSE(candidate)
+            reuse_descriptor_number(candidate)
+            raise primary
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(
+                    run_xcode_tests,
+                    "descriptor_close_completed",
+                    side_effect=state_error,
+                ):
+                if finalizer:
+                    owner.__del__()
+                else:
+                    with self.assertRaises(DirectSpawnCleanupSignal) as raised:
+                        owner.close()
+                    self.assertIs(raised.exception, primary)
+            self.assertEqual(calls, [descriptor])
+            self.assert_owner_disarmed(owner, direct)
+            owner.close()
+            owner.__del__()
+            os.fstat(descriptor)
+        finally:
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+
+    def test_reused_descriptor_survives_unknown_post_close_state(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_reused_descriptor_survives_unknown_state(
+                        direct, finalizer
+                    )
+
+    def assert_reused_descriptor_survives_disarm_error(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        primary = HostileCleanupSignal("ownership disarm interrupted")
+        owner_type = type(owner)
+        original_disarm = owner_type._disarm_closed
+        close_calls: list[int] = []
+        disarm_calls: list[int] = []
+
+        def close(candidate: int) -> None:
+            close_calls.append(candidate)
+            SYSTEM_OS_CLOSE(candidate)
+
+        def disarm(candidate_owner: object, candidate: int) -> None:
+            disarm_calls.append(candidate)
+            if len(disarm_calls) == 1:
+                reuse_descriptor_number(candidate)
+                raise primary
+            original_disarm(candidate_owner, candidate)
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(owner_type, "_disarm_closed", new=disarm):
+                if finalizer:
+                    owner.__del__()
+                else:
+                    with self.assertRaises(HostileCleanupSignal) as raised:
+                        owner.close()
+                    self.assertIs(raised.exception, primary)
+            self.assertEqual(close_calls, [descriptor])
+            self.assertEqual(disarm_calls, [descriptor, descriptor])
+            self.assert_owner_disarmed(owner, direct)
+            owner.close()
+            owner.__del__()
+            os.fstat(descriptor)
+        finally:
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+
+    def test_disarm_error_after_reuse_never_closes_replacement(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_reused_descriptor_survives_disarm_error(
+                        direct, finalizer
+                    )
+
+    def assert_transient_unknown_state_finishes_cleanup(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        primary = DirectSpawnCleanupSignal("pre-close interruption")
+        state_error = HostileFormattingError("first identity check unavailable")
+        calls: list[int] = []
+
+        def close(candidate: int) -> None:
+            calls.append(candidate)
+            if len(calls) == 1:
+                raise primary
+            SYSTEM_OS_CLOSE(candidate)
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(
+                    run_xcode_tests,
+                    "descriptor_close_completed",
+                    side_effect=state_error,
+                ):
+                if finalizer:
+                    owner.__del__()
+                else:
+                    with self.assertRaises(DirectSpawnCleanupSignal) as raised:
+                        owner.close()
+                    self.assertIs(raised.exception, primary)
+            self.assertEqual(calls, [descriptor, descriptor])
+            self.assert_owner_disarmed(owner, direct)
+            self.assert_descriptor_closed(descriptor)
+            owner.close()
+            owner.__del__()
+        finally:
+            owner.close()
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+
+    def test_transient_unknown_state_closes_original_exactly_once(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_transient_unknown_state_finishes_cleanup(
+                        direct, finalizer
+                    )
+
+    def test_duplicate_descriptor_owner_is_disarmed_before_fd_reuse(self) -> None:
+        descriptor, peer = os.pipe()
+        canonical = run_xcode_tests.DirectDescriptorOwner(descriptor)
+        alias = run_xcode_tests.DirectDescriptorOwner(descriptor)
+        replacement = -1
+        try:
+            run_xcode_tests.close_direct_channel_owners((canonical, alias))
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+            replacement = os.open(os.devnull, os.O_RDONLY)
+            if replacement != descriptor:
+                os.dup2(replacement, descriptor)
+                os.close(replacement)
+                replacement = descriptor
+            alias.close()
+            os.fstat(replacement)
+        finally:
+            if replacement >= 0:
+                os.close(replacement)
+            os.close(peer)
+
+    def test_duplicate_socket_alias_is_disarmed_before_fd_reuse(self) -> None:
+        canonical, peer = socket.socketpair()
+        descriptor = canonical.fileno()
+        alias = SYSTEM_SOCKET_TYPE(fileno=descriptor)
+        replacement = -1
+        try:
+            run_xcode_tests.close_direct_channel_owners((canonical, alias))
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+            replacement = os.open(os.devnull, os.O_RDONLY)
+            if replacement != descriptor:
+                os.dup2(replacement, descriptor)
+                os.close(replacement)
+                replacement = descriptor
+            alias.close()
+            os.fstat(replacement)
+        finally:
+            canonical.close()
+            alias.close()
+            peer.close()
+            if replacement >= 0:
+                os.close(replacement)
+
+    def test_adoption_preserves_primary_across_partial_real_fd_restore(self) -> None:
+        pipes = [os.pipe() for _ in range(3)]
+        descriptors = [pair[0] for pair in pipes]
+        primary = KeyboardInterrupt("descriptor transfer interrupted")
+        restore_errors = (
+            SystemExit("mutating restore interrupted"),
+            HostileCleanupSignal("rejecting restore interrupted"),
+        )
+        source = PartiallyRestoringDescriptorSet(
+            set(descriptors), primary, restore_errors
+        )
+        resources, endpoints = self.direct_adoption_fixture(source)
+        endpoints = replace(
+            endpoints,
+            wrapper_listener=descriptors[1],
+            target_listener=descriptors[2],
+        )
+        try:
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.adopt_direct_channel(
+                    resources, descriptors[0], b"key", endpoints
+                )
+            self.assertIs(raised.exception, primary)
+            raised.exception.__traceback__ = None
+            gc.collect()
+            self.assertEqual(source, {descriptors[0], descriptors[2]})
+            os.fstat(descriptors[0])
+            with self.assertRaises(OSError):
+                os.fstat(descriptors[1])
+            os.fstat(descriptors[2])
+            evidence = exception_evidence(primary)
+            self.assertIn("mutating restore interrupted", evidence)
+            self.assertIn("rejecting restore interrupted", evidence)
+        finally:
+            run_xcode_tests.cleanup_direct_spawn(resources, None)
+            for _descriptor, peer in pipes:
+                os.close(peer)
+
+    def assert_channel_close_attempts_every_descriptor(
+        self, cleanup_error: BaseException
+    ) -> None:
+        channel = run_xcode_tests.DirectChannel(
+            80,
+            b"key",
+            wrapper_listener=81,
+            wrapper_peer=82,
+            target_listener=83,
+            target_peer=84,
+        )
+        secondary = HostileCleanupSignal("second close failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 80:
+                raise cleanup_error
+            if descriptor == 82:
+                raise secondary
+
+        with mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(type(cleanup_error)) as raised:
+                run_xcode_tests.close_direct_channel(channel)
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertIs(raised.exception, cleanup_error)
+        self.assertEqual(calls, [80, 81, 82, 83, 84])
+        self.assertIn(
+            "additional descriptor close failed: second close failed",
+            exception_evidence(cleanup_error),
+        )
+        self.assertEqual(
+            (
+                secondary.string_calls,
+                secondary.representation_calls,
+                secondary.argument_reads,
+            ),
+            (0, 0, 0),
+        )
+        self.assertTrue(channel.closed)
+        self.assertEqual(
+            (
+                channel.descriptor,
+                channel.wrapper_listener,
+                channel.wrapper_peer,
+                channel.target_listener,
+                channel.target_peer,
+            ),
+            (-1, -1, -1, -1, -1),
+        )
+
+    def test_channel_close_continues_after_keyboard_interrupt(self) -> None:
+        self.assert_channel_close_attempts_every_descriptor(
+            KeyboardInterrupt("first close interrupted")
+        )
+
+    def test_channel_close_continues_after_system_exit(self) -> None:
+        self.assert_channel_close_attempts_every_descriptor(
+            SystemExit("first close exited")
+        )
+
+    def test_channel_close_continues_after_hostile_formatter(self) -> None:
+        cleanup = HostileCleanupSignal("first close hostile")
+        self.assert_channel_close_attempts_every_descriptor(cleanup)
+        self.assertEqual(
+            (cleanup.string_calls, cleanup.representation_calls, cleanup.argument_reads),
+            (0, 0, 0),
+        )
+
+    def assert_channel_primary_preserved(
+        self,
+        cleanup_error: BaseException,
+        primary: BaseException | None = None,
+    ) -> None:
+        channel = run_xcode_tests.DirectChannel(
+            80, b"key", buffer=b"frame\n", wrapper_peer=82
+        )
+        primary = primary or run_xcode_tests.SimulatorLifecycleError(
+            "invalid direct message"
+        )
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 80:
+                raise cleanup_error
+
+        with mock.patch.object(
+            run_xcode_tests, "apply_direct_message", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close):
+            with self.assertRaises(type(primary)) as raised:
+                run_xcode_tests.pump_direct_channel(channel, time.monotonic() + 1)
+            run_xcode_tests.close_direct_channel(channel)
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(calls, [80, 82])
+        cleanup_detail = exception_evidence(cleanup_error)
+        self.assertIn(cleanup_detail, exception_evidence(primary))
+        self.assertTrue(
+            any(
+                cleanup_detail in note
+                for note in object.__getattribute__(primary, "__notes__")
+            )
+        )
+
+    def test_channel_primary_wins_cleanup_keyboard_interrupt(self) -> None:
+        self.assert_channel_primary_preserved(
+            KeyboardInterrupt("cleanup interrupted")
+        )
+
+    def test_channel_primary_wins_cleanup_system_exit(self) -> None:
+        self.assert_channel_primary_preserved(SystemExit("cleanup exited"))
+
+    def test_channel_primary_and_cleanup_formatters_are_never_called(self) -> None:
+        primary = HostileCleanupSignal("primary")
+        cleanup = HostileCleanupSignal("cleanup")
+        self.assert_channel_primary_preserved(cleanup, primary)
+        for error in (primary, cleanup):
+            self.assertEqual(
+                (error.string_calls, error.representation_calls, error.argument_reads),
+                (0, 0, 0),
+            )
 
     def test_direct_channel_deadline_prevents_further_authenticated_work(self) -> None:
         read_descriptor, write_descriptor = os.pipe()
@@ -2112,6 +4660,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with mock.patch.object(
             run_xcode_tests, "read_direct_key", return_value=b"k" * 32
         ), mock.patch.object(
+            run_xcode_tests, "LIBPROC", None
+        ), mock.patch.object(
             run_xcode_tests, "connect_direct_peer", return_value=94
         ), mock.patch.object(run_xcode_tests.os, "close"), mock.patch.object(
             run_xcode_tests, "configure_direct_subreaper"
@@ -2134,6 +4684,213 @@ class XcodeTestRunnerTests(unittest.TestCase):
             {"event": "error", "message": "direct wrapper identity deadline expired"},
         )
         spawn.assert_not_called()
+
+    def test_darwin_wrapper_authentication_uses_parent_peer_identity(self) -> None:
+        identity = darwin_direct_identity(os.getpid(), 30, 40)
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ) as report, mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            return_value=identity,
+        ) as read, mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=40
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_process_identity"
+        ) as census, mock.patch.object(run_xcode_tests.os, "close") as close:
+            observed = run_xcode_tests.authenticate_direct_wrapper(reporter, 92)
+        self.assertEqual(observed, identity)
+        report.assert_called_once_with(reporter, {"event": "wrapper"})
+        read.assert_called_once_with(92, mock.ANY)
+        census.assert_not_called()
+        close.assert_called_once_with(92)
+
+    def test_darwin_wrapper_authentication_rejects_parent_substitution(self) -> None:
+        identity = darwin_direct_identity(os.getpid() + 1, 30, 40)
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            return_value=identity,
+        ), mock.patch.object(run_xcode_tests.os, "close"):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "invalid direct wrapper acknowledgement",
+            ):
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+
+    def test_wrapper_ack_close_failure_preserves_lifecycle_error(self) -> None:
+        identity = darwin_direct_identity(os.getpid() + 1, 30, 40)
+        close_error = OSError("ack close failure")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            return_value=identity,
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close_error):
+            with self.assertRaises(run_xcode_tests.SimulatorLifecycleError) as raised:
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+        self.assertEqual(str(raised.exception), "invalid direct wrapper acknowledgement")
+        self.assertIn(
+            "acknowledgement close failed: ack close failure",
+            exception_evidence(raised.exception),
+        )
+
+    def test_wrapper_ack_close_failure_preserves_deadline_error(self) -> None:
+        primary = run_xcode_tests.OperationDeadlineExpired("ack deadline expired")
+        close_error = OSError("ack close failure")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            side_effect=primary,
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close_error):
+            with self.assertRaises(run_xcode_tests.OperationDeadlineExpired) as raised:
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary), "ack deadline expired")
+        self.assertIn(
+            "acknowledgement close failed: ack close failure",
+            exception_evidence(primary),
+        )
+
+    def test_wrapper_ack_close_failure_surfaces_without_primary_error(self) -> None:
+        identity = darwin_direct_identity(os.getpid(), 30, 40)
+        close_error = OSError("ack close failure")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            return_value=identity,
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=close_error):
+            with self.assertRaises(OSError) as raised:
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+        self.assertIs(raised.exception, close_error)
+
+    def test_wrapper_ack_setup_interrupt_closes_descriptor_once(self) -> None:
+        primary = SystemExit("subreaper interrupted")
+        with mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaises(SystemExit) as raised:
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+        self.assertIs(raised.exception, primary)
+        close.assert_called_once_with(92)
+
+    def test_wrapper_ack_interrupt_preserves_primary_when_close_interrupts(self) -> None:
+        primary = KeyboardInterrupt("ack read interrupted")
+        cleanup = SystemExit("ack close interrupted")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            side_effect=primary,
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup) as close:
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary).splitlines()[0], "ack read interrupted")
+        self.assertIn(
+            "acknowledgement close failed: ack close interrupted",
+            exception_evidence(primary),
+        )
+        close.assert_called_once_with(92)
+
+    def test_wrapper_ack_close_interrupt_surfaces_without_primary(self) -> None:
+        identity = darwin_direct_identity(os.getpid(), 30, 40)
+        cleanup = SystemExit("ack close interrupted")
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests, "configure_direct_subreaper"
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(
+            run_xcode_tests,
+            "read_direct_wrapper_acknowledgement",
+            return_value=identity,
+        ), mock.patch.object(
+            run_xcode_tests, "direct_audit_pid_version", return_value=40
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup) as close:
+            with self.assertRaises(SystemExit) as raised:
+                run_xcode_tests.authenticate_direct_wrapper(
+                    run_xcode_tests.DirectReporter(91, b"key"), 92
+                )
+        self.assertIs(raised.exception, cleanup)
+        close.assert_called_once_with(92)
+
+    def test_direct_wrapper_acknowledgement_round_trip(self) -> None:
+        identity = darwin_direct_identity(os.getpid(), 30, 40)
+        read_descriptor, write_descriptor = os.pipe()
+        try:
+            run_xcode_tests.write_direct_wrapper_acknowledgement(
+                write_descriptor, identity
+            )
+            observed = run_xcode_tests.read_direct_wrapper_acknowledgement(
+                read_descriptor, time.monotonic() + 1
+            )
+        finally:
+            os.close(read_descriptor)
+            os.close(write_descriptor)
+        self.assertEqual(observed, identity)
+
+    def test_direct_wrapper_acknowledgement_rejects_unbound_content(self) -> None:
+        identity = darwin_direct_identity(os.getpid(), 30, 40)
+        payload = run_xcode_tests.identity_payload(identity)
+        cases = {
+            "extra field": run_xcode_tests.json.dumps(
+                {**payload, "source": "child"}
+            ).encode()
+            + b"\n",
+            "trailing frame": run_xcode_tests.direct_wrapper_acknowledgement(identity)
+            + b"{}\n",
+        }
+        for name, content in cases.items():
+            with self.subTest(name=name):
+                read_descriptor, write_descriptor = os.pipe()
+                try:
+                    os.write(write_descriptor, content)
+                    os.close(write_descriptor)
+                    write_descriptor = -1
+                    with self.assertRaisesRegex(
+                        run_xcode_tests.SimulatorLifecycleError,
+                        "invalid direct wrapper acknowledgement",
+                    ):
+                        run_xcode_tests.read_direct_wrapper_acknowledgement(
+                            read_descriptor, time.monotonic() + 1
+                        )
+                finally:
+                    os.close(read_descriptor)
+                    if write_descriptor >= 0:
+                        os.close(write_descriptor)
 
     def test_stable_darwin_process_info_rejects_uniqueid_churn(self) -> None:
         first = run_xcode_tests.ProcUniqueIdentifierInfo()
@@ -2428,23 +5185,20 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 identity = run_xcode_tests.stable_darwin_peer_identity(91, 2222)
             self.assertIsNone(identity)
 
-    def test_wrapper_peer_identity_waits_for_reported_exec_generation(self) -> None:
-        before_report = darwin_direct_identity(2222, 10, 19)
-        reported = darwin_direct_identity(2222, 10, 20)
-        after_report = darwin_direct_identity(2222, 10, 21)
+    def test_wrapper_peer_identity_retries_transient_sample(self) -> None:
+        identity = darwin_direct_identity(2222, 10, 20)
         with mock.patch.object(
             run_xcode_tests,
             "stable_darwin_peer_identity",
-            side_effect=[before_report, after_report],
+            side_effect=[None, identity],
         ) as inspect, mock.patch.object(run_xcode_tests.time, "sleep"):
-            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
-                91, reported, time.monotonic() + 1
+            current = run_xcode_tests.await_direct_wrapper_peer_identity(
+                91, identity.pid, time.monotonic() + 1
             )
-        self.assertEqual(current, after_report)
+        self.assertEqual(current, identity)
         self.assertEqual(inspect.call_count, 2)
 
     def test_wrapper_peer_identity_does_not_accept_peer_eof(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
         with mock.patch.object(
             run_xcode_tests,
             "stable_darwin_peer_identity",
@@ -2452,34 +5206,46 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "direct_peer_closed", return_value=True
         ) as closed:
-            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
-                91, reported, time.monotonic() + 0.02
+            current = run_xcode_tests.await_direct_wrapper_peer_identity(
+                91, 2222, time.monotonic() + 0.02
             )
         self.assertIsNone(current)
-        closed.assert_not_called()
+        closed.assert_called_once_with(91)
 
     def test_wrapper_peer_identity_reserves_completion_after_slow_sample(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
+        sample_deadlines: list[float] = []
 
-        def slow_missing_identity(*_arguments: object) -> None:
-            time.sleep(0.03)
+        def expire_after_sample(
+            operation: Callable[[], object], deadline: float, timeout_message: str
+        ) -> object:
+            sample_deadlines.append(deadline)
+            operation()
+            raise run_xcode_tests.OperationDeadlineExpired(timeout_message)
 
+        outer_deadline = time.monotonic() + 1
         with mock.patch.object(
             run_xcode_tests,
             "stable_darwin_peer_identity",
-            side_effect=slow_missing_identity,
+            return_value=None,
         ) as inspect, mock.patch.object(
             run_xcode_tests, "direct_peer_closed", return_value=True
-        ) as closed:
-            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
-                91, reported, time.monotonic() + 0.05
+        ) as closed, mock.patch.object(
+            run_xcode_tests, "deadline_call", side_effect=expire_after_sample
+        ):
+            current = run_xcode_tests.await_direct_wrapper_peer_identity(
+                91, 2222, outer_deadline
             )
         self.assertIsNone(current)
         self.assertEqual(inspect.call_count, 1)
         closed.assert_not_called()
+        self.assertEqual(len(sample_deadlines), 1)
+        self.assertAlmostEqual(
+            outer_deadline - sample_deadlines[0],
+            run_xcode_tests.PEER_IDENTITY_COMPLETION_RESERVE_SECONDS,
+            delta=0.000001,
+        )
 
     def test_wrapper_peer_identity_avoids_outer_deadline_worker(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
         timeout_messages = []
         original_deadline_call = run_xcode_tests.deadline_call
 
@@ -2492,28 +5258,26 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "stable_darwin_peer_identity", return_value=None
         ):
-            current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
-                91, reported, time.monotonic() + 0.02
+            current = run_xcode_tests.await_direct_wrapper_peer_identity(
+                91, 2222, time.monotonic() + 0.02
             )
         self.assertIsNone(current)
         self.assertNotIn("direct wrapper identity deadline expired", timeout_messages)
         self.assertIn("direct wrapper identity sample deadline expired", timeout_messages)
 
     def test_wrapper_peer_identity_preserves_expired_deadline_error(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
         with mock.patch.object(
             run_xcode_tests, "stable_darwin_peer_identity"
         ) as inspect, self.assertRaisesRegex(
             run_xcode_tests.OperationDeadlineExpired,
             "direct wrapper identity deadline expired",
         ):
-            run_xcode_tests.await_peer_identity_covering_wrapper_report(
-                91, reported, time.monotonic() - 1
+            run_xcode_tests.await_direct_wrapper_peer_identity(
+                91, 2222, time.monotonic() - 1
             )
         inspect.assert_not_called()
 
     def test_wrapper_peer_identity_bounds_stalled_sample(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
         release = threading.Event()
         finished = threading.Event()
 
@@ -2529,8 +5293,8 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ) as inspect, mock.patch.object(
                 run_xcode_tests, "direct_peer_closed", return_value=True
             ) as closed:
-                current = run_xcode_tests.await_peer_identity_covering_wrapper_report(
-                    91, reported, time.monotonic() + 0.1
+                current = run_xcode_tests.await_direct_wrapper_peer_identity(
+                    91, 2222, time.monotonic() + 0.1
                 )
             self.assertIsNone(current)
             self.assertEqual(inspect.call_count, 1)
@@ -2702,8 +5466,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
     def test_darwin_peer_binding_accepts_same_process_exec_transition(self) -> None:
         before_exec = darwin_direct_identity(2222, 30, 40)
         after_exec = darwin_direct_identity(2222, 30, 41)
+        peer = mock.Mock()
+        peer.fileno.return_value = 92
         with mock.patch.object(
-            run_xcode_tests, "accept_direct_peer", return_value=92
+            run_xcode_tests, "accept_direct_peer", return_value=peer
         ), mock.patch.object(
             run_xcode_tests,
             "stable_darwin_peer_identity",
@@ -2716,10 +5482,139 @@ class XcodeTestRunnerTests(unittest.TestCase):
             descriptor = run_xcode_tests.bind_direct_peer_identity(
                 91, Path("target.sock"), before_exec, time.monotonic() + 1
             )
-        self.assertEqual(descriptor, 92)
+        self.assertIs(descriptor, peer)
+        peer.close.assert_not_called()
         close.assert_called_once_with(91)
         self.assertEqual(inspect.call_count, 2)
         sleep.assert_called_once()
+
+    def test_darwin_wrapper_binding_closes_listener_after_exact_peer(self) -> None:
+        identity = darwin_direct_identity(2222, 30, 40)
+        peer = mock.Mock()
+        peer.fileno.return_value = 92
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=peer
+        ), mock.patch.object(
+            run_xcode_tests,
+            "await_direct_wrapper_peer_identity",
+            return_value=identity,
+        ) as inspect, mock.patch.object(run_xcode_tests.os, "close") as close:
+            descriptor, observed = run_xcode_tests.bind_direct_wrapper_peer(
+                91, Path("wrapper.sock"), identity.pid, time.monotonic() + 1
+            )
+        self.assertIs(descriptor, peer)
+        peer.close.assert_not_called()
+        self.assertEqual(observed, identity)
+        inspect.assert_called_once_with(92, identity.pid, mock.ANY)
+        close.assert_called_once_with(91)
+
+    def test_darwin_target_binding_interrupt_closes_peer_once(self) -> None:
+        primary = SystemExit("target authentication interrupted")
+        identity = darwin_direct_identity(2222, 30, 40)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_peer_identity_matching_wrapper", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaises(SystemExit) as raised:
+                run_xcode_tests.bind_direct_peer_identity(
+                    91, Path("target.sock"), identity, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        close.assert_called_once_with(92)
+
+    def test_darwin_target_binding_preserves_interrupt_on_close_failure(self) -> None:
+        primary = KeyboardInterrupt("target authentication interrupted")
+        cleanup = SystemExit("target peer close interrupted")
+        identity = darwin_direct_identity(2222, 30, 40)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_peer_identity_matching_wrapper", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup) as close:
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.bind_direct_peer_identity(
+                    91, Path("target.sock"), identity, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(
+            str(primary).splitlines()[0], "target authentication interrupted"
+        )
+        self.assertIn(
+            "peer close failed: target peer close interrupted",
+            exception_evidence(primary),
+        )
+        close.assert_called_once_with(92)
+
+    def test_darwin_target_listener_interrupt_closes_accepted_peer_once(self) -> None:
+        primary = KeyboardInterrupt("target listener close interrupted")
+        identity = darwin_direct_identity(2222, 30, 40)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_peer_identity_matching_wrapper", return_value=identity
+        ), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=[primary, None]
+        ) as close:
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.bind_direct_peer_identity(
+                    91, Path("target.sock"), identity, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(close.call_args_list, [mock.call(91), mock.call(92)])
+
+    def test_darwin_wrapper_binding_interrupt_closes_peer_once(self) -> None:
+        primary = SystemExit("wrapper authentication interrupted")
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_wrapper_peer_identity", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close") as close:
+            with self.assertRaises(SystemExit) as raised:
+                run_xcode_tests.bind_direct_wrapper_peer(
+                    91, Path("wrapper.sock"), 2222, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        close.assert_called_once_with(92)
+
+    def test_darwin_wrapper_binding_preserves_interrupt_on_close_failure(self) -> None:
+        primary = KeyboardInterrupt("wrapper authentication interrupted")
+        cleanup = SystemExit("wrapper peer close interrupted")
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_wrapper_peer_identity", side_effect=primary
+        ), mock.patch.object(run_xcode_tests.os, "close", side_effect=cleanup) as close:
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run_xcode_tests.bind_direct_wrapper_peer(
+                    91, Path("wrapper.sock"), 2222, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(
+            str(primary).splitlines()[0], "wrapper authentication interrupted"
+        )
+        self.assertIn(
+            "peer close failed: wrapper peer close interrupted",
+            exception_evidence(primary),
+        )
+        close.assert_called_once_with(92)
+
+    def test_darwin_wrapper_listener_interrupt_closes_accepted_peer_once(self) -> None:
+        primary = SystemExit("wrapper listener close interrupted")
+        identity = darwin_direct_identity(2222, 30, 40)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_wrapper_peer_identity", return_value=identity
+        ), mock.patch.object(
+            run_xcode_tests.os, "close", side_effect=[primary, None]
+        ) as close:
+            with self.assertRaises(SystemExit) as raised:
+                run_xcode_tests.bind_direct_wrapper_peer(
+                    91, Path("wrapper.sock"), identity.pid, time.monotonic() + 1
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(close.call_args_list, [mock.call(91), mock.call(92)])
 
     def test_darwin_peer_binding_rejects_stable_wrong_process(self) -> None:
         reported = darwin_direct_identity(2222, 30, 40)
@@ -2793,12 +5688,14 @@ class XcodeTestRunnerTests(unittest.TestCase):
             gate_read, gate_write = os.pipe()
             process = spawn_execing_socket_peer(socket_path, gate_read)
             os.close(gate_read)
+            peer_owner: run_xcode_tests.DirectPeer = -1
             peer_descriptor = -1
             try:
                 deadline = time.monotonic() + 5
-                peer_descriptor = run_xcode_tests.accept_direct_peer(
+                peer_owner = run_xcode_tests.accept_direct_peer(
                     listener.fileno(), deadline
                 )
+                peer_descriptor = run_xcode_tests.direct_descriptor(peer_owner)
                 listener.close()
                 self.assertIsNone(
                     run_xcode_tests.stable_darwin_peer_identity(
@@ -2825,8 +5722,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 self.assertNotEqual(before_exec.audit_token, after_exec.audit_token)
             finally:
                 listener.close()
-                if peer_descriptor >= 0:
-                    os.close(peer_descriptor)
+                run_xcode_tests.close_direct_peer_owner(
+                    peer_owner, None, "direct peer close failed"
+                )
                 if gate_write >= 0:
                     os.close(gate_write)
                 if process.poll() is None:
@@ -2866,70 +5764,57 @@ class XcodeTestRunnerTests(unittest.TestCase):
         sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
         "requires Darwin peer audit tokens",
     )
-    def test_darwin_wrapper_handshake_converges_after_real_exec_stress(self) -> None:
+    def test_darwin_wrapper_peer_binding_survives_real_exec_stress(self) -> None:
         for iteration in range(40):
             with self.subTest(iteration=iteration):
-                reported, current, accepted = exercise_real_wrapper_exec_convergence()
-                self.assertTrue(run_xcode_tests.same_direct_process(reported, current))
-                self.assertNotEqual(reported.audit_token, current.audit_token)
-                self.assertTrue(
-                    run_xcode_tests.peer_identity_covers_exec_report(reported, accepted)
-                )
+                accepted, current = exercise_real_wrapper_peer_binding()
+                self.assertTrue(run_xcode_tests.same_direct_process(accepted, current))
+                self.assertNotEqual(accepted.audit_token, current.audit_token)
 
-    def test_wrapper_handshake_accepts_same_process_exec_generation(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
-        current = darwin_direct_identity(2222, 10, 21)
+    def test_wrapper_handshake_accepts_parent_bound_peer_identity(self) -> None:
+        current = darwin_direct_identity(2222, 10, 20)
         channel = run_xcode_tests.DirectChannel(
             -1,
             b"key",
-            wrapper=reported,
             wrapper_listener=91,
             wrapper_socket_path=Path("wrapper.sock"),
             peer_identity_required=True,
+            wrapper_ready=True,
         )
         process = mock.Mock(spec=subprocess.Popen)
-        process.pid = reported.pid
+        process.pid = current.pid
         with mock.patch.object(
             run_xcode_tests, "pump_direct_channel"
         ), mock.patch.object(
-            run_xcode_tests, "bind_direct_peer_identity", return_value=92
-        ) as bind, mock.patch.object(
             run_xcode_tests,
-            "await_peer_identity_covering_wrapper_report",
-            return_value=current,
-        ) as converge:
+            "bind_direct_wrapper_peer",
+            return_value=(92, current),
+        ) as bind:
             observed = run_xcode_tests.await_direct_identity(channel, process, None)
         self.assertEqual(observed, current)
         self.assertEqual(channel.wrapper, current)
         self.assertEqual(channel.wrapper_peer, 92)
-        bind.assert_called_once()
-        converge.assert_called_once()
+        self.assertEqual(channel.wrapper_listener, -1)
+        bind.assert_called_once_with(91, Path("wrapper.sock"), current.pid, mock.ANY)
 
-    def test_wrapper_handshake_rejects_process_birth_substitution(self) -> None:
-        reported = darwin_direct_identity(2222, 10, 20)
-        replacement = darwin_direct_identity(2222, 11, 21)
-        channel = run_xcode_tests.DirectChannel(
-            -1,
-            b"key",
-            wrapper=reported,
-            wrapper_listener=91,
-            wrapper_socket_path=Path("wrapper.sock"),
-            peer_identity_required=True,
-        )
-        process = mock.Mock(spec=subprocess.Popen)
-        process.pid = reported.pid
-        with mock.patch.object(run_xcode_tests, "pump_direct_channel"), mock.patch.object(
-            run_xcode_tests, "bind_direct_peer_identity", return_value=92
+    def test_wrapper_binding_rejects_process_substitution(self) -> None:
+        replacement = darwin_direct_identity(3333, 11, 21)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
         ), mock.patch.object(
             run_xcode_tests,
-            "await_peer_identity_covering_wrapper_report",
+            "await_direct_wrapper_peer_identity",
             return_value=replacement,
-        ):
+        ) as inspect, mock.patch.object(run_xcode_tests.os, "close") as close:
             with self.assertRaisesRegex(
                 run_xcode_tests.SimulatorLifecycleError,
                 "forged direct wrapper identity",
             ):
-                run_xcode_tests.await_direct_identity(channel, process, None)
+                run_xcode_tests.bind_direct_wrapper_peer(
+                    91, Path("wrapper.sock"), 2222, time.monotonic() + 1
+                )
+        inspect.assert_called_once_with(92, 2222, mock.ANY)
+        close.assert_called_once_with(92)
 
     def test_launchd_containment_rejects_identity_or_coalition_churn(self) -> None:
         original = run_xcode_tests.ProcessIdentity(2222, (10, 20))
@@ -2989,15 +5874,18 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ) as send, mock.patch.object(
             run_xcode_tests.os, "close", side_effect=OSError("descriptor busy")
         ) as close:
-            with self.assertRaisesRegex(
-                run_xcode_tests.SimulatorLifecycleError,
-                "identity inspection failed; Linux identity cleanup error: "
-                "pidfd close failed: descriptor busy",
+            with self.assertRaises(
+                run_xcode_tests.SimulatorLifecycleError
             ) as raised:
                 run_xcode_tests.signal_direct_identity(
                     identity, signal.SIGTERM, time.monotonic() + 1
                 )
         self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary), "identity inspection failed")
+        self.assertIn(
+            "Linux identity cleanup error: pidfd close failed: descriptor busy",
+            exception_evidence(primary),
+        )
         send.assert_not_called()
         close.assert_called_once_with(91)
 
@@ -3762,6 +6650,132 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertIsNotNone(writers[0].poll())
         self.assertLess(finished, deadline + 0.25)
 
+    def test_atomic_root_publication_interrupt_closes_real_descriptor(self) -> None:
+        captured: list[int] = []
+        real_open = run_xcode_tests.acquire_open_descriptor
+        open_descriptor = recorded_descriptor_acquisition(real_open, captured)
+
+        primary = DirectSpawnCleanupSignal("atomic root publication interrupted")
+        offset = unique_opcode_offset(
+            run_xcode_tests.open_atomic_directory, "STORE_FAST", "root"
+        )
+        with mock.patch.object(
+            run_xcode_tests, "acquire_open_descriptor", side_effect=open_descriptor
+        ):
+            interrupt_with_base_exception_at_opcode(
+                run_xcode_tests.open_atomic_directory,
+                offset,
+                lambda: run_xcode_tests.open_atomic_directory(Path("/")),
+                primary,
+            )
+        self.assertEqual(len(captured), 1)
+        with self.assertRaises(OSError):
+            os.fstat(captured[0])
+
+    def test_atomic_component_publication_interrupt_closes_real_descriptors(self) -> None:
+        captured: list[int] = []
+        real_open = run_xcode_tests.acquire_open_descriptor
+        open_descriptor = recorded_descriptor_acquisition(real_open, captured)
+
+        offsets = [
+            instruction.offset
+            for instruction in dis.get_instructions(
+                run_xcode_tests.open_atomic_directory
+            )
+            if instruction.opname == "POP_TOP"
+        ]
+        primary = DirectSpawnCleanupSignal("atomic component publication interrupted")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            run_xcode_tests, "acquire_open_descriptor", side_effect=open_descriptor
+        ):
+            path = run_xcode_tests.canonical_atomic_path(Path(directory))
+            interrupt_with_base_exception_at_opcode(
+                run_xcode_tests.open_atomic_directory,
+                offsets[0],
+                lambda: run_xcode_tests.open_atomic_directory(path),
+                primary,
+            )
+        self.assertGreaterEqual(len(captured), 2)
+        for descriptor in captured:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_atomic_temporary_publication_interrupt_closes_real_descriptors(self) -> None:
+        captured: list[int] = []
+        real_open = run_xcode_tests.acquire_open_descriptor
+        open_descriptor = recorded_descriptor_acquisition(real_open, captured)
+
+        primary = DirectSpawnCleanupSignal("atomic temporary publication interrupted")
+        offset = unique_opcode_offset(
+            run_xcode_tests.open_atomic_write, "STORE_FAST", "descriptor"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "acknowledgement.json"
+            temporary = explicit_atomic_temporary(target)
+            with mock.patch.object(
+                run_xcode_tests, "acquire_open_descriptor", side_effect=open_descriptor
+            ):
+                interrupt_with_base_exception_at_opcode(
+                    run_xcode_tests.open_atomic_write,
+                    offset,
+                    lambda: run_xcode_tests.open_atomic_write(target, temporary),
+                    primary,
+                )
+        self.assertGreaterEqual(len(captured), 2)
+        for descriptor in captured:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_atomic_duplicate_publication_interrupt_closes_real_fd(self) -> None:
+        descriptor, peer = os.pipe()
+        duplicates: list[int] = []
+        real_dup = run_xcode_tests.acquire_duplicate_descriptor
+        duplicate = recorded_descriptor_acquisition(real_dup, duplicates)
+
+        primary = DirectSpawnCleanupSignal("atomic duplicate publication interrupted")
+        offset = unique_opcode_offset(
+            run_xcode_tests.open_atomic_stream, "STORE_DEREF", "duplicate"
+        )
+        try:
+            with mock.patch.object(
+                run_xcode_tests, "acquire_duplicate_descriptor", side_effect=duplicate
+            ):
+                interrupt_with_base_exception_at_opcode(
+                    run_xcode_tests.open_atomic_stream,
+                    offset,
+                    lambda: run_xcode_tests.open_atomic_stream(descriptor),
+                    primary,
+                )
+            primary.__traceback__ = None
+            gc.collect()
+            os.fstat(descriptor)
+            with self.assertRaises(OSError):
+                os.fstat(duplicates[0])
+        finally:
+            os.close(descriptor)
+            os.close(peer)
+
+    def test_atomic_fdopen_failure_closes_real_duplicate(self) -> None:
+        descriptor, peer = os.pipe()
+        duplicates: list[int] = []
+        real_dup = run_xcode_tests.acquire_duplicate_descriptor
+        primary = DirectSpawnCleanupSignal("atomic fdopen interrupted")
+        duplicate = recorded_descriptor_acquisition(real_dup, duplicates)
+
+        try:
+            with mock.patch.object(
+                run_xcode_tests, "acquire_duplicate_descriptor", side_effect=duplicate
+            ), mock.patch.object(run_xcode_tests.os, "fdopen", side_effect=primary):
+                with self.assertRaises(DirectSpawnCleanupSignal) as raised:
+                    run_xcode_tests.open_atomic_stream(descriptor)
+            self.assertIs(raised.exception, primary)
+            os.fstat(descriptor)
+            with self.assertRaises(OSError):
+                os.fstat(duplicates[0])
+        finally:
+            os.close(descriptor)
+            os.close(peer)
+
     def test_atomic_stream_failures_remove_temporary_file(self) -> None:
         for operation in ("write", "flush"):
             with self.subTest(
@@ -4111,7 +7125,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), self.assertRaises(OSError) as raised:
                 run_xcode_tests.write_atomic_bytes(target, b"replacement")
             self.assertIs(raised.exception, primary)
-            self.assertIn("forced cleanup sync failure", str(primary))
+            self.assertEqual(str(primary), "forced commit sync failure")
+            self.assertIn(
+                "forced cleanup sync failure", exception_evidence(primary)
+            )
             self.assertEqual(target.read_bytes(), b"original")
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
 
@@ -4163,10 +7180,12 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 ), self.assertRaises(OSError) as raised:
                     run_xcode_tests.write_inherited_atomic_temporary(
                         target, temporary, descriptor, directory_descriptor, b"payload"
-                    )
+                )
                 self.assertIs(raised.exception, primary)
-                self.assertIn("primary write failure", str(primary))
-                self.assertIn("forced inherited close failure", str(primary))
+                self.assertEqual(str(primary), "primary write failure")
+                self.assertIn(
+                    "forced inherited close failure", exception_evidence(primary)
+                )
             finally:
                 original_close(descriptor)
                 original_close(directory_descriptor)
@@ -4188,20 +7207,24 @@ class XcodeTestRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "acknowledgement.json"
             target.write_bytes(b"original")
+            primary = OSError("primary fsync failure")
+            cleanup = OSError("cleanup unlink failure")
             with mock.patch.object(
                 run_xcode_tests.os,
                 "fsync",
-                side_effect=OSError("primary fsync failure"),
+                side_effect=primary,
             ), mock.patch.object(
                 run_xcode_tests.os,
                 "unlink",
-                side_effect=OSError("cleanup unlink failure"),
-            ), self.assertRaisesRegex(
-                OSError,
-                "primary fsync failure; atomic temporary cleanup failed: "
-                "cleanup unlink failure",
-            ):
+                side_effect=cleanup,
+            ), self.assertRaises(OSError) as raised:
                 run_xcode_tests.write_atomic_bytes(target, b"acknowledgement")
+            self.assertIs(raised.exception, primary)
+            self.assertEqual(str(primary), "primary fsync failure")
+            self.assertIn(
+                "atomic temporary cleanup failed: cleanup unlink failure",
+                exception_evidence(primary),
+            )
             self.assertEqual(target.read_bytes(), b"original")
             self.assertEqual(len(list(Path(directory).glob("*.tmp"))), 1)
 
@@ -4240,12 +7263,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests.subprocess, "Popen", return_value=process
             ), mock.patch.object(
                 run_xcode_tests, "terminate_bounded_writer", side_effect=cleanup
-            ), self.assertRaisesRegex(
-                OSError,
-                "containment acknowledgement write deadline expired; containment "
-                "acknowledgement writer cleanup failed: containment acknowledgement "
-                "writer could not be terminated",
-            ) as raised:
+            ), self.assertRaises(OSError) as raised:
                 run_xcode_tests.write_bytes_bounded(
                     target,
                     b"acknowledgement",
@@ -4253,6 +7271,15 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
                     "containment acknowledgement",
                 )
+            self.assertEqual(
+                str(raised.exception),
+                "containment acknowledgement write deadline expired",
+            )
+            self.assertIn(
+                "containment acknowledgement writer cleanup failed: containment "
+                "acknowledgement writer could not be terminated",
+                exception_evidence(raised.exception),
+            )
             self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
             self.assertEqual(target.read_bytes(), b"original")
             self.assertFalse(temporary.exists())
@@ -4282,8 +7309,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
                     "containment acknowledgement",
                 )
-            message = str(raised.exception)
-            self.assertIn("write deadline expired", message)
+            self.assertEqual(
+                str(raised.exception),
+                "containment acknowledgement write deadline expired",
+            )
+            message = exception_evidence(raised.exception)
             self.assertIn("forced kill failure", message)
             self.assertIn("could not be terminated", message)
             self.assertIn("forced stdin close failure", message)
@@ -4431,8 +7461,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 )
             self.assertLess(time.monotonic(), deadline + 0.25)
             self.assertIn("forced directory sync failure", str(raised.exception))
-            self.assertIn("rollback failed", str(raised.exception))
-            self.assertIn("deadline expired", str(raised.exception))
+            evidence = exception_evidence(raised.exception)
+            self.assertIn("rollback failed", evidence)
+            self.assertIn("deadline expired", evidence)
             self.assertEqual(target.read_bytes(), b"original")
             self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
             assert_hung_sync_reaped(self, root)
@@ -5035,13 +8066,16 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "cleanup_direct_job", side_effect=cleanup_error
             ) as cleanup:
-                with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError,
-                    "invalid direct channel message; direct cleanup error: "
-                    "direct process cleanup incomplete",
+                with self.assertRaises(
+                    run_xcode_tests.SimulatorLifecycleError
                 ) as raised:
                     run_xcode_tests.direct_lifecycle_process(["target"], 1, None)
         self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary), "invalid direct channel message")
+        self.assertIn(
+            "direct cleanup error: direct process cleanup incomplete",
+            exception_evidence(primary),
+        )
         cleanup.assert_called_once_with(job, None, True)
         self.assertFalse(job.root.exists())
 
@@ -5180,7 +8214,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         try:
             result = operation(job)
         except run_xcode_tests.SimulatorLifecycleError as error:
-            return str(error)
+            return exception_evidence(error)
         return result if isinstance(result, str) else None
 
     def hosted_cleanup_deadlines(
@@ -5794,13 +8828,17 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ) as abort, mock.patch.object(
                 run_xcode_tests.shutil, "rmtree", side_effect=OSError("root busy")
             ) as remove:
-                with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError,
-                    "bootstrap failed; launchd setup cleanup error: containment abort "
-                    "failed: abort failed; setup root removal failed: root busy",
+                with self.assertRaises(
+                    run_xcode_tests.SimulatorLifecycleError
                 ) as raised:
                     run_xcode_tests.spawn_contained_job(["target"], False, deadline)
         self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary), "bootstrap failed")
+        self.assertIn(
+            "launchd setup cleanup error: containment abort failed: abort failed; "
+            "setup root removal failed: root busy",
+            exception_evidence(primary),
+        )
         abort.assert_called_once_with(
             job, None, deadline, run_xcode_tests.CLEANUP_RESERVE_SECONDS
         )
@@ -6047,15 +9085,18 @@ class XcodeTestRunnerTests(unittest.TestCase):
             ), mock.patch.object(
                 run_xcode_tests, "cleanup_contained_job", side_effect=cleanup_error
             ) as cleanup:
-                with self.assertRaisesRegex(
-                    run_xcode_tests.SimulatorLifecycleError,
-                    "invalid xcodebuild status; xcodebuild cleanup error: containment "
-                    "cleanup failed: containment stuck",
+                with self.assertRaises(
+                    run_xcode_tests.SimulatorLifecycleError
                 ) as raised:
                     run_xcode_tests.run_attempt(
                         args, args.command, io.StringIO(), 1, 0.0, []
                     )
         self.assertIs(raised.exception, primary)
+        self.assertEqual(str(primary), "invalid xcodebuild status")
+        self.assertIn(
+            "xcodebuild cleanup error: containment cleanup failed: containment stuck",
+            exception_evidence(primary),
+        )
         cleanup.assert_called_once_with(job, args.wall_deadline, True)
         self.assertFalse(job.root.exists())
 

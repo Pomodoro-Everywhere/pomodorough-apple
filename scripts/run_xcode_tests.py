@@ -8,6 +8,7 @@ import codecs
 import ctypes
 from dataclasses import dataclass, field, replace
 import errno
+import fcntl
 import hashlib
 import hmac
 import json
@@ -29,6 +30,7 @@ import time
 from typing import Callable, Iterable, TextIO, TypeVar, cast
 
 
+DIRECT_SOCKET_TYPE = socket.socket
 FINAL_TEST_MARKERS = (
     re.compile(
         r"Test Suite 'All tests' passed[^\n]*\n\s*Executed [1-9][0-9]* tests, with 0 failures"
@@ -281,6 +283,287 @@ class OperationDeadlineExpired(SimulatorLifecycleError):
 
 
 DeadlineResult = TypeVar("DeadlineResult")
+DESCRIPTOR_CLOSE_LOCK = threading.RLock()
+
+
+@dataclass
+class DescriptorCloseState:
+    descriptor: int
+    identity: tuple[int, int, int, int] | None = None
+    identity_captured: bool = False
+    closed: bool = False
+    uncertain: bool = False
+
+
+def descriptor_identity(descriptor: int) -> tuple[int, int, int, int] | None:
+    try:
+        status = os.fstat(descriptor)
+    except OSError as error:
+        if error.errno == errno.EBADF:
+            return None
+        raise
+    return (status.st_dev, status.st_ino, stat.S_IFMT(status.st_mode), status.st_rdev)
+
+
+def descriptor_close_completed(
+    descriptor: int, identity: tuple[int, int, int, int]
+) -> bool:
+    return descriptor_identity(descriptor) != identity
+
+
+def descriptor_close_required(state: DescriptorCloseState) -> bool:
+    identity = descriptor_identity(state.descriptor)
+    if not state.identity_captured:
+        state.identity = identity
+        state.identity_captured = True
+        state.uncertain = False
+        return True
+    if state.identity is None or identity != state.identity:
+        state.closed = True
+        state.uncertain = False
+        return False
+    state.uncertain = False
+    return True
+
+
+def record_descriptor_close_error(
+    state: DescriptorCloseState, primary_error: BaseException
+) -> None:
+    if state.identity is None:
+        state.closed = True
+        state.uncertain = False
+        return
+    try:
+        state.closed = descriptor_close_completed(state.descriptor, state.identity)
+        state.uncertain = False
+    except BaseException as state_error:
+        state.uncertain = True
+        append_secondary_error(
+            primary_error, "descriptor close state check failed", state_error
+        )
+
+
+def close_descriptor_transition(
+    descriptor: int,
+    disarm: Callable[[], None],
+    state: DescriptorCloseState | None = None,
+) -> None:
+    close_state = state or DescriptorCloseState(descriptor)
+    previous_trace = sys.gettrace()
+    sys.settrace(None)
+    try:
+        if close_state.closed or not descriptor_close_required(close_state):
+            disarm()
+            return
+        try:
+            os.close(descriptor)
+        except BaseException as primary_error:
+            record_descriptor_close_error(close_state, primary_error)
+            if close_state.closed:
+                try:
+                    disarm()
+                except BaseException as state_error:
+                    append_secondary_error(
+                        primary_error,
+                        "descriptor close ownership disarm failed",
+                        state_error,
+                    )
+            raise
+        close_state.closed = True
+        close_state.uncertain = False
+        disarm()
+    finally:
+        sys.settrace(previous_trace)
+
+
+class AcquiredDescriptor(ctypes.c_int):
+    def fileno(self) -> int:
+        return self.value
+
+    def release(self) -> int:
+        with DESCRIPTOR_CLOSE_LOCK:
+            descriptor = self.value
+            self.value = -1
+            self._descriptor_close_state = None
+            return descriptor
+
+    def _close_state(self, descriptor: int) -> DescriptorCloseState:
+        state = getattr(self, "_descriptor_close_state", None)
+        if not isinstance(state, DescriptorCloseState) or state.descriptor != descriptor:
+            state = DescriptorCloseState(descriptor)
+            self._descriptor_close_state = state
+        return state
+
+    def _disarm_closed(self, descriptor: int) -> None:
+        if self.value == descriptor:
+            self.value = -1
+            self._descriptor_close_state = None
+
+    def _close_owned(self) -> None:
+        with DESCRIPTOR_CLOSE_LOCK:
+            descriptor = self.value
+            if descriptor >= 0:
+                close_descriptor_transition(
+                    descriptor,
+                    lambda: self._disarm_closed(descriptor),
+                    self._close_state(descriptor),
+                )
+
+    def close(self) -> None:
+        with DESCRIPTOR_CLOSE_LOCK:
+            if self.value < 0:
+                return
+        try:
+            interruption_safe_call(self._close_owned)
+        except BaseException as primary_error:
+            recover_control_interrupted_close(self._close_owned, primary_error)
+            raise
+        descriptor = self.release()
+        if descriptor >= 0:
+            raise SimulatorLifecycleError("descriptor close ownership remained armed")
+
+    def __del__(self) -> None:
+        try:
+            finalize_descriptor_close(self._close_owned, self.close)
+        except BaseException:
+            pass
+
+
+LIBSYSTEM.open.argtypes = (ctypes.c_char_p, ctypes.c_int)
+LIBSYSTEM.open.restype = AcquiredDescriptor
+LIBSYSTEM.openat.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
+LIBSYSTEM.openat.restype = AcquiredDescriptor
+LIBSYSTEM.fcntl.argtypes = (ctypes.c_int, ctypes.c_int)
+LIBSYSTEM.fcntl.restype = AcquiredDescriptor
+LIBSYSTEM.pipe2.argtypes = (ctypes.POINTER(ctypes.c_int), ctypes.c_int)
+LIBSYSTEM.pipe2.restype = ctypes.c_int
+
+
+def require_acquired_descriptor(
+    descriptor: AcquiredDescriptor, path: str | bytes | Path | None = None
+) -> AcquiredDescriptor:
+    if descriptor.fileno() >= 0:
+        return descriptor
+    error = ctypes.get_errno()
+    if path is None:
+        raise OSError(error, os.strerror(error))
+    raise OSError(error, os.strerror(error), path)
+
+
+def acquire_open_descriptor(
+    path: str | bytes | Path,
+    flags: int,
+    mode: int = 0,
+    directory_descriptor: int | None = None,
+) -> AcquiredDescriptor:
+    encoded = os.fsencode(path)
+    atomic_flags = flags | getattr(os, "O_CLOEXEC", 0)
+    ctypes.set_errno(0)
+    if directory_descriptor is None:
+        result = LIBSYSTEM.open(encoded, atomic_flags, mode)
+    else:
+        result = LIBSYSTEM.openat(directory_descriptor, encoded, atomic_flags, mode)
+    return require_acquired_descriptor(result, path)
+
+
+def acquire_duplicate_descriptor(descriptor: int) -> AcquiredDescriptor:
+    ctypes.set_errno(0)
+    result = LIBSYSTEM.fcntl(descriptor, fcntl.F_DUPFD_CLOEXEC, 0)
+    return require_acquired_descriptor(result)
+
+
+def acquire_pipe_descriptors() -> tuple[AcquiredDescriptor, AcquiredDescriptor]:
+    storage = (ctypes.c_int * 2)(-1, -1)
+    read_descriptor = AcquiredDescriptor.from_buffer(storage, 0)
+    write_descriptor = AcquiredDescriptor.from_buffer(
+        storage, ctypes.sizeof(ctypes.c_int)
+    )
+    ctypes.set_errno(0)
+    try:
+        result = LIBSYSTEM.pipe2(storage, getattr(os, "O_CLOEXEC", 0))
+    except BaseException as error:
+        complete_owned_cleanup(
+            [
+                ("direct pipe read close failed", read_descriptor.close),
+                ("direct pipe write close failed", write_descriptor.close),
+            ],
+            error,
+        )
+        raise
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return read_descriptor, write_descriptor
+
+
+def interruption_safe_call(
+    operation: Callable[[], DeadlineResult],
+) -> DeadlineResult:
+    completed = threading.Event()
+    outcome: list[tuple[bool, object]] = []
+
+    def invoke() -> None:
+        try:
+            outcome.append((True, operation()))
+        except BaseException as error:
+            outcome.append((False, error))
+        finally:
+            completed.set()
+
+    worker = threading.Thread(target=invoke, daemon=True)
+    try:
+        worker.start()
+        completed.wait()
+    except BaseException as primary_error:
+        if worker.ident is not None:
+            while not completed.is_set():
+                try:
+                    completed.wait()
+                except BaseException as cleanup_error:
+                    append_secondary_error(
+                        primary_error, "ownership handoff wait failed", cleanup_error
+                    )
+        raise
+    succeeded, value = outcome[0]
+    if succeeded:
+        return cast(DeadlineResult, value)
+    raise cast(BaseException, value)
+
+
+def recover_control_interrupted_close(
+    operation: Callable[[], None],
+    primary_error: BaseException,
+    inline: bool = False,
+) -> None:
+    if isinstance(primary_error, Exception):
+        return
+    try:
+        if inline:
+            operation()
+        else:
+            interruption_safe_call(operation)
+    except BaseException as cleanup_error:
+        append_secondary_error(
+            primary_error, "descriptor close recovery failed", cleanup_error
+        )
+
+
+def descriptor_close_lock_owned_by_current_thread() -> bool:
+    ownership_check = getattr(DESCRIPTOR_CLOSE_LOCK, "_is_owned", None)
+    return True if ownership_check is None else bool(ownership_check())
+
+
+def finalize_descriptor_close(
+    operation: Callable[[], None], close: Callable[[], None]
+) -> None:
+    if not descriptor_close_lock_owned_by_current_thread():
+        close()
+        return
+    try:
+        operation()
+    except BaseException as primary_error:
+        recover_control_interrupted_close(operation, primary_error, inline=True)
+        raise
 
 
 @dataclass(frozen=True)
@@ -322,6 +605,105 @@ class ProcessIdentity:
     audit_token: tuple[int, ...] | None = None
 
 
+@dataclass(eq=False)
+class DirectDescriptorOwner:
+    descriptor: int | AcquiredDescriptor
+    source_descriptors: set[int] | None = None
+    _armed: bool = field(default=True, init=False, repr=False)
+    _pending_descriptor: int = field(default=-1, init=False, repr=False)
+    _pending_close_state: DescriptorCloseState | None = field(
+        default=None, init=False, repr=False
+    )
+
+    def fileno(self) -> int:
+        if isinstance(self.descriptor, AcquiredDescriptor):
+            return self.descriptor.fileno()
+        return self.descriptor
+
+    def __index__(self) -> int:
+        return self.fileno()
+
+    def __int__(self) -> int:
+        return self.fileno()
+
+    def __str__(self) -> str:
+        return str(self.fileno())
+
+    def _close_pending(self) -> None:
+        with DESCRIPTOR_CLOSE_LOCK:
+            descriptor = self._pending_descriptor
+            if descriptor >= 0:
+                if self._pending_close_state is None:
+                    self._pending_close_state = DescriptorCloseState(descriptor)
+                close_descriptor_transition(
+                    descriptor,
+                    lambda: self._disarm_closed(descriptor),
+                    self._pending_close_state,
+                )
+        self._pending_descriptor = -1
+        self._pending_close_state = None
+        self._armed = False
+
+    def _disarm_closed(self, descriptor: int) -> None:
+        if self._pending_descriptor == descriptor:
+            self._pending_descriptor = -1
+            self._pending_close_state = None
+            self._armed = False
+
+    def disarm_alias(self, descriptor: int) -> None:
+        with DESCRIPTOR_CLOSE_LOCK:
+            if self._armed and self.fileno() == descriptor:
+                if isinstance(self.descriptor, AcquiredDescriptor):
+                    self.descriptor = self.descriptor.release()
+                self._armed = False
+
+    def _close_owned(self) -> None:
+        with DESCRIPTOR_CLOSE_LOCK:
+            if not self._armed:
+                return
+            if self._pending_descriptor < 0:
+                descriptor = self.fileno()
+                if descriptor < 0:
+                    self._armed = False
+                    return
+                if (
+                    self.source_descriptors is not None
+                    and descriptor in self.source_descriptors
+                ):
+                    return
+                self._pending_descriptor = descriptor
+            if isinstance(self.descriptor, AcquiredDescriptor):
+                self.descriptor.release()
+            self.descriptor = -1
+        self._close_pending()
+
+    def close(self) -> None:
+        try:
+            interruption_safe_call(self._close_owned)
+        except BaseException as primary_error:
+            recover_control_interrupted_close(self._close_owned, primary_error)
+            raise
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, DirectDescriptorOwner):
+            return self.fileno() == other.fileno()
+        return self.fileno() == other
+
+    def __del__(self) -> None:
+        try:
+            finalize_descriptor_close(self._close_owned, self.close)
+        except BaseException:
+            pass
+
+
+DirectPeer = int | DirectDescriptorOwner | socket.socket
+OwnedDescriptor = int | DirectDescriptorOwner
+
+
+def descriptor_number(descriptor: OwnedDescriptor) -> int:
+    return descriptor if isinstance(descriptor, int) else descriptor.fileno()
+
+
 @dataclass(frozen=True)
 class DarwinDirectAncestry:
     identity: ProcessIdentity
@@ -345,13 +727,29 @@ class DirectChannel:
     returncode: int | None = None
     failure: str | None = None
     closed: bool = False
+    descriptor_owner: DirectDescriptorOwner | None = None
     wrapper_listener: int = -1
-    wrapper_peer: int = -1
+    wrapper_listener_owner: DirectDescriptorOwner | None = None
+    wrapper_pending_peer: DirectPeer = -1
+    wrapper_peer: DirectPeer = -1
     target_listener: int = -1
-    target_peer: int = -1
+    target_listener_owner: DirectDescriptorOwner | None = None
+    target_pending_peer: DirectPeer = -1
+    target_peer: DirectPeer = -1
     wrapper_socket_path: Path | None = None
     target_socket_path: Path | None = None
     peer_identity_required: bool = False
+    wrapper_ready: bool = False
+
+    def __post_init__(self) -> None:
+        if self.descriptor_owner is None and self.descriptor >= 0:
+            self.descriptor_owner = DirectDescriptorOwner(self.descriptor)
+        if self.wrapper_listener_owner is None and self.wrapper_listener >= 0:
+            self.wrapper_listener_owner = DirectDescriptorOwner(
+                self.wrapper_listener
+            )
+        if self.target_listener_owner is None and self.target_listener >= 0:
+            self.target_listener_owner = DirectDescriptorOwner(self.target_listener)
 
 
 @dataclass
@@ -540,14 +938,20 @@ def darwin_task_audit_token(task: int, pid: int) -> tuple[int, ...] | None:
 
 
 def darwin_peer_audit_token(descriptor: int, pid: int) -> tuple[int, ...] | None:
-    peer = socket.socket(fileno=descriptor)
+    try:
+        peer = duplicate_direct_socket(descriptor)
+    except BaseException:
+        return None
+    content = None
     try:
         content = peer.getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN, ctypes.sizeof(AuditToken))
-    except OSError:
+    except BaseException:
+        content = None
+    try:
+        peer.close()
+    except BaseException:
         return None
-    finally:
-        peer.detach()
-    if len(content) != ctypes.sizeof(AuditToken):
+    if content is None or len(content) != ctypes.sizeof(AuditToken):
         return None
     token_values = tuple(AuditToken.from_buffer_copy(content).values)
     if token_values[5] != pid or token_values[7] <= 0:
@@ -564,13 +968,13 @@ def darwin_socketpair_audit_token(pid: int) -> tuple[int, ...] | None:
     closed = True
     try:
         token = darwin_peer_audit_token(local.fileno(), pid)
-    except OSError:
+    except BaseException:
         token = None
     finally:
         for endpoint in (local, peer):
             try:
                 endpoint.close()
-            except OSError:
+            except BaseException:
                 closed = False
     return token if closed else None
 
@@ -1080,8 +1484,8 @@ def atomic_temporary_path(path: Path) -> Path:
 class AtomicWrite:
     destination: Path
     temporary: Path
-    descriptor: int
-    directory_descriptor: int
+    descriptor: OwnedDescriptor
+    directory_descriptor: OwnedDescriptor
     directory_identity: tuple[int, int]
     destination_name: str
     temporary_name: str
@@ -1120,27 +1524,60 @@ def validated_atomic_paths(path: Path, temporary: Path) -> tuple[Path, Path]:
 
 
 def close_atomic_descriptors(
-    descriptors: Iterable[int], primary_error: BaseException | None
+    descriptors: Iterable[OwnedDescriptor], primary_error: BaseException | None
 ) -> None:
     first_error = primary_error
     for descriptor in descriptors:
         try:
-            os.close(descriptor)
+            if isinstance(descriptor, DirectDescriptorOwner):
+                descriptor.close()
+            else:
+                os.close(descriptor)
         except BaseException as error:
             if first_error is None:
                 first_error = error
             else:
-                append_error_detail(first_error, f"atomic descriptor close failed: {error}")
+                append_secondary_error(first_error, "atomic descriptor close failed", error)
     if primary_error is None and first_error is not None:
         raise first_error
 
 
-def open_atomic_directory(path: Path) -> int:
+def append_atomic_descriptor(
+    descriptors: list[OwnedDescriptor], descriptor: int | AcquiredDescriptor
+) -> DirectDescriptorOwner:
+    owner = DirectDescriptorOwner(descriptor)
+    descriptors.append(owner)
+    return owner
+
+
+def prepend_atomic_descriptor(
+    descriptors: list[OwnedDescriptor], descriptor: int | AcquiredDescriptor
+) -> DirectDescriptorOwner:
+    owner = DirectDescriptorOwner(descriptor)
+    descriptors.insert(0, owner)
+    return owner
+
+
+def open_atomic_directory(path: Path) -> OwnedDescriptor:
     flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-    descriptors = [os.open("/", flags)]
+    descriptors: list[OwnedDescriptor] = []
     try:
+        root = interruption_safe_call(
+            lambda: append_atomic_descriptor(
+                descriptors, acquire_open_descriptor("/", flags)
+            )
+        )
         for component in path.parts[1:]:
-            descriptors.append(os.open(component, flags, dir_fd=descriptors[-1]))
+            interruption_safe_call(
+                lambda component=component: append_atomic_descriptor(
+                    descriptors,
+                    acquire_open_descriptor(
+                        component,
+                        flags,
+                        directory_descriptor=descriptor_number(descriptors[-1]),
+                    ),
+                )
+            )
     except BaseException as error:
         close_atomic_descriptors(reversed(descriptors), error)
         raise
@@ -1173,7 +1610,7 @@ def sync_atomic_directory(
     label: str = "atomic directory synchronization",
 ) -> None:
     if deadline is None:
-        os.fsync(write.directory_descriptor)
+        os.fsync(descriptor_number(write.directory_descriptor))
         return
     sync_atomic_directory_bounded(write, deadline, label)
 
@@ -1187,7 +1624,7 @@ def acknowledge_atomic_namespace(
     try:
         sync_atomic_directory(write, deadline, label)
     except BaseException as sync_error:
-        append_error_detail(primary_error, f"{label} durability failed: {sync_error}")
+        append_secondary_error(primary_error, f"{label} durability failed", sync_error)
 
 
 def atomic_entry_identity(
@@ -1195,7 +1632,9 @@ def atomic_entry_identity(
 ) -> tuple[int, int] | None:
     try:
         status = os.stat(
-            name, dir_fd=write.directory_descriptor, follow_symlinks=False
+            name,
+            dir_fd=descriptor_number(write.directory_descriptor),
+            follow_symlinks=False,
         )
     except FileNotFoundError:
         if missing:
@@ -1216,7 +1655,11 @@ def atomic_destination_identity(write: AtomicWrite) -> tuple[int, int] | None:
 
 def atomic_entry_exists(write: AtomicWrite, name: str) -> bool:
     try:
-        os.stat(name, dir_fd=write.directory_descriptor, follow_symlinks=False)
+        os.stat(
+            name,
+            dir_fd=descriptor_number(write.directory_descriptor),
+            follow_symlinks=False,
+        )
     except FileNotFoundError:
         return False
     return True
@@ -1225,7 +1668,9 @@ def atomic_entry_exists(write: AtomicWrite, name: str) -> bool:
 def atomic_raw_identity(write: AtomicWrite, name: str) -> tuple[int, int] | None:
     try:
         status = os.stat(
-            name, dir_fd=write.directory_descriptor, follow_symlinks=False
+            name,
+            dir_fd=descriptor_number(write.directory_descriptor),
+            follow_symlinks=False,
         )
     except FileNotFoundError:
         return None
@@ -1234,7 +1679,7 @@ def atomic_raw_identity(write: AtomicWrite, name: str) -> tuple[int, int] | None
 
 def validate_atomic_temporary_file(write: AtomicWrite) -> None:
     try:
-        descriptor_status = os.fstat(write.descriptor)
+        descriptor_status = os.fstat(descriptor_number(write.descriptor))
         path_identity = atomic_entry_identity(
             write, write.temporary_name, "atomic temporary file"
         )
@@ -1265,7 +1710,7 @@ def remove_atomic_temporary(
         identity_error = OSError("atomic temporary cleanup identity changed")
         if primary_error is None:
             raise identity_error from error
-        append_error_detail(primary_error, str(identity_error))
+        append_error_detail(primary_error, safe_exception_text(identity_error))
         return
     if identity is None or write.cleanup_identity is None:
         return
@@ -1273,15 +1718,20 @@ def remove_atomic_temporary(
         cleanup_error = OSError("atomic temporary cleanup identity changed")
         if primary_error is None:
             raise cleanup_error
-        append_error_detail(primary_error, str(cleanup_error))
+        append_error_detail(primary_error, safe_exception_text(cleanup_error))
         return
     try:
-        os.unlink(write.temporary_name, dir_fd=write.directory_descriptor)
+        os.unlink(
+            write.temporary_name,
+            dir_fd=descriptor_number(write.directory_descriptor),
+        )
         sync_atomic_directory(write, deadline, label)
     except BaseException as cleanup_error:
         if primary_error is None:
             raise
-        append_error_detail(primary_error, f"atomic temporary cleanup failed: {cleanup_error}")
+        append_secondary_error(
+            primary_error, "atomic temporary cleanup failed", cleanup_error
+        )
 
 
 def close_atomic_write(
@@ -1292,14 +1742,12 @@ def close_atomic_write(
 ) -> None:
     first_error = primary_error
     try:
-        os.close(write.descriptor)
+        close_atomic_descriptors((write.descriptor,), None)
     except BaseException as error:
         if first_error is None:
             first_error = error
         else:
-            append_error_detail(
-                first_error, f"atomic descriptor close failed: {error}"
-            )
+            append_secondary_error(first_error, "atomic descriptor close failed", error)
     try:
         validate_atomic_directory(write)
     except BaseException as error:
@@ -1308,21 +1756,23 @@ def close_atomic_write(
         if first_error is None:
             first_error = error
         else:
-            append_error_detail(first_error, f"atomic directory changed: {error}")
+            append_secondary_error(first_error, "atomic directory changed", error)
     try:
         remove_atomic_temporary(write, first_error, deadline, f"{label} cleanup")
     except BaseException as error:
         if first_error is None:
             first_error = error
         else:
-            append_error_detail(first_error, f"atomic temporary cleanup failed: {error}")
+            append_secondary_error(
+                first_error, "atomic temporary cleanup failed", error
+            )
     try:
         validate_atomic_directory(write)
     except BaseException as error:
         if first_error is None:
             first_error = error
         else:
-            append_error_detail(first_error, f"atomic directory changed: {error}")
+            append_secondary_error(first_error, "atomic directory changed", error)
     close_atomic_descriptors((write.directory_descriptor,), first_error)
     if primary_error is None and first_error is not None:
         raise first_error
@@ -1332,27 +1782,42 @@ def open_atomic_write(path: Path, temporary: Path | None = None) -> AtomicWrite:
     temporary = temporary or atomic_temporary_path(path)
     destination, candidate = validated_atomic_paths(path, temporary)
     directory_descriptor = open_atomic_directory(destination.parent)
-    directory_identity = atomic_file_identity(os.fstat(directory_descriptor))
-    placeholder = AtomicWrite(
-        destination, candidate, -1, directory_descriptor,
-        directory_identity, destination.name, candidate.name,
-        None, (-1, -1), None,
-    )
+    owned_descriptors = [directory_descriptor]
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
+        directory_identity = atomic_file_identity(
+            os.fstat(descriptor_number(directory_descriptor))
+        )
+        placeholder = AtomicWrite(
+            destination, candidate, -1, directory_descriptor,
+            directory_identity, destination.name, candidate.name,
+            None, (-1, -1), None,
+        )
         destination_identity = atomic_destination_identity(placeholder)
         if atomic_entry_exists(placeholder, candidate.name):
             raise OSError("atomic temporary path already exists")
-        descriptor = os.open(candidate.name, flags, 0o600, dir_fd=directory_descriptor)
+        descriptor = interruption_safe_call(
+            lambda: prepend_atomic_descriptor(
+                owned_descriptors,
+                acquire_open_descriptor(
+                    candidate.name,
+                    flags,
+                    0o600,
+                    directory_descriptor=descriptor_number(directory_descriptor),
+                ),
+            )
+        )
+        temporary_identity = atomic_file_identity(
+            os.fstat(descriptor_number(descriptor))
+        )
+        write = AtomicWrite(
+            destination, candidate, descriptor, directory_descriptor,
+            directory_identity, destination.name, candidate.name,
+            destination_identity, temporary_identity, temporary_identity,
+        )
     except BaseException as error:
-        close_atomic_descriptors((directory_descriptor,), error)
+        close_atomic_descriptors(owned_descriptors, error)
         raise
-    temporary_identity = atomic_file_identity(os.fstat(descriptor))
-    write = AtomicWrite(
-        destination, candidate, descriptor, directory_descriptor,
-        directory_identity, destination.name, candidate.name, destination_identity,
-        temporary_identity, temporary_identity,
-    )
     try:
         validate_atomic_temporary_file(write)
         validate_atomic_directory(write)
@@ -1362,8 +1827,29 @@ def open_atomic_write(path: Path, temporary: Path | None = None) -> AtomicWrite:
     return write
 
 
-def write_atomic_descriptor(descriptor: int, content: bytes) -> None:
-    stream = os.fdopen(os.dup(descriptor), "wb")
+def transfer_atomic_stream(duplicate: DirectDescriptorOwner) -> BinaryIO:
+    stream = os.fdopen(duplicate.fileno(), "wb")
+    duplicate.disarm_alias(stream.fileno())
+    return stream
+
+
+def open_atomic_stream(descriptor: OwnedDescriptor) -> BinaryIO:
+    duplicate = interruption_safe_call(
+        lambda: DirectDescriptorOwner(
+            acquire_duplicate_descriptor(descriptor_number(descriptor))
+        )
+    )
+    try:
+        return interruption_safe_call(lambda: transfer_atomic_stream(duplicate))
+    except BaseException as error:
+        complete_owned_cleanup(
+            [("atomic duplicate close failed", duplicate.close)], error
+        )
+        raise
+
+
+def write_atomic_descriptor(descriptor: OwnedDescriptor, content: bytes) -> None:
+    stream = interruption_safe_call(lambda: open_atomic_stream(descriptor))
     primary_error: BaseException | None = None
     try:
         stream.write(content)
@@ -1378,7 +1864,7 @@ def write_atomic_descriptor(descriptor: int, content: bytes) -> None:
         except BaseException as close_error:
             if primary_error is None:
                 raise
-            append_error_detail(primary_error, f"atomic stream close failed: {close_error}")
+            append_secondary_error(primary_error, "atomic stream close failed", close_error)
 
 
 def rename_atomic_entries(
@@ -1388,9 +1874,9 @@ def rename_atomic_entries(
     if sys.platform != "darwin" or not hasattr(LIBSYSTEM, "renameatx_np"):
         raise OSError(errno.ENOTSUP, "secure atomic replacement unavailable")
     result = LIBSYSTEM.renameatx_np(
-        write.directory_descriptor,
+        descriptor_number(write.directory_descriptor),
         os.fsencode(source),
-        write.directory_descriptor,
+        descriptor_number(write.directory_descriptor),
         os.fsencode(destination),
         flags,
     )
@@ -1497,8 +1983,8 @@ def commit_atomic_write(
         try:
             rollback_atomic_install(write, had_destination, deadline, f"{label} rollback")
         except BaseException as rollback_error:
-            append_error_detail(
-                error, f"atomic replacement rollback failed: {rollback_error}"
+            append_secondary_error(
+                error, "atomic replacement rollback failed", rollback_error
             )
             acknowledge_atomic_namespace(
                 write, error, f"{label} failure", deadline
@@ -1608,7 +2094,7 @@ def contained_child(
         write_atomic_json(status_path, {"returncode": returncode})
         return returncode
     except (OSError, SimulatorLifecycleError) as error:
-        write_atomic_json(status_path, {"error": str(error)})
+        write_atomic_json(status_path, {"error": safe_exception_text(error)})
         return PRETEST_INFRASTRUCTURE_FAILURE
 
 
@@ -1674,6 +2160,58 @@ def read_direct_key(descriptor: int) -> bytes:
     if len(content) != DIRECT_CHANNEL_KEY_BYTES:
         raise SimulatorLifecycleError("direct channel key unavailable")
     return bytes(content)
+
+
+def direct_wrapper_acknowledgement(identity: ProcessIdentity) -> bytes:
+    payload = identity_payload(identity)
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+
+def write_direct_wrapper_acknowledgement(
+    descriptor: int, identity: ProcessIdentity
+) -> None:
+    content = direct_wrapper_acknowledgement(identity)
+    if os.write(descriptor, content) != len(content):
+        raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
+
+
+def read_direct_wrapper_acknowledgement(
+    descriptor: int, deadline: float
+) -> ProcessIdentity:
+    content = bytearray()
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select(
+            [descriptor], [], [], bounded_wait(deadline, DESCENDANT_POLL_SECONDS)
+        )
+        if not ready:
+            continue
+        chunk = os.read(descriptor, DIRECT_CHANNEL_LIMIT_BYTES + 1 - len(content))
+        if not chunk:
+            break
+        content.extend(chunk)
+        if len(content) > DIRECT_CHANNEL_LIMIT_BYTES:
+            raise SimulatorLifecycleError("invalid direct wrapper acknowledgement")
+        if b"\n" not in content:
+            continue
+        frame, trailing = content.split(b"\n", 1)
+        if not frame or trailing:
+            raise SimulatorLifecycleError("invalid direct wrapper acknowledgement")
+        try:
+            payload = json.loads(frame)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SimulatorLifecycleError(
+                "invalid direct wrapper acknowledgement"
+            ) from error
+        if not isinstance(payload, dict) or set(payload) != {
+            "pid",
+            "started_at",
+            "audit_token",
+        }:
+            raise SimulatorLifecycleError("invalid direct wrapper acknowledgement")
+        return process_identity_from_payload(
+            payload, "direct wrapper acknowledgement"
+        )
+    raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
 
 
 def configure_direct_subreaper() -> None:
@@ -1847,57 +2385,64 @@ def direct_target_arguments(
     ]
 
 
+def direct_target_environment(marker: str | None) -> dict[str, str] | None:
+    if marker is None:
+        return None
+    environment = os.environ.copy()
+    environment[DIRECT_JOB_ENVIRONMENT] = marker
+    return environment
+
+
 def spawn_gated_direct_target(
-    command: list[str],
-    wrapper: ProcessIdentity,
-    reporter: DirectReporter,
-    parent_socket_path: str,
-    wrapper_socket_path: str,
+    command: list[str], wrapper: ProcessIdentity, reporter: DirectReporter,
+    parent_socket_path: str, wrapper_socket_path: str,
     marker: str | None = None,
-) -> tuple[subprocess.Popen[bytes], ProcessIdentity, int]:
-    gate_read, gate_write = os.pipe() if LIBPROC is None else (-1, -1)
-    listener = open_direct_listener(Path(wrapper_socket_path))
-    peer_descriptor = -1
-    arguments = direct_target_arguments(
-        gate_read, parent_socket_path, wrapper_socket_path, command
-    )
-    environment = None
-    completed = False
-    if marker is not None:
-        environment = os.environ.copy()
-        environment[DIRECT_JOB_ENVIRONMENT] = marker
+) -> tuple[subprocess.Popen[bytes], ProcessIdentity, DirectPeer]:
+    resources = DirectSpawnResources()
+    gate_read = gate_write = -1
+    peer: DirectPeer = -1
     try:
+        if LIBPROC is None:
+            gate_read, gate_write = acquire_direct_pipe(resources)
+        listener_descriptor = acquire_direct_listener(
+            resources, Path(wrapper_socket_path)
+        )
+        arguments = direct_target_arguments(
+            gate_read, parent_socket_path, wrapper_socket_path, command
+        )
         process = subprocess.Popen(
             arguments,
-            env=environment,
+            env=direct_target_environment(marker),
             pass_fds=(gate_read,) if gate_read >= 0 else (),
             start_new_session=True,
         )
+        resources.process = process
         if gate_read >= 0:
-            os.close(gate_read)
+            close_direct_descriptor(resources.descriptors, gate_read)
             gate_read = -1
         handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
-        peer_descriptor = accept_direct_peer(listener.fileno(), handshake_by)
-        listener.close()
+        peer = owned_direct_peer(
+            accept_direct_peer(listener_descriptor, handshake_by)
+        )
+        close_direct_descriptor(resources.descriptors, listener_descriptor)
         identity = direct_target_identity(
-            process, wrapper, peer_descriptor, handshake_by
+            process, wrapper, direct_descriptor(peer), handshake_by
         )
         report_direct_event(
             reporter, {"event": "target", "identity": identity_payload(identity)}
         )
         if gate_write >= 0:
             os.write(gate_write, b"1")
-            os.close(gate_write)
+            close_direct_descriptor(resources.descriptors, gate_write)
             gate_write = -1
-        completed = True
-        return process, identity, peer_descriptor
-    finally:
-        listener.close()
-        for descriptor in (gate_read, gate_write):
-            if descriptor >= 0:
-                os.close(descriptor)
-        if not completed and peer_descriptor >= 0:
-            os.close(peer_descriptor)
+        resources.process = None
+        return process, identity, peer
+    except BaseException as error:
+        close_direct_peer_owner(
+            peer, error, "direct target identity cleanup error: peer close failed"
+        )
+        append_direct_spawn_cleanup(error, cleanup_direct_spawn(resources, None))
+        raise
 
 
 def refresh_direct_target_identity(
@@ -2068,12 +2613,12 @@ def report_observed_direct_descendants(
         if target_exited and marker is not None:
             deadline = time.monotonic() + DIRECT_MARKER_CENSUS_SECONDS
             updated |= inspect_marked_darwin_processes(marker, deadline, marked)
-    except Exception as error:
+    except BaseException as error:
         updated |= marked.copy()
         try:
             report_new_direct_descendants(reporter, observed, updated)
-        except Exception as report_error:
-            error.add_note(f"partial marker report failed: {report_error}")
+        except BaseException as report_error:
+            append_secondary_error(error, "partial marker report failed", report_error)
         raise
     report_new_direct_descendants(reporter, observed, updated)
     return updated
@@ -2085,42 +2630,65 @@ def run_gated_direct_target(
     reporter: DirectReporter,
     target: ProcessIdentity,
     marker: str | None,
-    peer_descriptor: int,
+    peer: DirectPeer,
 ) -> None:
+    primary_error: BaseException | None = None
     try:
         for requested in (signal.SIGINT, signal.SIGTERM):
             signal.signal(requested, signal.SIG_IGN)
         if hasattr(signal, "SIGINFO"):
             signal.signal(signal.SIGINFO, signal.SIG_IGN)
         monitor_direct_command(
-            process, wrapper, reporter, target, marker, peer_descriptor
+            process, wrapper, reporter, target, marker, direct_descriptor(peer)
         )
-    except Exception as error:
-        cleanup_errors: list[str] = []
-        record_cleanup_failure(
-            cleanup_errors, "peer close failed", lambda: os.close(peer_descriptor)
-        )
-        append_cleanup_errors(error, "direct target identity cleanup error", cleanup_errors)
+    except BaseException as error:
+        primary_error = error
         raise
-    os.close(peer_descriptor)
+    finally:
+        close_direct_peer_owner(
+            peer,
+            primary_error,
+            "direct target identity cleanup error: peer close failed",
+        )
 
 
 def authenticate_direct_wrapper(
     reporter: DirectReporter, acknowledgement_descriptor: int
 ) -> ProcessIdentity:
-    configure_direct_subreaper()
-    identity_deadline = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS / 2
-    identity = await_direct_process_identity(os.getpid(), identity_deadline)
-    report_direct_event(
-        reporter,
-        {"event": "wrapper", "identity": identity_payload(identity)},
-    )
-    ready, _, _ = select.select(
-        [acknowledgement_descriptor], [], [], DIRECT_WRAPPER_HANDSHAKE_SECONDS
-    )
-    if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
-        raise SimulatorLifecycleError("direct wrapper acknowledgement unavailable")
-    os.close(acknowledgement_descriptor)
+    primary_error: BaseException | None = None
+    try:
+        configure_direct_subreaper()
+        darwin_identity_required = LIBPROC is not None
+        if not darwin_identity_required:
+            identity_deadline = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS / 2
+            identity = await_direct_process_identity(os.getpid(), identity_deadline)
+            report_direct_event(
+                reporter, {"event": "wrapper", "identity": identity_payload(identity)}
+            )
+            ready, _, _ = select.select(
+                [acknowledgement_descriptor], [], [], DIRECT_WRAPPER_HANDSHAKE_SECONDS
+            )
+            if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
+                raise SimulatorLifecycleError(
+                    "direct wrapper acknowledgement unavailable"
+                )
+        else:
+            report_direct_event(reporter, {"event": "wrapper"})
+            deadline = time.monotonic() + DIRECT_WRAPPER_HANDSHAKE_SECONDS
+            identity = read_direct_wrapper_acknowledgement(
+                acknowledgement_descriptor, deadline
+            )
+            if identity.pid != os.getpid() or direct_audit_pid_version(identity) is None:
+                raise SimulatorLifecycleError("invalid direct wrapper acknowledgement")
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        close_owned_direct_descriptor(
+            acknowledgement_descriptor,
+            primary_error,
+            "direct wrapper acknowledgement cleanup error: acknowledgement close failed",
+        )
     return identity
 
 
@@ -2143,7 +2711,7 @@ def direct_child(
         os.close(key_descriptor)
         identity = authenticate_direct_wrapper(reporter, acknowledgement_descriptor)
         marker = direct_job_marker(key) if LIBPROC is not None else None
-        process, target_identity, target_peer_descriptor = spawn_gated_direct_target(
+        process, target_identity, target_peer = spawn_gated_direct_target(
             command,
             identity,
             reporter,
@@ -2157,13 +2725,13 @@ def direct_child(
             reporter,
             target_identity,
             marker,
-            target_peer_descriptor,
+            target_peer,
         )
     except (OSError, SimulatorLifecycleError) as error:
         if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
             try:
                 report_direct_event(
-                    reporter, {"event": "error", "message": str(error)}
+                    reporter, {"event": "error", "message": safe_exception_text(error)}
                 )
             except OSError:
                 return PRETEST_INFRASTRUCTURE_FAILURE
@@ -2177,45 +2745,65 @@ def direct_target(
     wrapper_socket_path: str,
     command: list[str],
 ) -> int:
-    peers: list[int] = []
+    peers: list[DirectPeer] = []
+    gate_owned = gate_descriptor >= 0
     try:
-        peers = [
-            connect_direct_peer(Path(parent_socket_path)),
-            connect_direct_peer(Path(wrapper_socket_path)),
-        ]
-        for descriptor in peers:
-            os.set_inheritable(descriptor, True)
-        acknowledgement_descriptor = peers[0] if gate_descriptor < 0 else gate_descriptor
+        for path in (parent_socket_path, wrapper_socket_path):
+            peers.append(connect_direct_peer(Path(path)))
+        for peer in peers:
+            os.set_inheritable(direct_descriptor(peer), True)
+        acknowledgement_descriptor = (
+            direct_descriptor(peers[0]) if gate_descriptor < 0 else gate_descriptor
+        )
         ready, _, _ = select.select(
             [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
         )
         if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
             raise SimulatorLifecycleError("direct target acknowledgement unavailable")
-        if gate_descriptor >= 0:
-            os.close(gate_descriptor)
+        if gate_owned:
+            gate_owned = False
+            close_owned_direct_descriptor(
+                gate_descriptor, None, "direct target gate close failed"
+            )
         trace_direct_target_execs()
         os.execvp(command[0], command)
-    except (OSError, SimulatorLifecycleError) as error:
-        for descriptor in peers:
-            os.close(descriptor)
-        print(error, file=sys.stderr)
+    except BaseException as error:
+        if gate_owned:
+            gate_owned = False
+            peers.append(gate_descriptor)
+        close_owned_direct_descriptors(peers, error, "direct target close failed")
+        if not isinstance(error, (OSError, SimulatorLifecycleError)):
+            raise
+        report_stderr_error(error)
         return PRETEST_INFRASTRUCTURE_FAILURE
 
 
 def abort_direct_spawn(process: subprocess.Popen[bytes], deadline: float | None) -> None:
-    if process.poll() is None:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
+    operations: list[tuple[str, Callable[[], object]]] = []
+    primary_error: BaseException | None = None
+    try:
+        running = process.poll() is None
+    except BaseException as error:
+        primary_error = error
+        running = True
+    if running:
+        operations.append(("direct wrapper kill failed", lambda: kill_process(process)))
     cleanup_by = cleanup_deadline(deadline)
-    reap_process_with_grace(
-        process,
-        cleanup_by,
-        DIRECT_WRAPPER_REAP_SECONDS,
-        "direct wrapper setup cleanup deadline expired",
-        "direct wrapper setup cleanup timed out",
+    operations.append(
+        (
+            "direct wrapper reap failed",
+            lambda: reap_process_with_grace(
+                process,
+                cleanup_by,
+                DIRECT_WRAPPER_REAP_SECONDS,
+                "direct wrapper setup cleanup deadline expired",
+                "direct wrapper setup cleanup timed out",
+            ),
+        )
     )
+    complete_owned_cleanup(operations, primary_error)
+    if primary_error is not None:
+        raise primary_error
 
 
 def reap_process_with_grace(
@@ -2232,7 +2820,12 @@ def reap_process_with_grace(
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        if process.poll() is None:
+        running = True
+        try:
+            running = process.poll() is None
+        except BaseException as poll_error:
+            append_secondary_error(error, "direct wrapper poll failed", poll_error)
+        if running:
             message = expired_message if budget_expired else timeout_message
             raise SimulatorLifecycleError(message) from error
     if budget_expired:
@@ -2246,10 +2839,49 @@ def close_direct_descriptor(descriptors: set[int], descriptor: int) -> None:
     os.close(descriptor)
 
 
+def transfer_direct_descriptor(
+    resources: DirectSpawnResources, owner: DirectDescriptorOwner
+) -> int:
+    descriptor = owner.fileno()
+    try:
+        resources.descriptors.add(descriptor)
+    except BaseException:
+        if descriptor in resources.descriptors:
+            owner.disarm_alias(descriptor)
+        raise
+    owner.disarm_alias(descriptor)
+    return descriptor
+
+
+def publish_direct_descriptor(
+    resources: DirectSpawnResources, owner: DirectDescriptorOwner
+) -> int:
+    return interruption_safe_call(
+        lambda: transfer_direct_descriptor(resources, owner)
+    )
+
+
+def register_direct_pipe(resources: DirectSpawnResources) -> tuple[int, int]:
+    owners = interruption_safe_call(
+        lambda: tuple(
+            DirectDescriptorOwner(descriptor)
+            for descriptor in acquire_pipe_descriptors()
+        )
+    )
+    try:
+        descriptors = tuple(
+            publish_direct_descriptor(resources, owner) for owner in owners
+        )
+    except BaseException as error:
+        complete_owned_cleanup(
+            [("direct pipe close failed", owner.close) for owner in owners], error
+        )
+        raise
+    return cast(tuple[int, int], descriptors)
+
+
 def acquire_direct_pipe(resources: DirectSpawnResources) -> tuple[int, int]:
-    descriptors = os.pipe()
-    resources.descriptors.update(descriptors)
-    return descriptors
+    return interruption_safe_call(lambda: register_direct_pipe(resources))
 
 
 def open_direct_listener(path: Path) -> socket.socket:
@@ -2259,40 +2891,86 @@ def open_direct_listener(path: Path) -> socket.socket:
         listener.listen(1)
         listener.setblocking(False)
         return listener
-    except Exception:
-        listener.close()
+    except BaseException as error:
+        complete_owned_cleanup(
+            [("direct listener close failed", listener.close)], error
+        )
+        raise
+
+
+def duplicate_and_close_direct_socket(
+    peer: socket.socket, close_label: str
+) -> DirectDescriptorOwner:
+    owner: DirectDescriptorOwner | None = None
+    try:
+        owner = interruption_safe_call(
+            lambda: DirectDescriptorOwner(
+                acquire_duplicate_descriptor(peer.fileno())
+            )
+        )
+        peer.close()
+        return owner
+    except BaseException as error:
+        operation = peer.close if owner is None else owner.close
+        complete_owned_cleanup([(close_label, operation)], error)
+        raise
+
+
+def register_direct_listener(resources: DirectSpawnResources, path: Path) -> int:
+    listener = open_direct_listener(path)
+    owner = duplicate_and_close_direct_socket(
+        listener, "direct listener close failed"
+    )
+    try:
+        return publish_direct_descriptor(resources, owner)
+    except BaseException as error:
+        complete_owned_cleanup(
+            [("direct listener descriptor close failed", owner.close)], error
+        )
         raise
 
 
 def acquire_direct_listener(resources: DirectSpawnResources, path: Path) -> int:
-    listener = open_direct_listener(path)
-    descriptor = listener.detach()
-    resources.descriptors.add(descriptor)
-    return descriptor
+    return interruption_safe_call(lambda: register_direct_listener(resources, path))
 
 
-def connect_direct_peer(path: Path) -> int:
+def open_direct_peer_owner(path: Path) -> DirectDescriptorOwner:
     peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         peer.connect(str(path))
-        return peer.detach()
-    except Exception:
-        peer.close()
+    except BaseException as error:
+        complete_owned_cleanup([("direct peer close failed", peer.close)], error)
         raise
+    return duplicate_and_close_direct_socket(peer, "direct peer close failed")
 
 
-def accept_direct_peer(listener_descriptor: int, deadline: float) -> int:
+def connect_direct_peer(path: Path) -> DirectDescriptorOwner:
+    return interruption_safe_call(lambda: open_direct_peer_owner(path))
+
+
+def accept_direct_peer(listener_descriptor: int, deadline: float) -> DirectPeer:
     while time.monotonic() < deadline:
         ready, _, _ = select.select(
             [listener_descriptor], [], [], bounded_wait(deadline, DESCENDANT_POLL_SECONDS)
         )
         if ready:
-            listener = socket.socket(fileno=listener_descriptor)
+            listener = duplicate_direct_socket(listener_descriptor)
+            peer: DirectPeer | None = None
             try:
                 peer, _ = listener.accept()
-                return peer.detach()
-            finally:
-                listener.detach()
+            except BaseException as error:
+                complete_owned_cleanup(
+                    [("direct listener close failed", listener.close)], error
+                )
+                raise
+            try:
+                listener.close()
+            except BaseException as error:
+                close_direct_peer_owner(
+                    peer, error, "accepted peer close failed"
+                )
+                raise
+            return peer
     raise SimulatorLifecycleError("direct peer identity unavailable")
 
 
@@ -2300,35 +2978,234 @@ def cleanup_direct_spawn(
     resources: DirectSpawnResources, deadline: float | None
 ) -> list[str]:
     errors: list[str] = []
-    for descriptor in list(resources.descriptors):
-        record_direct_cleanup(
+    descriptors = sorted(resources.descriptors)
+    process = resources.process
+    root = resources.root
+    resources.descriptors = set()
+    resources.process = None
+    resources.root = None
+    for descriptor in descriptors:
+        record_cleanup_failure(
             errors,
-            lambda descriptor=descriptor: close_direct_descriptor(
-                resources.descriptors, descriptor
-            ),
+            "",
+            lambda descriptor=descriptor: os.close(descriptor),
         )
-    if resources.process is not None:
-        record_direct_cleanup(
-            errors, lambda: abort_direct_spawn(resources.process, deadline)
+    if process is not None:
+        record_cleanup_failure(
+            errors,
+            "",
+            lambda: abort_direct_spawn(process, deadline),
         )
-    if resources.root is not None:
-        record_direct_cleanup(errors, lambda: shutil.rmtree(resources.root))
+    if root is not None:
+        record_cleanup_failure(errors, "", lambda: shutil.rmtree(root))
     return list(dict.fromkeys(errors))
 
 
+def exception_arguments(error: BaseException) -> tuple[object, ...]:
+    try:
+        arguments = BaseException.args.__get__(error, BaseException)
+    except BaseException:
+        return ()
+    return arguments if type(arguments) is tuple else ()
+
+
+def exception_type_name(error: BaseException) -> str:
+    try:
+        name = type.__getattribute__(type(error), "__name__")
+    except BaseException:
+        return "BaseException"
+    return name if type(name) is str else "BaseException"
+
+
+def safe_os_error_text(error: OSError) -> str | None:
+    try:
+        code = OSError.errno.__get__(error, OSError)
+        message = OSError.strerror.__get__(error, OSError)
+        filename = OSError.filename.__get__(error, OSError)
+    except BaseException:
+        return None
+    if type(code) is not int or type(message) is not str:
+        return None
+    detail = f"[Errno {code}] {message}"
+    return f"{detail}: {filename}" if type(filename) is str else detail
+
+
+def safe_exception_text(error: BaseException) -> str:
+    try:
+        if isinstance(error, OSError):
+            os_detail = safe_os_error_text(error)
+            if os_detail is not None:
+                return os_detail
+        arguments = exception_arguments(error)
+        if len(arguments) == 1 and type(arguments[0]) is str:
+            return arguments[0]
+        return f"{exception_type_name(error)} raised without safe detail"
+    except BaseException:
+        return "BaseException raised without safe detail"
+
+
 def append_error_detail(error: BaseException, detail: str) -> None:
-    if isinstance(error, OSError) and error.strerror is not None:
-        error.strerror = f"{error.strerror}; {detail}"
-    elif len(error.args) == 1 and isinstance(error.args[0], str):
-        error.args = (f"{error.args[0]}; {detail}",)
-    else:
-        error.add_note(detail)
+    try:
+        BaseException.add_note(error, detail)
+    except BaseException:
+        pass
+
+
+def append_secondary_error(
+    primary_error: BaseException, label: str, error: BaseException
+) -> None:
+    append_error_detail(primary_error, f"{label}: {safe_exception_text(error)}")
+
+
+def complete_owned_cleanup(
+    operations: list[tuple[str, Callable[[], object]]],
+    primary_error: BaseException | None = None,
+) -> None:
+    pending = tuple(operations)
+    operations.clear()
+    first_error = primary_error
+    for label, operation in pending:
+        try:
+            operation()
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+            else:
+                append_secondary_error(first_error, label, error)
+    if primary_error is None and first_error is not None:
+        raise first_error
+
+
+def close_owned_direct_descriptors(
+    descriptors: list[DirectPeer], primary_error: BaseException | None, label: str
+) -> None:
+    pending = tuple(descriptors)
+    descriptors.clear()
+    interruption_safe_call(
+        lambda: close_direct_channel_owner_group(pending, primary_error, label)
+    )
+
+
+def close_owned_direct_descriptor(
+    descriptor: int, primary_error: BaseException | None, label: str
+) -> None:
+    descriptors = [descriptor]
+    close_owned_direct_descriptors(descriptors, primary_error, label)
+
+
+def direct_descriptor(owner: DirectDescriptorOwner | DirectPeer) -> int:
+    return owner if isinstance(owner, int) else owner.fileno()
+
+
+def owned_direct_peer(peer: DirectPeer) -> DirectDescriptorOwner | socket.socket:
+    return DirectDescriptorOwner(peer) if isinstance(peer, int) else peer
+
+
+def close_direct_peer_owner(
+    peer: DirectPeer, primary_error: BaseException | None, label: str
+) -> None:
+    if isinstance(peer, int) and peer < 0:
+        return
+    operation = (lambda: os.close(peer)) if isinstance(peer, int) else peer.close
+    complete_owned_cleanup([(label, operation)], primary_error)
+
+
+def reject_substituted_direct_socket(
+    peer: socket.socket,
+    duplicate: int,
+    borrowed: int,
+    primary_error: BaseException | None = None,
+) -> None:
+    detached: int | None = None
+    if primary_error is None:
+        try:
+            detached = peer.detach()
+        except BaseException as error:
+            primary_error = error
+    if detached is None:
+        try:
+            detached = DIRECT_SOCKET_TYPE.detach(peer)
+        except BaseException as error:
+            if primary_error is None:
+                primary_error = error
+            else:
+                append_secondary_error(
+                    primary_error, "borrowed direct socket detach failed", error
+                )
+    descriptors = [duplicate]
+    if detached is not None and detached != borrowed:
+        descriptors.append(detached)
+    operations = [
+        (
+            "duplicated direct descriptor close failed",
+            lambda descriptor=descriptor: os.close(descriptor),
+        )
+        for descriptor in dict.fromkeys(descriptors)
+    ]
+    complete_owned_cleanup(operations, primary_error)
+    if primary_error is not None:
+        raise primary_error
+    raise SimulatorLifecycleError("duplicated direct socket ownership unavailable")
+
+
+def create_duplicated_direct_socket(
+    owner: DirectDescriptorOwner, borrowed: int
+) -> socket.socket:
+    duplicate = owner.fileno()
+    try:
+        peer = socket.socket(fileno=duplicate)
+    except BaseException as error:
+        complete_owned_cleanup(
+            [("duplicated direct descriptor close failed", owner.close)], error
+        )
+        raise
+    owner.disarm_alias(duplicate)
+    try:
+        actual_descriptor = peer.fileno()
+    except BaseException as error:
+        reject_substituted_direct_socket(peer, duplicate, borrowed, error)
+    if actual_descriptor != duplicate:
+        reject_substituted_direct_socket(peer, duplicate, borrowed)
+    return peer
+
+
+def duplicate_direct_socket(descriptor: int) -> socket.socket:
+    duplicate = interruption_safe_call(
+        lambda: DirectDescriptorOwner(acquire_duplicate_descriptor(descriptor))
+    )
+    try:
+        return interruption_safe_call(
+            lambda owner=duplicate, borrowed=descriptor: create_duplicated_direct_socket(
+                owner, borrowed
+            )
+        )
+    except BaseException as primary_error:
+        complete_owned_cleanup(
+            [("duplicated direct descriptor close failed", duplicate.close)],
+            primary_error,
+        )
+        raise
+
+
+def kill_process(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def report_stderr_error(error: BaseException, prefix: str = "") -> None:
+    try:
+        print(f"{prefix}{safe_exception_text(error)}", file=sys.stderr)
+    except BaseException:
+        pass
 
 
 def append_cleanup_errors(error: BaseException, label: str, errors: list[str]) -> None:
     details = list(dict.fromkeys(errors))
     if details:
-        append_error_detail(error, f"{label}: {'; '.join(details)}")
+        detail = f"{label}: {'; '.join(details)}"
+        append_error_detail(error, detail)
 
 
 def record_cleanup_failure(
@@ -2336,8 +3213,8 @@ def record_cleanup_failure(
 ) -> None:
     try:
         operation()
-    except Exception as error:
-        detail = str(error)
+    except BaseException as error:
+        detail = safe_exception_text(error)
         errors.append(f"{label}: {detail}" if label else detail)
 
 
@@ -2353,7 +3230,9 @@ def cleanup_error_text(errors: list[str]) -> str | None:
     return "; ".join(details) if details else None
 
 
-def append_direct_spawn_cleanup(error: Exception, cleanup_errors: list[str]) -> None:
+def append_direct_spawn_cleanup(
+    error: BaseException, cleanup_errors: list[str]
+) -> None:
     append_cleanup_errors(error, "direct setup cleanup error", cleanup_errors)
 
 
@@ -2415,6 +3294,22 @@ def acquire_direct_peer_endpoints(
     )
 
 
+def restore_direct_descriptor_ownership(
+    descriptors: set[int],
+    owned: tuple[int, ...],
+    primary_error: BaseException,
+) -> None:
+    for descriptor in owned:
+        try:
+            descriptors.add(descriptor)
+        except BaseException as cleanup_error:
+            append_secondary_error(
+                primary_error,
+                "direct descriptor ownership restore failed",
+                cleanup_error,
+            )
+
+
 def adopt_direct_channel(
     resources: DirectSpawnResources,
     event_descriptor: int,
@@ -2422,12 +3317,20 @@ def adopt_direct_channel(
     endpoints: DirectPeerEndpoints,
 ) -> DirectChannel:
     os.set_blocking(event_descriptor, False)
+    source = resources.descriptors
     channel = DirectChannel(
         event_descriptor,
         key,
         target_exec_required=LIBPROC is not None,
+        descriptor_owner=DirectDescriptorOwner(event_descriptor, source),
         wrapper_listener=endpoints.wrapper_listener,
+        wrapper_listener_owner=DirectDescriptorOwner(
+            endpoints.wrapper_listener, source
+        ),
         target_listener=endpoints.target_listener,
+        target_listener_owner=DirectDescriptorOwner(
+            endpoints.target_listener, source
+        ),
         wrapper_socket_path=endpoints.wrapper_path,
         target_socket_path=endpoints.parent_target_path,
         peer_identity_required=LIBPROC is not None,
@@ -2437,9 +3340,24 @@ def adopt_direct_channel(
         endpoints.wrapper_listener,
         endpoints.target_listener,
     )
-    for descriptor in owned:
-        resources.descriptors.remove(descriptor)
-    return channel
+    try:
+        for descriptor in owned:
+            resources.descriptors.remove(descriptor)
+        return channel
+    except BaseException as primary_error:
+        try:
+            interruption_safe_call(
+                lambda: restore_direct_descriptor_ownership(
+                    resources.descriptors, owned, primary_error
+                )
+            )
+        except BaseException as cleanup_error:
+            append_secondary_error(
+                primary_error,
+                "direct descriptor ownership restore wait failed",
+                cleanup_error,
+            )
+        raise primary_error
 
 
 def prepare_direct_job(
@@ -2500,7 +3418,14 @@ def spawn_direct_job(
         )
         if authenticated is not None:
             authenticated()
-        os.write(pending.acknowledgement_write, b"1")
+        if channel.peer_identity_required:
+            write_direct_wrapper_acknowledgement(
+                pending.acknowledgement_write, identity
+            )
+        elif os.write(pending.acknowledgement_write, b"1") != 1:
+            raise SimulatorLifecycleError(
+                "direct wrapper acknowledgement unavailable"
+            )
         close_direct_descriptor(
             resources.descriptors, pending.acknowledgement_write
         )
@@ -2515,7 +3440,7 @@ def spawn_direct_job(
             wrapper_reap_seconds,
             marker,
         )
-    except Exception as error:
+    except BaseException as error:
         errors: list[str] = []
         if channel is not None:
             record_cleanup_failure(errors, "channel close failed", lambda: close_direct_channel(channel))
@@ -2734,7 +3659,8 @@ def write_containment_acknowledgement(
             )
     except OSError as error:
         raise SimulatorLifecycleError(
-            f"containment acknowledgement write failed: {error}"
+            "containment acknowledgement write failed: "
+            f"{safe_exception_text(error)}"
         ) from error
 
 
@@ -2802,7 +3728,7 @@ def spawn_contained_job(
         if setup_deadline is not None and time.monotonic() >= setup_deadline:
             raise SimulatorLifecycleError("containment setup deadline expired")
         return bound_job
-    except Exception as error:
+    except BaseException as error:
         cleanup_errors = containment_setup_cleanup_errors(
             job, bootstrap_attempted, coalition_id, deadline, cleanup_reserve
         )
@@ -2868,10 +3794,22 @@ def direct_identity_in(
     return any(same_direct_process(identity, candidate) for candidate in candidates)
 
 
-def apply_direct_target_payload(
+def take_direct_listener(
     channel: DirectChannel,
-    payload: dict[str, object],
-    event: str,
+    owner_attribute: str,
+    descriptor_attribute: str,
+) -> DirectDescriptorOwner:
+    owner = getattr(channel, owner_attribute)
+    descriptor = getattr(channel, descriptor_attribute)
+    if owner is None or owner.fileno() != descriptor or descriptor < 0:
+        raise SimulatorLifecycleError("direct listener ownership unavailable")
+    setattr(channel, descriptor_attribute, -1)
+    setattr(channel, owner_attribute, None)
+    return owner
+
+
+def apply_direct_target_payload(
+    channel: DirectChannel, payload: dict[str, object], event: str,
     deadline: float | None,
 ) -> None:
     identity = direct_payload_identity(payload, event)
@@ -2886,14 +3824,20 @@ def apply_direct_target_payload(
         if channel.target_exec_required and target_version is None:
             raise SimulatorLifecycleError("invalid direct target identity")
         if channel.peer_identity_required:
-            channel.target_peer = bind_direct_peer_identity(
-                channel.target_listener,
-                channel.target_socket_path,
-                identity,
-                deadline,
+            listener = take_direct_listener(
+                channel, "target_listener_owner", "target_listener"
             )
-            channel.target_listener = -1
-            if os.write(channel.target_peer, b"1") != 1:
+            channel.target_pending_peer = owned_direct_peer(
+                bind_direct_peer_identity(
+                    listener,
+                    channel.target_socket_path,
+                    identity,
+                    deadline,
+                )
+            )
+            channel.target_peer = channel.target_pending_peer
+            channel.target_pending_peer = -1
+            if os.write(direct_descriptor(channel.target_peer), b"1") != 1:
                 raise SimulatorLifecycleError("direct target acknowledgement unavailable")
         channel.target_exec_required = target_version is not None
     else:
@@ -2903,7 +3847,7 @@ def apply_direct_target_payload(
         validate_direct_target_transition(previous, identity)
         if channel.peer_identity_required:
             current = await_peer_identity_covering_exec_report(
-                channel.target_peer,
+                direct_descriptor(channel.target_peer),
                 identity,
                 direct_message_deadline(deadline),
             )
@@ -2920,6 +3864,12 @@ def apply_direct_payload(
 ) -> None:
     event = payload.get("event")
     if event == "wrapper":
+        if channel.peer_identity_required:
+            direct_payload_keys(payload, {"event"})
+            if channel.sequence != 0 or channel.wrapper_ready:
+                raise SimulatorLifecycleError("duplicate direct wrapper identity")
+            channel.wrapper_ready = True
+            return
         identity = direct_payload_identity(payload, event)
         if channel.sequence != 0 or channel.wrapper is not None:
             raise SimulatorLifecycleError("duplicate direct wrapper identity")
@@ -2980,33 +3930,98 @@ def apply_direct_message(
     channel.sequence = sequence
 
 
-def close_direct_channel(channel: DirectChannel) -> None:
-    descriptors = (
-        channel.descriptor,
-        channel.wrapper_listener,
+def close_direct_channel_owner_group(
+    owners: tuple[DirectPeer, ...],
+    primary_error: BaseException | None = None,
+    label: str = "additional descriptor close failed",
+) -> None:
+    first_error = primary_error
+    seen_descriptors: set[int] = set()
+    seen_objects: set[int] = set()
+    pending: list[DirectPeer] = []
+    for owner in owners:
+        if not isinstance(owner, int):
+            identity = id(owner)
+            if identity in seen_objects:
+                continue
+            seen_objects.add(identity)
+        try:
+            descriptor = direct_descriptor(owner)
+        except BaseException as error:
+            descriptor = None
+            first_error = record_direct_close_error(first_error, error, label)
+        if descriptor is not None:
+            if descriptor < 0:
+                continue
+            if descriptor in seen_descriptors:
+                disarm_direct_peer_alias(owner, descriptor)
+                continue
+            seen_descriptors.add(descriptor)
+        pending.append(owner)
+    for owner in pending:
+        try:
+            close_direct_peer_owner(owner, None, "direct descriptor close failed")
+        except BaseException as error:
+            first_error = record_direct_close_error(first_error, error, label)
+    if primary_error is None and first_error is not None:
+        raise first_error
+
+
+def disarm_direct_peer_alias(owner: DirectPeer, descriptor: int) -> None:
+    if isinstance(owner, DirectDescriptorOwner):
+        owner.disarm_alias(descriptor)
+        return
+    if not isinstance(owner, DIRECT_SOCKET_TYPE):
+        return
+    detached = DIRECT_SOCKET_TYPE.detach(owner)
+    if detached == descriptor:
+        return
+    if detached >= 0:
+        os.close(detached)
+    raise OSError("duplicate direct socket descriptor changed")
+
+
+def close_direct_channel_owners(owners: tuple[DirectPeer, ...]) -> None:
+    interruption_safe_call(lambda: close_direct_channel_owner_group(owners))
+
+
+def record_direct_close_error(
+    first_error: BaseException | None,
+    error: BaseException,
+    label: str = "additional descriptor close failed",
+) -> BaseException:
+    if first_error is None:
+        return error
+    append_secondary_error(first_error, label, error)
+    return first_error
+
+
+def close_direct_channel_state(channel: DirectChannel) -> None:
+    owners: tuple[DirectPeer, ...] = (
+        channel.descriptor_owner or channel.descriptor,
+        channel.wrapper_listener_owner or channel.wrapper_listener,
+        channel.wrapper_pending_peer,
         channel.wrapper_peer,
-        channel.target_listener,
+        channel.target_listener_owner or channel.target_listener,
+        channel.target_pending_peer,
         channel.target_peer,
     )
     channel.descriptor = -1
+    channel.descriptor_owner = None
+    channel.wrapper_listener_owner = None
     channel.wrapper_listener = -1
+    channel.wrapper_pending_peer = -1
     channel.wrapper_peer = -1
+    channel.target_listener_owner = None
     channel.target_listener = -1
+    channel.target_pending_peer = -1
     channel.target_peer = -1
     channel.closed = True
-    first_error: OSError | None = None
-    for descriptor in descriptors:
-        if descriptor < 0:
-            continue
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            if first_error is None:
-                first_error = error
-            else:
-                first_error.add_note(str(error))
-    if first_error is not None:
-        raise first_error
+    close_direct_channel_owner_group(owners)
+
+
+def close_direct_channel(channel: DirectChannel) -> None:
+    interruption_safe_call(lambda: close_direct_channel_state(channel))
 
 
 def pump_direct_channel(channel: DirectChannel, deadline: float | None) -> None:
@@ -3037,7 +4052,7 @@ def pump_direct_channel(channel: DirectChannel, deadline: float | None) -> None:
                 raise SimulatorLifecycleError("direct channel frame exceeds limit")
     except BlockingIOError:
         return
-    except Exception as error:
+    except BaseException as error:
         cleanup_errors: list[str] = []
         record_cleanup_failure(
             cleanup_errors, "descriptor close failed", lambda: close_direct_channel(channel)
@@ -3069,21 +4084,28 @@ def bounded_peer_process_identity(
     )
 
 
-def direct_peer_closed(descriptor: int) -> bool:
+def direct_peer_closed(peer_owner: DirectPeer) -> bool:
+    descriptor = direct_descriptor(peer_owner)
     if descriptor < 0:
         return False
     try:
-        peer = socket.socket(fileno=descriptor)
+        peer = duplicate_direct_socket(descriptor)
     except OSError:
         return False
+    primary_error: BaseException | None = None
     try:
         try:
             content = peer.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
         except (BlockingIOError, InterruptedError, OSError):
             return False
         return content == b""
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        peer.detach()
+        complete_owned_cleanup(
+            [("direct peer close failed", peer.close)], primary_error
+        )
 
 
 def await_peer_identity_matching_wrapper(
@@ -3129,8 +4151,8 @@ def await_peer_identity_covering_exec_report(
     )
 
 
-def await_peer_identity_covering_wrapper_report(
-    descriptor: int, reported: ProcessIdentity, deadline: float
+def await_direct_wrapper_peer_identity(
+    descriptor: int, pid: int, deadline: float
 ) -> ProcessIdentity | None:
     if time.monotonic() >= deadline:
         raise OperationDeadlineExpired("direct wrapper identity deadline expired")
@@ -3138,17 +4160,16 @@ def await_peer_identity_covering_wrapper_report(
     while time.monotonic() < retry_deadline:
         try:
             current = deadline_call(
-                lambda: stable_darwin_peer_identity(descriptor, reported.pid),
+                lambda: stable_darwin_peer_identity(descriptor, pid),
                 retry_deadline,
                 "direct wrapper identity sample deadline expired",
             )
         except OperationDeadlineExpired:
             return None
         if current is not None:
-            if peer_identity_covers_exec_report(reported, current):
-                return current
-            if not peer_identity_precedes_exec_report(reported, current):
-                return None
+            return current if direct_audit_pid_version(current) is not None else None
+        if direct_peer_closed(descriptor):
+            return None
         time.sleep(bounded_wait(retry_deadline, DESCENDANT_POLL_SECONDS))
     return None
 
@@ -3158,31 +4179,101 @@ def direct_message_deadline(deadline: float | None) -> float:
     return min(handshake_by, deadline) if deadline is not None else handshake_by
 
 
+def close_direct_bind_owners(
+    listener: DirectDescriptorOwner | int,
+    peer: DirectPeer,
+    transferred: bool,
+    primary_error: BaseException | None,
+    peer_label: str,
+) -> None:
+    operations: list[tuple[str, Callable[[], object]]] = []
+    if not transferred and not (isinstance(peer, int) and peer < 0):
+        operations.append(
+            (peer_label, lambda: close_direct_peer_owner(peer, None, peer_label))
+        )
+    if isinstance(listener, DirectDescriptorOwner):
+        operations.append(("direct listener close failed", listener.close))
+    complete_owned_cleanup(operations, primary_error)
+
+
+def close_bound_direct_listener(
+    listener: DirectDescriptorOwner | int, descriptor: int
+) -> None:
+    if isinstance(listener, DirectDescriptorOwner):
+        listener.close()
+    else:
+        os.close(descriptor)
+
+
 def bind_direct_peer_identity(
-    listener_descriptor: int,
+    listener_owner: DirectDescriptorOwner | int,
     socket_path: Path | None,
     identity: ProcessIdentity,
     deadline: float | None,
-) -> int:
-    if listener_descriptor < 0 or socket_path is None:
-        raise SimulatorLifecycleError("direct peer identity unavailable")
-    peer_deadline = direct_message_deadline(deadline)
-    peer_descriptor = accept_direct_peer(listener_descriptor, peer_deadline)
+) -> DirectPeer:
+    peer: DirectPeer = -1
+    transferred = False
+    primary_error: BaseException | None = None
     try:
+        listener_descriptor = direct_descriptor(listener_owner)
+        if listener_descriptor < 0 or socket_path is None:
+            raise SimulatorLifecycleError("direct peer identity unavailable")
+        peer_deadline = direct_message_deadline(deadline)
+        peer = owned_direct_peer(accept_direct_peer(listener_descriptor, peer_deadline))
         current = await_peer_identity_matching_wrapper(
-            peer_descriptor, identity, peer_deadline
+            direct_descriptor(peer), identity, peer_deadline
         )
         if current is None or not same_direct_process(current, identity):
             raise SimulatorLifecycleError("forged direct peer identity")
-        os.close(listener_descriptor)
-    except Exception as error:
-        cleanup_errors: list[str] = []
-        record_cleanup_failure(
-            cleanup_errors, "peer close failed", lambda: os.close(peer_descriptor)
-        )
-        append_cleanup_errors(error, "direct peer cleanup error", cleanup_errors)
+        close_bound_direct_listener(listener_owner, listener_descriptor)
+        transferred = True
+        return peer
+    except BaseException as error:
+        primary_error = error
         raise
-    return peer_descriptor
+    finally:
+        close_direct_bind_owners(
+            listener_owner,
+            peer,
+            transferred,
+            primary_error,
+            "direct peer cleanup error: peer close failed",
+        )
+
+
+def bind_direct_wrapper_peer(
+    listener_owner: DirectDescriptorOwner | int,
+    socket_path: Path | None,
+    pid: int,
+    deadline: float,
+) -> tuple[DirectPeer, ProcessIdentity]:
+    peer: DirectPeer = -1
+    transferred = False
+    primary_error: BaseException | None = None
+    try:
+        listener_descriptor = direct_descriptor(listener_owner)
+        if listener_descriptor < 0 or socket_path is None:
+            raise SimulatorLifecycleError("direct wrapper identity unavailable")
+        peer = owned_direct_peer(accept_direct_peer(listener_descriptor, deadline))
+        identity = await_direct_wrapper_peer_identity(
+            direct_descriptor(peer), pid, deadline
+        )
+        if identity is None or identity.pid != pid:
+            raise SimulatorLifecycleError("forged direct wrapper identity")
+        close_bound_direct_listener(listener_owner, listener_descriptor)
+        transferred = True
+        return peer, identity
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        close_direct_bind_owners(
+            listener_owner,
+            peer,
+            transferred,
+            primary_error,
+            "direct wrapper peer cleanup error: peer close failed",
+        )
 
 
 def bounded_direct_child_identity(
@@ -3232,21 +4323,24 @@ def await_direct_identity(
         pump_direct_channel(channel, handshake_by)
         if channel.failure is not None:
             raise SimulatorLifecycleError(f"direct wrapper failed: {channel.failure}")
+        if channel.peer_identity_required and channel.wrapper_ready:
+            listener = take_direct_listener(
+                channel, "wrapper_listener_owner", "wrapper_listener"
+            )
+            peer, identity = bind_direct_wrapper_peer(
+                listener,
+                channel.wrapper_socket_path,
+                process.pid,
+                handshake_by,
+            )
+            channel.wrapper_pending_peer = owned_direct_peer(peer)
+            channel.wrapper_peer = channel.wrapper_pending_peer
+            channel.wrapper_pending_peer = -1
+            channel.wrapper = identity
+            return identity
         identity = channel.wrapper
         if identity is not None:
-            if channel.peer_identity_required:
-                channel.wrapper_peer = bind_direct_peer_identity(
-                    channel.wrapper_listener,
-                    channel.wrapper_socket_path,
-                    identity,
-                    handshake_by,
-                )
-                channel.wrapper_listener = -1
-                current = await_peer_identity_covering_wrapper_report(
-                    channel.wrapper_peer, identity, handshake_by
-                )
-            else:
-                current = bounded_process_identity(process.pid, handshake_by)
+            current = bounded_process_identity(process.pid, handshake_by)
             if (
                 identity.pid != process.pid
                 or current is None
@@ -3551,7 +4645,10 @@ def launchd_job_evidence(job: LaunchdJob, deadline: float | None) -> str:
     try:
         result = launchctl_run(["print", job.service], deadline)
     except SimulatorLifecycleError as error:
-        return f"service={job.service}\nlaunchd evidence error = {error}\n"
+        return (
+            f"service={job.service}\nlaunchd evidence error = "
+            f"{safe_exception_text(error)}\n"
+        )
     if service_is_absent(result):
         return f"service={job.service}\nstate=absent\n"
     if result.returncode:
@@ -3567,7 +4664,9 @@ def launchd_job_evidence(job: LaunchdJob, deadline: float | None) -> str:
         lines.append(f"kernel coalition = {coalition_id}")
         lines.append(f"kernel member count = {len(coalition_members(coalition_id, census_deadline))}")
     except SimulatorLifecycleError as error:
-        lines.append(f"kernel coalition evidence error = {error}")
+        lines.append(
+            f"kernel coalition evidence error = {safe_exception_text(error)}"
+        )
     return f"service={job.service}\n" + "\n".join(lines) + "\n"
 
 
@@ -3615,7 +4714,8 @@ def confirm_job_absent(
         except SimulatorLifecycleError as error:
             if (
                 time.monotonic() >= cleanup_by
-                or str(error) == "launchd containment deadline expired"
+                or safe_exception_text(error)
+                == "launchd containment deadline expired"
             ):
                 raise SimulatorLifecycleError(
                     "launchd containment cleanup incomplete"
@@ -3803,8 +4903,8 @@ def record_lifecycle_cleanup(
 ) -> None:
     try:
         detail = lifecycle_cleanup_error(job, deadline, signal_root)
-    except Exception as error:
-        errors.append(str(error))
+    except BaseException as error:
+        errors.append(safe_exception_text(error))
     else:
         if detail is not None:
             errors.append(detail)
@@ -3901,7 +5001,7 @@ def signal_linux_direct_identity(
                 result = False
             except OSError as error:
                 raise SimulatorLifecycleError("Linux identity-bound signal failed") from error
-    except Exception as error:
+    except BaseException as error:
         cleanup_errors: list[str] = []
         record_cleanup_failure(
             cleanup_errors, "pidfd close failed", lambda: os.close(descriptor)
@@ -3912,7 +5012,8 @@ def signal_linux_direct_identity(
         os.close(descriptor)
     except OSError as error:
         raise SimulatorLifecycleError(
-            f"Linux identity handle cleanup failed: {error}"
+            "Linux identity handle cleanup failed: "
+            f"{safe_exception_text(error)}"
         ) from error
     return result
 
@@ -3922,9 +5023,10 @@ def signal_direct_target(
 ) -> None:
     target = job.channel.target
     peer = job.channel.target_peer
-    if target is None or signal_direct_identity(target, requested, deadline, peer):
+    descriptor = direct_descriptor(peer)
+    if target is None or signal_direct_identity(target, requested, deadline, descriptor):
         return
-    if current_direct_identity(target, deadline, peer) is not None:
+    if current_direct_identity(target, deadline, descriptor) is not None:
         raise SimulatorLifecycleError("identity-bound direct target signal failed")
 
 
@@ -3944,9 +5046,10 @@ def force_direct_wrapper_exit(job: DirectJob, deadline: float) -> None:
     if job.process.poll() is not None:
         return
     peer = job.channel.wrapper_peer
-    if signal_direct_identity(job.identity, signal.SIGKILL, deadline, peer):
+    descriptor = direct_descriptor(peer)
+    if signal_direct_identity(job.identity, signal.SIGKILL, deadline, descriptor):
         return
-    if current_direct_identity(job.identity, deadline, peer) is not None:
+    if current_direct_identity(job.identity, deadline, descriptor) is not None:
         raise SimulatorLifecycleError("identity-bound direct wrapper signal failed")
 
 
@@ -3967,8 +5070,8 @@ def record_direct_cleanup(
 ) -> object | None:
     try:
         return operation()
-    except Exception as error:
-        errors.append(str(error))
+    except BaseException as error:
+        errors.append(safe_exception_text(error))
         return None
 
 
@@ -3977,8 +5080,8 @@ def direct_cleanup_observation(
 ) -> tuple[set[ProcessIdentity], bool]:
     try:
         pump_direct_channel(job.channel, deadline)
-    except Exception as error:
-        errors.append(str(error))
+    except BaseException as error:
+        errors.append(safe_exception_text(error))
     try:
         live = {
             current
@@ -3986,8 +5089,8 @@ def direct_cleanup_observation(
             if (current := current_direct_identity(identity, deadline)) is not None
         }
         return live, True
-    except Exception as error:
-        errors.append(str(error))
+    except BaseException as error:
+        errors.append(safe_exception_text(error))
         return job.channel.descendants.copy(), False
 
 
@@ -3995,7 +5098,9 @@ def direct_target_is_live(job: DirectJob, deadline: float) -> bool:
     target = job.channel.target
     return (
         target is not None
-        and current_direct_identity(target, deadline, job.channel.target_peer) is not None
+        and current_direct_identity(
+            target, deadline, direct_descriptor(job.channel.target_peer)
+        ) is not None
     )
 
 
@@ -4113,15 +5218,15 @@ def terminate_bounded_writer(
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    except OSError as error:
-        errors.append(f"kill failed: {error}")
+    except BaseException as error:
+        errors.append(f"kill failed: {safe_exception_text(error)}")
     timeout = bounded_wait(deadline, EVIDENCE_WRITER_CLEANUP_SECONDS)
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         errors.append("could not be terminated")
-    except OSError as error:
-        errors.append(f"reap failed: {error}")
+    except BaseException as error:
+        errors.append(f"reap failed: {safe_exception_text(error)}")
     if errors:
         raise OSError(f"{label} writer {'; '.join(errors)}")
 
@@ -4136,7 +5241,18 @@ def append_bounded_writer_cleanup(
     record_cleanup_failure(
         errors, "", lambda: terminate_bounded_writer(process, deadline, label)
     )
-    for stream_label, stream in (("stdin", process.stdin), ("stderr", process.stderr)):
+    streams: list[tuple[str, object]] = []
+    for stream_label in ("stdin", "stderr"):
+        try:
+            stream = getattr(process, stream_label)
+        except BaseException as stream_error:
+            errors.append(
+                f"{stream_label} access failed: "
+                f"{safe_exception_text(stream_error)}"
+            )
+            continue
+        streams.append((stream_label, stream))
+    for stream_label, stream in streams:
         if stream is not None:
             record_cleanup_failure(errors, f"{stream_label} close failed", stream.close)
     append_cleanup_errors(error, f"{label} writer cleanup failed", errors)
@@ -4205,7 +5321,7 @@ def sync_atomic_directory_bounded(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
-        pass_fds=(write.directory_descriptor,),
+        pass_fds=(descriptor_number(write.directory_descriptor),),
     )
     stderr = communicate_bounded_writer(process, b"", deadline, label)
     if process.returncode != 0:
@@ -4236,7 +5352,10 @@ def write_bytes_bounded(
             pass_fds=(
                 ()
                 if write is None
-                else (write.descriptor, write.directory_descriptor)
+                else (
+                    descriptor_number(write.descriptor),
+                    descriptor_number(write.directory_descriptor),
+                )
             ),
         )
         stderr = communicate_bounded_writer(process, content, deadline, label)
@@ -4412,7 +5531,7 @@ def observe_attempt(
 def evidence_failed(evidence_errors: list[OSError]) -> bool:
     if not evidence_errors:
         return False
-    print(f"classification=evidence-write-failure; {evidence_errors[0]}", file=sys.stderr)
+    report_stderr_error(evidence_errors[0], "classification=evidence-write-failure; ")
     return True
 
 
@@ -4475,10 +5594,10 @@ def complete_direct_job(
         try:
             cleanup_direct_job(job, deadline, returncode is None)
         except SimulatorLifecycleError as error:
-            cleanup_errors.append(str(error))
+            cleanup_errors.append(safe_exception_text(error))
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
-    except Exception as error:
+    except BaseException as error:
         if not cleanup_attempted and job.root.exists():
             record_cleanup_failure(
                 cleanup_errors,
@@ -4518,7 +5637,7 @@ def contained_lifecycle_process(
         record_lifecycle_cleanup(cleanup_errors, job, deadline, returncode is None)
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
-    except Exception as error:
+    except BaseException as error:
         if not cleanup_attempted and job.root.exists():
             record_lifecycle_cleanup(cleanup_errors, job, deadline, True)
         record_cleanup_failure(
@@ -4597,7 +5716,7 @@ def diagnostic_command(
     try:
         lifecycle_command(args, label, command, check=False, timeout=timeout)
     except SimulatorLifecycleError as error:
-        print(f"classification=simulator-diagnostic-failure; {error}", file=sys.stderr)
+        report_stderr_error(error, "classification=simulator-diagnostic-failure; ")
 
 
 def capture_host_process_diagnostic(args: argparse.Namespace, label: str) -> None:
@@ -4613,7 +5732,7 @@ def capture_host_process_diagnostic(args: argparse.Namespace, label: str) -> Non
             args, label, ["libproc", "stable-process-census"], 0, output, ""
         )
     except SimulatorLifecycleError as error:
-        print(f"classification=simulator-diagnostic-failure; {error}", file=sys.stderr)
+        report_stderr_error(error, "classification=simulator-diagnostic-failure; ")
 
 
 def sleep_with_wall_budget(
@@ -4927,7 +6046,7 @@ def write_log_header(
 
 
 def append_failed_attempt_cleanup(
-    error: Exception,
+    error: BaseException,
     job: LaunchdJob,
     deadline: float | None,
     cleanup_attempted: bool,
@@ -4979,7 +6098,7 @@ def run_attempt(
             job, deadline, timeout_reason is not None
         )
         if containment_error is not None:
-            cleanup_errors.append(str(containment_error))
+            cleanup_errors.append(safe_exception_text(containment_error))
         record_cleanup_failure(
             cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
         )
@@ -4992,7 +6111,7 @@ def run_attempt(
             process_evidence,
             cleanup_error,
         )
-    except Exception as error:
+    except BaseException as error:
         append_failed_attempt_cleanup(error, job, deadline, cleanup_attempted)
         raise
 
@@ -5045,7 +6164,7 @@ def prepare_simulator(args: argparse.Namespace) -> tuple[str, bool]:
         boot_and_check_simulator(args, udid, state)
         return udid, False
     except SimulatorLifecycleError as error:
-        print(f"classification=simulator-preflight-failure; {error}", file=sys.stderr)
+        report_stderr_error(error, "classification=simulator-preflight-failure; ")
         return recover_simulator(args, udid, "preflight"), True
 
 
@@ -5093,10 +6212,10 @@ def run(args: argparse.Namespace) -> int:
                 recovery_used = True
                 print("classification=pre-test-launch-infrastructure-retry", file=sys.stderr)
     except OSError as error:
-        print(f"classification=evidence-write-failure; {error}", file=sys.stderr)
+        report_stderr_error(error, "classification=evidence-write-failure; ")
         return EVIDENCE_FAILURE
     except SimulatorLifecycleError as error:
-        print(f"classification=simulator-infrastructure-failure; {error}", file=sys.stderr)
+        report_stderr_error(error, "classification=simulator-infrastructure-failure; ")
         return PRETEST_INFRASTRUCTURE_FAILURE
     return PRETEST_INFRASTRUCTURE_FAILURE
 
@@ -5170,7 +6289,7 @@ def run_evidence_writer(arguments: list[str]) -> int:
             stream.flush()
             os.fsync(stream.fileno())
     except OSError as error:
-        print(error, file=sys.stderr)
+        report_stderr_error(error)
         return EVIDENCE_FAILURE
     return 0
 
@@ -5182,7 +6301,7 @@ def run_directory_sync(arguments: list[str]) -> int:
     try:
         os.fsync(int(arguments[1]))
     except (OSError, ValueError) as error:
-        print(error, file=sys.stderr)
+        report_stderr_error(error)
         return PRETEST_INFRASTRUCTURE_FAILURE
     return 0
 
@@ -5273,7 +6392,7 @@ def run_atomic_writer(arguments: list[str]) -> int:
                 content,
             )
     except (OSError, ValueError) as error:
-        print(error, file=sys.stderr)
+        report_stderr_error(error)
         return PRETEST_INFRASTRUCTURE_FAILURE
     return 0
 
