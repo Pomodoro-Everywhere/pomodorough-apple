@@ -1068,9 +1068,15 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
                     if frame.f_code in alarm_codes and event == "line" \
                             and marker in line and not windows:
                         windows.append(marker)
+                        signal.setitimer(signal.ITIMER_REAL, 0)
                         caller_hits.clear()
-                        signal.setitimer(signal.ITIMER_REAL, 0.03)
-                        time.sleep(0.05)
+                        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                        try:
+                            signal.pthread_sigmask(signal.SIG_SETMASK, set())
+                            signal.setitimer(signal.ITIMER_REAL, 60)
+                            signal.raise_signal(signal.SIGALRM)
+                        finally:
+                            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
                     return trace
                 signal.signal(signal.SIGALRM, caller_expired)
                 signal.setitimer(signal.ITIMER_REAL, 0.03)
@@ -1082,6 +1088,7 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
                     assert str(error) == "existing process deadline", error
                 finally:
                     sys.settrace(None)
+                    signal.setitimer(signal.ITIMER_REAL, 0)
                 assert windows == [marker], (marker, windows)
                 assert caller_hits == [signal.SIGALRM], (marker, caller_hits)
                 assert signal.getsignal(signal.SIGALRM) is caller_expired

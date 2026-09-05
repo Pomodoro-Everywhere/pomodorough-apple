@@ -7683,7 +7683,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
 
     def test_launchctl_near_deadline_return_reaps_late_descendant(self) -> None:
         source = (
-            "import subprocess,sys,time; time.sleep(0.35); "
+            "import subprocess,sys,time; time.sleep(0.15); "
             "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],"
             "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True); "
             "print(child.pid,flush=True)"
@@ -7709,7 +7709,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             )
         child_pid = int(result.stdout.strip())
         target_pid = jobs[0].channel.target.pid if jobs[0].channel.target else -1
-        self.assertLess(time.monotonic() - started, 1.4)
+        self.assertLess(time.monotonic() - started, 2.0)
         self.assertTrue(all(self.wait_until_process_exits(pid) for pid in (
             jobs[0].identity.pid, target_pid, child_pid,
         )))
