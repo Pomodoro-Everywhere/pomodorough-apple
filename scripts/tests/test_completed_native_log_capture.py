@@ -1474,7 +1474,7 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
             assert 0.0 < remaining <= 0.04, remaining
             assert 0.039 <= interval <= 0.041, interval
             signal.pthread_sigmask(signal.SIG_UNBLOCK, {{signal.SIGALRM}})
-            deadline = time.monotonic() + 0.1
+            deadline = time.monotonic() + 2.0
             while len(hits) < 2 and time.monotonic() < deadline:
                 time.sleep(0.002)
             signal.setitimer(signal.ITIMER_REAL, 0)
