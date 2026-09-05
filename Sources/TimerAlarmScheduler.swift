@@ -72,6 +72,8 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
 #if os(iOS) || os(macOS)
 #if os(macOS)
         _ = MacTimerNotificationCoordinator.shared
+#else
+        _ = IOSTimerNotificationCoordinator.shared
 #endif
         return try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
 #else
@@ -232,6 +234,27 @@ private final class MacTimerNotificationCoordinator: NSObject, UNUserNotificatio
 }
 #endif
 
+#if os(iOS)
+@MainActor
+final class IOSTimerNotificationCoordinator: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = IOSTimerNotificationCoordinator()
+
+    private let center = UNUserNotificationCenter.current()
+
+    override private init() {
+        super.init()
+        center.delegate = self
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+}
+#endif
+
 struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     var authorizationState: TimerSystemAlarmAuthorizationState {
 #if os(iOS)
@@ -349,6 +372,9 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
     ) {
         self.notifications = notifications
         self.alarms = alarms
+#if os(iOS)
+        _ = IOSTimerNotificationCoordinator.shared
+#endif
     }
 
     func requestAuthorization() async throws {
@@ -369,7 +395,9 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
     }
 
     func schedule(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(duration)
         try await TimerAlarmOperationCoordinator.shared.perform(timerID: timerID) { [notifications, alarms] in
+            let duration = deadline.timeIntervalSince(Date()).rounded()
             guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
             if alarms.authorizationState == .authorized,
                let alarmID = Self.alarmID(for: timerID) {
@@ -402,7 +430,9 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
     }
 
     func resume(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(duration)
         try await TimerAlarmOperationCoordinator.shared.perform(timerID: timerID) { [notifications, alarms] in
+            let duration = deadline.timeIntervalSince(Date()).rounded()
             guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
             if alarms.authorizationState == .authorized,
                let alarmID = Self.alarmID(for: timerID) {

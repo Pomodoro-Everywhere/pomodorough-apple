@@ -5,6 +5,13 @@ struct TaskBoardHero: View {
 
     let finishedPomodoros: Int
     let timeSpentMs: Int64
+    let date: Date
+
+    init(finishedPomodoros: Int, timeSpentMs: Int64, date: Date = .now) {
+        self.finishedPomodoros = finishedPomodoros
+        self.timeSpentMs = timeSpentMs
+        self.date = date
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -55,14 +62,14 @@ struct TaskBoardHero: View {
                 .font(.caption.monospaced().bold())
                 .tracking(1.4)
                 .foregroundStyle(PomodoroughTheme.ticket)
-            Text(Date.now, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+            Text(date, format: .dateTime.weekday(.wide).month(.abbreviated).day())
                 .font(.title3.weight(.bold))
         }
         Spacer(minLength: 0)
     }
 
     private var heroAccessibilityValue: String {
-        "\(Date.now.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())), " +
+        "\(date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())), " +
             "\(finishedPomodoros) finished pomodoros, \(TaskTimeText.spoken(timeSpentMs)) focus time"
     }
 }

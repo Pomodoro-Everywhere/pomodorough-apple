@@ -29,7 +29,7 @@ struct HistoryScreen: View {
                     HistoryRow(item: item, taskContext: model.taskContext(for: item))
                 }
                 .listStyle(.plain)
-                .refreshable { await model.sync(force: true) }
+                .refreshable { await model.refreshForPull() }
             }
         }
         .navigationTitle("Arrivals")

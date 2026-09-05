@@ -1777,6 +1777,14 @@ final class AppModel {
         await roomReplicationController.syncIroh(environment: roomReplicationEnvironment)
     }
 
+    func refreshForPull(showsActivity: Bool = true) async {
+        if replicationMode == .iroh {
+            await syncIrohNow()
+        } else {
+            await sync(force: true, showsActivity: showsActivity)
+        }
+    }
+
     private var centralizedWorkspace: CentralizedAccountSessionCoordinator.Workspace {
         CentralizedAccountSessionCoordinator.Workspace(
             state: timerState,
@@ -1983,24 +1991,34 @@ final class AppModel {
     private func executeAlarmEffects(_ effects: [AlarmEffectCoordinator.Effect]) {
         for effect in effects {
             switch effect {
-            case .schedule(let timerID, let phase, let duration):
-                enqueueAlarmOperation { [alarmScheduler] in
-                    try await alarmScheduler.schedule(
+            case .schedule(let timerID, let phase, _):
+                enqueueAlarmOperation { [weak self] in
+                    guard let self else { return }
+                    let now = self.effectivePhysicalNow() ?? self.now()
+                    guard let timer = self.canonicalTimer,
+                          timer.id == timerID,
+                          timer.status == .running else { return }
+                    try await self.alarmScheduler.schedule(
                         timerID: timerID,
                         phase: phase,
-                        duration: duration
+                        duration: max(1, timer.remaining(at: now))
                     )
                 }
             case .pause(let timerID):
                 enqueueAlarmOperation { [alarmScheduler] in
                     try await alarmScheduler.pause(timerID: timerID)
                 }
-            case .resume(let timerID, let phase, let duration):
-                enqueueAlarmOperation { [alarmScheduler] in
-                    try await alarmScheduler.resume(
+            case .resume(let timerID, let phase, _):
+                enqueueAlarmOperation { [weak self] in
+                    guard let self else { return }
+                    let now = self.effectivePhysicalNow() ?? self.now()
+                    guard let timer = self.canonicalTimer,
+                          timer.id == timerID,
+                          timer.status == .running else { return }
+                    try await self.alarmScheduler.resume(
                         timerID: timerID,
                         phase: phase,
-                        duration: duration
+                        duration: max(1, timer.remaining(at: now))
                     )
                 }
             case .cancel(let timerID, let reportsError):

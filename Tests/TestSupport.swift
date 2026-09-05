@@ -704,6 +704,7 @@ enum RecordedAlarmOperation: Equatable {
 @MainActor
 final class RecordingAlarmScheduler: TimerAlarmScheduling {
     var operations: [RecordedAlarmOperation] = []
+    var beforeSchedule: (@MainActor () async -> Void)?
     var authorizationError: Error?
     var schedulingError: Error?
     var cancellationError: Error?
@@ -715,6 +716,7 @@ final class RecordingAlarmScheduler: TimerAlarmScheduling {
 
     func schedule(timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
         operations.append(.schedule(timerID: timerID, phase: phase, duration: duration))
+        await beforeSchedule?()
         if let schedulingError { throw schedulingError }
     }
 

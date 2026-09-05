@@ -2,10 +2,42 @@ import CryptoKit
 import Foundation
 import Security
 import Testing
+#if os(iOS)
+import UserNotifications
+#endif
 @testable import Pomodorough
 
 @Suite("Unit Positive")
 struct UnitPositiveTests {
+    @Test(arguments: [(3, 8, 23), (11, 1, 25), (9, 5, 24)]) @MainActor
+    func taskBoardMidnightUsesCalendarBoundaryAcrossDaylightSavingChanges(
+        month: Int, day: Int, hours: Int
+    ) throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let midnight = try #require(calendar.date(from: DateComponents(year: 2026, month: month, day: day)))
+        let next = TasksScreen.nextMidnight(after: midnight, calendar: calendar)
+
+        #expect(next.timeIntervalSince(midnight) == TimeInterval(hours * 3_600))
+        #expect(calendar.component(.hour, from: next) == 0)
+        #expect(calendar.component(.day, from: next) == day + 1)
+        #expect(TasksScreen.nextMidnight(after: next.addingTimeInterval(-1), calendar: calendar) == next)
+    }
+
+#if os(iOS)
+    @Test @MainActor
+    func notificationFallbackHasForegroundPresentationDelegateBeforeAuthorization() throws {
+        let alarms = RecordingSystemAlarmBackend()
+        alarms.authorizationState = .unsupported
+        let scheduler = TimerAlarmScheduler(notifications: RecordingNotificationBackend(), alarms: alarms)
+        let delegate = try #require(UNUserNotificationCenter.current().delegate)
+        #expect(delegate.responds(to: #selector(
+            UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:)
+        )))
+        withExtendedLifetime(scheduler) {}
+    }
+#endif
+
     private struct ProtocolFixtureEnvelope: Decodable {
         let formatVersion: Int
         let syncResponse: SyncResponse

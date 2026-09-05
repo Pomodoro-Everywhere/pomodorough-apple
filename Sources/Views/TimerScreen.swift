@@ -44,7 +44,7 @@ struct TimerScreen: View {
         .background(TimerBackdrop())
         .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Timer" : "Pomodorough")
         .inlineNavigationTitleIfSupported()
-        .refreshable { await model.sync(force: true) }
+        .refreshable { await model.refreshForPull() }
         .primaryRouteAccountToolbar(model: model)
     }
 }

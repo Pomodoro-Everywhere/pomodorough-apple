@@ -487,8 +487,9 @@ extension AppStatePersistenceCoordinator {
             )
         case .failed:
             return ApplicationTransition(
-                state: current, succeeded: false, rebuildsProjection: false,
-                conflictMessage: nil, marksIrohConflict: false
+                state: current, succeeded: false, rebuildsProjection: rebuildsOnFailure,
+                conflictMessage: String(localized: "Local change could not be saved. The previous state was restored."),
+                marksIrohConflict: false
             )
         }
     }

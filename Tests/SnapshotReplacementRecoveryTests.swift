@@ -5,6 +5,42 @@ import Testing
 @Suite("Snapshot replacement recovery")
 struct SnapshotReplacementRecoveryTests {
     @Test @MainActor
+    func failedPauseRestoresVisibleTimerReportsErrorAndCanRetry() async throws {
+        let fixture = try SnapshotReplacementFixture()
+        defer { fixture.cleanup() }
+        let previous = try fixture.seed()
+        let alarms = RecordingAlarmScheduler()
+        let model = AppModel(
+            api: APIClient(keychain: EmptyTokenStore()), defaults: fixture.defaults,
+            durableLocalStore: AtomicDurableFileStore(fileURL: fixture.url),
+            roomStore: TestFixtures.emptyIrohRoomStore(in: fixture.directory),
+            alarmScheduler: alarms, googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
+        )
+        let runningTimer = try #require(model.canonicalTimer)
+        try #require(runningTimer.status == .running)
+        await model.waitForAlarmOperations()
+        let previousAlarmOperations = alarms.operations
+        try fixture.permissions(0o500, at: fixture.directory)
+        defer { try? fixture.permissions(0o700, at: fixture.directory) }
+
+        model.pause()
+        await model.waitForAlarmOperations()
+
+        #expect(try fixture.savedState() == previous)
+        #expect(model.canonicalTimer == runningTimer)
+        #expect(model.conflictMessage != nil || model.errorMessage != nil)
+        #expect(alarms.operations == previousAlarmOperations)
+        #expect(model.snapshotLoadFailure == nil)
+        try fixture.permissions(0o700, at: fixture.directory)
+        model.pause()
+        await model.waitForAlarmOperations()
+        #expect(model.canonicalTimer?.status == .paused)
+        #expect(try fixture.savedState() != previous)
+        #expect(alarms.operations.last == .pause(timerID: runningTimer.id))
+    }
+
+    @Test @MainActor
     func preReplacementFailureKeepsPreviousStateAndAllowsNextMutation() throws {
         let fixture = try SnapshotReplacementFixture()
         defer { fixture.cleanup() }

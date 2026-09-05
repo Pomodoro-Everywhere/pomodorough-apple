@@ -105,6 +105,132 @@ private func completionEventually(_ predicate: () -> Bool) async throws {
 @Suite("AppModel owns timer completion")
 struct TimerCompletionSchedulingTests {
     @Test @MainActor
+    func pullRefreshStartsIrohBackendAndAwaitsStartupFailure() async throws {
+        let fixture = try CompletionModelFixture()
+        defer { fixture.cleanUp() }
+        try fixture.seedIrohTimer(owned: true)
+        let keys = PullRefreshEndpointKeyStore()
+        let model = fixture.makeModel(endpointKeyStore: keys)
+        try #require(model.replicationMode == .iroh)
+        try #require(keys.loadCount == 0)
+        model.setSceneActive(true)
+        try await completionEventually {
+            if case .unavailable = model.irohStatus { return keys.loadCount > 0 }
+            return false
+        }
+        let startupAttempts = keys.loadCount
+
+        await model.refreshForPull()
+
+        #expect(keys.loadCount == startupAttempts + 1)
+        guard case .unavailable = model.irohStatus else {
+            Issue.record("Refresh must await Iroh startup and publish its failure before returning")
+            return
+        }
+        #expect(TestFixtures.recordedRequests(for: fixture.suiteName).isEmpty)
+    }
+
+    @Test @MainActor
+    func offlinePullRefreshDoesNotStartEitherBackend() async throws {
+        let fixture = try CompletionModelFixture()
+        defer { fixture.cleanUp() }
+        let keys = PullRefreshEndpointKeyStore()
+        let model = fixture.makeModel(endpointKeyStore: keys)
+
+        await model.refreshForPull()
+
+        #expect(keys.loadCount == 0)
+        #expect(TestFixtures.recordedRequests(for: fixture.suiteName).isEmpty)
+        #expect(model.irohStatus == .stopped)
+    }
+
+    @Test @MainActor
+    func taskDailyTotalsRollOverWithoutMutatingWorkspace() async throws {
+        let fixture = try CompletionModelFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.makeModel()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        #expect(await model.addTask("Midnight regression"))
+        model.selectedTaskID = try #require(model.tasks.first).id
+        model.setDurationMinutes(1, for: .focus)
+        model.start()
+        fixture.clock.elapsed = 60
+        model.finish(at: fixture.clock.now)
+        let timer = model.canonicalTimer
+        let history = model.history
+        let midnight = try #require(calendar.date(byAdding: .day, value: 1,
+            to: calendar.startOfDay(for: fixture.clock.now)))
+
+        let yesterday = try #require(model.taskSummaries(for: midnight.addingTimeInterval(-1), calendar: calendar).first)
+        let today = try #require(model.taskSummaries(for: midnight, calendar: calendar).first)
+
+        #expect(yesterday.finishedPomodoros == 1)
+        #expect(yesterday.timeSpentMs == 60_000)
+        #expect(today.finishedPomodoros == 0)
+        #expect(today.timeSpentMs == 0)
+        #expect(today.id == yesterday.id)
+        #expect(model.canonicalTimer == timer)
+        #expect(model.history == history)
+    }
+
+    @Test @MainActor
+    func queuedResumeKeepsOriginalDeadline() async throws {
+        let fixture = try CompletionModelFixture()
+        defer { fixture.cleanUp() }
+        let gate = CompletionSleepGate()
+        defer { gate.releaseAll() }
+        let alarms = RecordingAlarmScheduler()
+        alarms.beforeSchedule = { try? await gate.sleep(.zero) }
+        let model = fixture.makeModel(alarmScheduler: alarms)
+        model.setDurationMinutes(1, for: .focus)
+        model.start()
+        let timer = try #require(model.canonicalTimer)
+        try await completionEventually { gate.count == 1 }
+        fixture.clock.elapsed = 10
+        model.pause()
+        model.resume()
+        fixture.clock.elapsed = 30
+
+        gate.releaseAll()
+        await model.waitForAlarmOperations()
+
+        #expect(model.canonicalTimer?.status == .running)
+        #expect(alarms.operations.last == .resume(timerID: timer.id, phase: .focus, duration: 30))
+    }
+
+    @Test @MainActor
+    func failedAutomaticFinishRestoresRunningTimerAndRetriesAfterStorageRecovers() async throws {
+        let fixture = try CompletionModelFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.makeModel()
+        model.setDurationMinutes(1, for: .focus)
+        model.start()
+        let timer = try #require(model.canonicalTimer)
+        try await completionEventually { fixture.sleeper.count == 1 }
+        let url = fixture.directory.appendingPathComponent("timer-state.json")
+        let saved = try Data(contentsOf: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: fixture.directory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.directory.path)
+        }
+        fixture.clock.elapsed = 60
+        fixture.sleeper.release(0)
+        try await completionEventually { model.conflictMessage != nil || model.errorMessage != nil }
+
+        #expect(model.canonicalTimer == timer)
+        #expect(model.completedFocusCount == 0)
+        #expect(try Data(contentsOf: url) == saved)
+        try await completionEventually { fixture.sleeper.count == 2 }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.directory.path)
+        fixture.clock.elapsed = 65
+        fixture.sleeper.release(1)
+        try await completionEventually { model.completedFocusCount == 1 }
+        #expect(model.canonicalTimer?.status == .completed)
+        #expect(try Data(contentsOf: url) != saved)
+    }
+
+    @Test @MainActor
     func offlineFocusStartsBreakAndRecordsHistoryWithoutTimerView() async throws {
         let fixture = try CompletionModelFixture()
         defer { fixture.cleanUp() }
@@ -411,7 +537,10 @@ private struct CompletionModelFixture {
         )
     }
 
-    func makeModel() -> AppModel {
+    func makeModel(
+        alarmScheduler: (any TimerAlarmScheduling)? = nil,
+        endpointKeyStore: any IrohEndpointKeyStoring = CompletionEndpointKeyStore()
+    ) -> AppModel {
         let clock = clock
         let sleeper = sleeper
         return AppModel(
@@ -428,8 +557,8 @@ private struct CompletionModelFixture {
                 fileURL: directory.appendingPathComponent("timer-state.json")
             ),
             roomStore: roomStore,
-            endpointKeyStore: CompletionEndpointKeyStore(),
-            alarmScheduler: RecordingAlarmScheduler(),
+            endpointKeyStore: endpointKeyStore,
+            alarmScheduler: alarmScheduler ?? RecordingAlarmScheduler(),
             completionScheduler: TimerCompletionScheduler(sleep: { try await sleeper.sleep($0) }),
             googleIdentityProvider: RecordingGoogleIdentityProvider(),
             now: { clock.now },
@@ -522,4 +651,17 @@ private struct CompletionModelFixture {
 private struct CompletionEndpointKeyStore: IrohEndpointKeyStoring {
     func load() throws -> Data? { nil }
     func save(_ secret: Data) throws {}
+}
+
+private final class PullRefreshEndpointKeyStore: IrohEndpointKeyStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var attempts = 0
+    var loadCount: Int { lock.withLock { attempts } }
+
+    func load() throws -> Data? {
+        lock.withLock { attempts += 1 }
+        throw POSIXError(.EACCES)
+    }
+
+    func save(_ secret: Data) throws { throw POSIXError(.EACCES) }
 }

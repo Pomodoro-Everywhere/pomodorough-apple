@@ -5,6 +5,33 @@ import Testing
 @Suite("Integration Positive")
 struct IntegrationPositiveTests {
     @Test @MainActor
+    func centralizedPullRefreshForcesSyncAndAwaitsResponse() async throws {
+        let scenario = "sync-contract-revision-pull-refresh-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: scenario))
+        defer { defaults.removePersistentDomain(forName: scenario) }
+        let state = TestFixtures.syncContractState(includesPendingOperations: false)
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let model = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(), alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        await model.restore()
+        let before = TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" }
+        try #require(model.isSignedIn)
+        try #require(!model.isSyncing)
+
+        await model.refreshForPull()
+
+        #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == before + 1)
+        #expect(!model.isSyncing)
+        #expect(model.errorMessage == nil)
+        #expect(model.irohStatus == .stopped)
+    }
+
+    @Test @MainActor
     func appModelSignInUsesInjectedGoogleIdentityProvider() async throws {
         let scenario = "apple-api-coverage-model-sign-in"
         let store = RecordingTokenStore()
@@ -890,13 +917,18 @@ struct IntegrationPositiveTests {
         let suiteName = "PomodoroughTests.ExplicitPhaseAutomatic.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        let elapsed = LockedTestValue<TimeInterval>(0)
+        let model = AppModel(
+            defaults: defaults, alarmScheduler: RecordingAlarmScheduler(),
+            now: { TestFixtures.anchor.addingTimeInterval(elapsed.value) }, uptime: { elapsed.value }
+        )
         model.setDurationMinutes(1, for: .focus)
         model.autoStartBreaks = true
         model.start()
         let focus = try #require(model.canonicalTimer)
 
         model.selectPhase(.longBreak)
+        elapsed.value = 60
         model.completeIfNeeded(timerID: focus.id, at: focus.anchorAt.addingTimeInterval(60))
 
         #expect(model.canonicalTimer?.status == .running)
@@ -1648,18 +1680,25 @@ struct IntegrationPositiveTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let scheduler = RecordingAlarmScheduler()
-        let model = AppModel(defaults: defaults, alarmScheduler: scheduler)
+        let elapsed = LockedTestValue<TimeInterval>(0)
+        let model = AppModel(
+            defaults: defaults, alarmScheduler: scheduler,
+            now: { TestFixtures.anchor.addingTimeInterval(elapsed.value) }, uptime: { elapsed.value }
+        )
         model.setDurationMinutes(1, for: .focus)
 
         model.start()
         await model.waitForAlarmOperations()
         let running = try #require(model.canonicalTimer)
+        elapsed.value = 10
         model.pause(at: running.anchorAt.addingTimeInterval(10))
         await model.waitForAlarmOperations()
         let paused = try #require(model.canonicalTimer)
+        elapsed.value = 15
         model.resume(at: paused.anchorAt.addingTimeInterval(5))
         await model.waitForAlarmOperations()
         let resumed = try #require(model.canonicalTimer)
+        elapsed.value = 25
         model.finish(at: resumed.anchorAt.addingTimeInterval(10))
         await model.waitForAlarmOperations()
 
@@ -1677,7 +1716,11 @@ struct IntegrationPositiveTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let scheduler = RecordingAlarmScheduler()
-        let model = AppModel(defaults: defaults, alarmScheduler: scheduler)
+        let elapsed = LockedTestValue<TimeInterval>(0)
+        let model = AppModel(
+            defaults: defaults, alarmScheduler: scheduler,
+            now: { TestFixtures.anchor.addingTimeInterval(elapsed.value) }, uptime: { elapsed.value }
+        )
         model.setDurationMinutes(1, for: .focus)
         model.setDurationMinutes(1, for: .shortBreak)
         model.autoStartBreaks = true
@@ -1685,6 +1728,7 @@ struct IntegrationPositiveTests {
         await model.waitForAlarmOperations()
         let focus = try #require(model.canonicalTimer)
 
+        elapsed.value = 60
         model.completeIfNeeded(timerID: focus.id, at: focus.anchorAt.addingTimeInterval(60))
         await model.waitForAlarmOperations()
 
