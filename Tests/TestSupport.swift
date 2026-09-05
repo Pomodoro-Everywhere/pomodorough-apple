@@ -1951,7 +1951,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         request: [String: Any]?
     ) -> Data {
         switch scenario {
-        case "auto-start-owner-expiry":
+        case _ where scenario.hasPrefix("auto-start-owner-expiry"):
             return timerCycleResponse(scenario: scenario, request: request)
         case "auto-start-legacy-ownership-local", "auto-start-legacy-ownership-remote":
             return legacyOwnershipResponse(scenario: scenario, request: request)

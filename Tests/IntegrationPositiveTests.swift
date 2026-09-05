@@ -3471,7 +3471,7 @@ struct IntegrationPositiveTests {
 
     @Test @MainActor
     func syncedObserverDoesNotAutoCompleteExpiredFocus() async throws {
-        let scenario = "auto-start-owner-expiry"
+        let scenario = "auto-start-owner-expiry-observer"
         let originSuite = "PomodoroughTests.\(UUID().uuidString)"
         let observerSuite = "PomodoroughTests.\(UUID().uuidString)"
         let originDefaults = try #require(UserDefaults(suiteName: originSuite))
@@ -3533,7 +3533,7 @@ struct IntegrationPositiveTests {
 
     @Test @MainActor
     func reopenedOriginStillAutoCompletesItsExpiredFocus() async throws {
-        let scenario = "auto-start-owner-expiry"
+        let scenario = "auto-start-owner-expiry-reopened"
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -3664,7 +3664,7 @@ struct IntegrationPositiveTests {
 
     @Test @MainActor
     func provisionalBreakBlocksLaterOfflineChainUntilSourceFinishAcceptance() async throws {
-        let scenario = "auto-start-owner-expiry"
+        let scenario = "auto-start-owner-expiry-provisional"
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
