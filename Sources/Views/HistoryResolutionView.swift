@@ -184,6 +184,7 @@ struct HistoryResolutionView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(PomodoroughTheme.sky)
                 .accessibilityHidden(true)
+            retryFailureDetail
             Button("Retry", systemImage: "arrow.clockwise") {
                 Task { await model.retryHistoryResolution() }
             }
@@ -195,14 +196,41 @@ struct HistoryResolutionView: View {
         .frame(maxWidth: .infinity)
         .background(PomodoroughTheme.platform.opacity(0.94), in: .rect(cornerRadius: 22))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("History resolution retry required. \(retryMessage(for: strategy))")
+        .accessibilityLabel(retryAccessibilityLabel(for: strategy))
+    }
+
+    private func retryAccessibilityLabel(for strategy: BootstrapResolutionStrategy?) -> String {
+        if model.isOffline {
+            return String(localized: "History resolution retry required. \(retryMessage(for: strategy)) You appear offline. Reconnect, then retry.")
+        }
+        if let errorMessage = model.errorMessage, !errorMessage.isEmpty {
+            return String(localized: "History resolution retry required. \(retryMessage(for: strategy)) \(errorMessage)")
+        }
+        return String(localized: "History resolution retry required. \(retryMessage(for: strategy))")
+    }
+
+    @ViewBuilder
+    private var retryFailureDetail: some View {
+        // Retryable means the request was never accepted by the server, so the
+        // card must say why instead of implying the choice already went through.
+        Group {
+            if model.isOffline {
+                Text("You appear offline. Reconnect, then retry.")
+            } else if let errorMessage = model.errorMessage {
+                Text(errorMessage)
+            }
+        }
+        .font(.footnote)
+        .multilineTextAlignment(.center)
+        .foregroundStyle(PomodoroughTheme.porcelain.opacity(0.75))
+        .accessibilityHidden(true)
     }
 
     private func retryMessage(for strategy: BootstrapResolutionStrategy?) -> String {
         guard let strategy else {
             return String(localized: "Remote history could not be checked. Local data remains unchanged.")
         }
-        return String(localized: "Your \(strategy.title) request is saved exactly and local data remains unchanged.")
+        return String(localized: "Your \(strategy.title) request could not be delivered yet. Local data remains unchanged. Retrying is safe.")
     }
 }
 

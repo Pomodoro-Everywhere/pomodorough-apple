@@ -1145,6 +1145,26 @@
         }
       }
     },
+    "History resolution retry required. %@ %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History resolution retry required. %@ %@"
+          }
+        }
+      }
+    },
+    "History resolution retry required. %@ You appear offline. Reconnect, then retry.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History resolution retry required. %@ You appear offline. Reconnect, then retry."
+          }
+        }
+      }
+    },
     "History retry needed": {
       "localizations": {
         "en": {
@@ -2989,12 +3009,22 @@
         }
       }
     },
-    "Your %@ request is saved exactly and local data remains unchanged.": {
+    "You appear offline. Reconnect, then retry.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your %@ request is saved exactly and local data remains unchanged."
+            "value": "You appear offline. Reconnect, then retry."
+          }
+        }
+      }
+    },
+    "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe."
           }
         }
       }

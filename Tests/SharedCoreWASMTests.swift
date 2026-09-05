@@ -37,7 +37,7 @@ struct SharedCoreWASMTests {
             as: CoreVersion.self
         )
 
-        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.10.0"))
+        #expect(version == CoreVersion(schemaVersion: 1, coreVersion: "0.11.0"))
     }
 
     @Test func hlcHeadDispatchesThroughBundledWebAssembly() throws {
@@ -53,6 +53,29 @@ struct SharedCoreWASMTests {
         )
 
         #expect(head == HLCHead(wallMs: 101, counter: 7))
+    }
+
+    @Test func reconcileAcceptsSubmillisecondServerTime() throws {
+        let response = try JSONDecoder.api.decode(
+            SyncResponse.self,
+            from: Data(#"{"acknowledgements":[],"taskAcknowledgements":[],"durationAcknowledgements":[],"autoStartAcknowledgements":[],"selectedTaskAcknowledgements":[],"selectedTaskId":null,"durationsMs":{"focus":1500000,"short_break":300000,"long_break":900000},"autoStartBreaks":false,"revision":423,"canonicalTimer":null,"history":[],"tasks":[],"serverTime":"2026-09-05T14:12:50.776530Z","serverHlcWallMs":1788617570776,"serverHlcCounter":0}"#.utf8)
+        )
+        let input = CoreReconcileInput(
+            local: CoreReconcileLocalQueues(state: .fresh()),
+            sent: CoreReconcileSentQueues(
+                commands: [],
+                taskOperations: [],
+                durationOperations: [],
+                autoStartOperations: [],
+                selectedTaskOperations: []
+            ),
+            response: CoreReconcileCanonicalResponse(response),
+            timerDependencies: []
+        )
+
+        let output = try SharedCore.bundled().reconcileRebase(input)
+
+        #expect(output.revision == response.revision)
     }
 
     @Test func rejectedFreePreservesPrimaryFailureAndForcesFreshRuntime() throws {

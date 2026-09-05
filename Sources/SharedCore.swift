@@ -3,8 +3,8 @@ import Foundation
 import WasmKit
 
 final class SharedCore: @unchecked Sendable {
-    static let coreCommit = "542aca9a322a1b04c3e53d4a76152f385675d0a1"
-    static let coreSHA256 = "f735303cbd13a1671090b7ecd1e9c96a210ca007d8a35244bdf8028772c66eb6"
+    static let coreCommit = "fde2eaf42c39cd175e23796b9037999abadef732"
+    static let coreSHA256 = "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
     private static let maxTransferBytes = 16 * 1024 * 1024
 
     private struct Runtime {
@@ -447,7 +447,10 @@ private func sharedCoreTimestamp(for date: Date) throws -> String {
             .init(codingPath: [], debugDescription: "Shared Core date is out of range")
         )
     }
-    let milliseconds = Int64(unroundedMilliseconds.rounded())
+    // Truncate, never round: the server truncates serverHlcWallMs to the millisecond,
+    // and a rounded-up serverTime would put the HLC wall below the parsed server time,
+    // failing canonical-response clock-skew validation by one millisecond.
+    let milliseconds = Int64(unroundedMilliseconds.rounded(.towardZero))
     let wholeSeconds = milliseconds >= 0
         ? milliseconds / 1_000
         : (milliseconds - 999) / 1_000

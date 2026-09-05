@@ -5,9 +5,9 @@ import unittest
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-CORE_COMMIT = "542aca9a322a1b04c3e53d4a76152f385675d0a1"
-CORE_RELEASE_TAG = "v0.10.0"
-CORE_SHA256 = "f735303cbd13a1671090b7ecd1e9c96a210ca007d8a35244bdf8028772c66eb6"
+CORE_COMMIT = "fde2eaf42c39cd175e23796b9037999abadef732"
+CORE_RELEASE_TAG = "v0.11.0"
+CORE_SHA256 = "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
 
 
 class SharedCoreWorkflowTests(unittest.TestCase):

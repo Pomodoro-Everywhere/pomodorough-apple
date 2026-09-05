@@ -5,7 +5,11 @@ __pycache__/
 *.pyc
 DerivedData/
 .build/
-/build/
+build/
+dist/
+*.xcresult/
+*.ipa
+.swiftpm/
 *.xcuserstate
 xcuserdata/
 .env
