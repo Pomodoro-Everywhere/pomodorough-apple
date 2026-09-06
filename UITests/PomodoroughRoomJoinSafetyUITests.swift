@@ -31,8 +31,7 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
         // runtimes. Dump the hierarchy on failure for decisive evidence.
         let inviteField = app.descendants(matching: .any)["Room invite"].firstMatch
         if !inviteField.waitForExistence(timeout: 5) {
-            print("ROOM-JOIN-DIAG hierarchy:
-" + app.debugDescription)
+            print("ROOM-JOIN-DIAG hierarchy:\n" + app.debugDescription)
         }
         XCTAssertTrue(inviteField.exists)
         inviteField.tap()
