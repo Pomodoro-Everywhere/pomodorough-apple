@@ -42,6 +42,13 @@ local-first synchronization with the Pomodorough service.
 
 The project uses Swift 6 with complete strict-concurrency checking.
 
+On Mac, the menu bar shows the current phase icon and a live countdown. Choose
+Current timer, Total Pomodoro time, or Both from the menu or the Settings inspector.
+The choice is saved on this Mac. The total (Σ) includes today's completed focus
+sessions plus elapsed time in the current focus session; breaks are excluded.
+The menu also provides start/pause/resume, Open Pomodorough, and Quit actions.
+Closing the main window leaves the menu bar available while the app is running.
+
 Timers appear in the Dynamic Island (compact, minimal, and expanded) and on the
 Lock Screen with phase colors, a countdown, progress, and paused/completed states.
 Tap the activity to open the Timer tab. On iOS 26+, the widget renders AlarmKit's

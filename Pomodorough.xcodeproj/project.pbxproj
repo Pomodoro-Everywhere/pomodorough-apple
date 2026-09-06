@@ -86,6 +86,7 @@
 		39CE74E11A83E03F99F5975A /* PersistedTimerState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB318E39A9F2F2070F3114D6 /* PersistedTimerState.swift */; };
 		3B77637DDA5F99C5B47A5E2F /* WatchSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0312BF444D5D919C8D7EEF44 /* WatchSyncService.swift */; };
 		3B9C80CC0469781B09D176CA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A07D519989D4A2F8C108C3BE /* Assets.xcassets */; };
+		3C0EA3D6D66A2D7146CBADD3 /* MenuBarTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA6E6A5D76327C5818795B1 /* MenuBarTimer.swift */; };
 		3C4497D038D75292E62B2271 /* TaskSummaryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867BAD619534F559090B4BFC /* TaskSummaryRow.swift */; };
 		3CE6515E213F9EFD837C93C5 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 339967D3D78893FBEB4565F6 /* HistoryScreen.swift */; };
 		3D717572FDDCE6D8156E1DF3 /* ModernTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B78A6C72FEDDC6BCC6B7DC1 /* ModernTabs.swift */; };
@@ -126,6 +127,7 @@
 		5862A7D6D3EADE07CCF50926 /* persisted-state-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EF0207037F1AEB5512B76963 /* persisted-state-v1.json */; };
 		586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
 		58962D0E6040C10A030364BB /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A8EC0FFF7A089F16E6CA30F /* RootView.swift */; };
+		58ADF2DECA9FFCB65B063AD1 /* MenuBarTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */; };
 		58D9FB99984C3C9DE6B8E2A5 /* PomodoroughApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */; };
 		59506BF928A75020FE18BF31 /* AccountLifecycleTransitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3325B223134EBC2103C1C3F /* AccountLifecycleTransitions.swift */; };
 		5989F2AB63E0CA03B54F672E /* IrohRoomProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA070B31BB3538D64FE60C7 /* IrohRoomProjection.swift */; };
@@ -253,6 +255,7 @@
 		BD513CCC19FD160067E8A585 /* TimerCompletionSchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */; };
 		BD5F06E734560EC2E00CC879 /* AccountDeletionRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB09E46A90764AA003DFF9 /* AccountDeletionRetryTests.swift */; };
 		BD842A53CE6A8D2E5F6446A3 /* IrohReplicationServiceCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */; };
+		BE1AB113865829393C4D970C /* MenuBarTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA6E6A5D76327C5818795B1 /* MenuBarTimer.swift */; };
 		BE2AFABAAE1ADE3CC7C78A1B /* ServicePatternScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89BDAA2BB7DF807BB2552DC /* ServicePatternScreen.swift */; };
 		BEDD57B570584744BBF2E177 /* IrohProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9151C5F69A1F64F86529666 /* IrohProtocol.swift */; };
 		C0725FE9385C24B7F5C728E8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A07D519989D4A2F8C108C3BE /* Assets.xcassets */; };
@@ -311,6 +314,7 @@
 		E07F159A47806F5FD2494D5A /* pomodorough_core.wasm in Resources */ = {isa = PBXBuildFile; fileRef = 83402C8BC26381491CFC050B /* pomodorough_core.wasm */; };
 		E0B6D4E3EBAC3CBC4DA9E7C3 /* APIDateCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E7C2D3341B804E5936AF7B /* APIDateCodecTests.swift */; };
 		E17F90F0BF10DFED8753E3DB /* PomodoroughWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E70ABFB780690269C33E577 /* PomodoroughWatchApp.swift */; };
+		E18951533779205398B8BDC2 /* MenuBarTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */; };
 		E1CBBFBC39FD9FC93CC36394 /* AccountLifecycleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7153AF2C965F64F578C6007 /* AccountLifecycleController.swift */; };
 		E26B237BB09C48CF4C1741AD /* LaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A06BAAC59FEFFB625D50DE7 /* LaunchView.swift */; };
 		E36FC5A38CB3A63556554C32 /* DialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E2B967974C1E80FDE7E8EE /* DialFace.swift */; };
@@ -505,6 +509,8 @@
 		6BE335886A3A7C806ECEB12F /* AppStatePublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStatePublisher.swift; sourceTree = "<group>"; };
 		6D043EE67CA1960F20CF2749 /* MacOSTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSTests.swift; sourceTree = "<group>"; };
 		6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarTimerTests.swift; sourceTree = "<group>"; };
+		6EA6E6A5D76327C5818795B1 /* MenuBarTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarTimer.swift; sourceTree = "<group>"; };
 		6FCD013ABB0FD83204A7E89B /* TimerAlarmScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerAlarmScheduler.swift; sourceTree = "<group>"; };
 		71C3F5C1F22298E87DE9EE29 /* SectionHeading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionHeading.swift; sourceTree = "<group>"; };
 		724244F638BCEA9648A23B9A /* RailwayNetworkLines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RailwayNetworkLines.swift; sourceTree = "<group>"; };
@@ -734,6 +740,7 @@
 				2E603B243D29FD1320E6153B /* LegacyMigrationSourceRaceTests.swift */,
 				7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */,
 				6D043EE67CA1960F20CF2749 /* MacOSTests.swift */,
+				6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */,
 				23E73A1D6F89C1AAFBC49A74 /* ModelsSourceSplitCompatibilityTests.swift */,
 				9A3CD9AE3AA80976EBF73221 /* PersistedStateCompatibilityTests.swift */,
 				22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */,
@@ -815,6 +822,7 @@
 				EFAFD32702932CC335D6F13D /* LegacyTabs.swift */,
 				F5AB84018A35FDAF73AA0418 /* LongBreakProgressIndicator.swift */,
 				5A8F4B9B9BCCA8F2070D63D3 /* MainContainer.swift */,
+				6EA6E6A5D76327C5818795B1 /* MenuBarTimer.swift */,
 				6B78A6C72FEDDC6BCC6B7DC1 /* ModernTabs.swift */,
 				C54E2C7C5FCA242076B7751F /* NetworkScreen.swift */,
 				36A8F361E21D197A0C56D2CA /* NetworkSectionView.swift */,
@@ -1253,6 +1261,7 @@
 				B040FF19CFC14691E4273A6E /* LegacyTimerReducer.swift in Sources */,
 				0A4D8FC8A0D036F6FCF4F3CC /* LogoutRevocationTests.swift in Sources */,
 				586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */,
+				E18951533779205398B8BDC2 /* MenuBarTimerTests.swift in Sources */,
 				773AEB98B6A6EE50655C58E7 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
 				7B32DC7AAB3CACBC785C665C /* PersistedStateCompatibilityTests.swift in Sources */,
 				A8E0A6723798097C7C4DF550 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */,
@@ -1313,6 +1322,7 @@
 				62983357E57112E9ABD54E9E /* LegacyTimerReducer.swift in Sources */,
 				660C51357760DC93057A38B9 /* LogoutRevocationTests.swift in Sources */,
 				74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */,
+				58ADF2DECA9FFCB65B063AD1 /* MenuBarTimerTests.swift in Sources */,
 				9A572722943C8D6ABA5DDD97 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
 				24398B245363C38C96EF7316 /* PersistedStateCompatibilityTests.swift in Sources */,
 				E5957DF586FCF854A38FA531 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */,
@@ -1398,6 +1408,7 @@
 				88E9E36D8BC2FA24E83DBB78 /* LongBreakProgressIndicator.swift in Sources */,
 				A66A91713F118C99C8C039CC /* MainContainer.swift in Sources */,
 				80A3FE90147A12EFEB435B39 /* MainTab.swift in Sources */,
+				BE1AB113865829393C4D970C /* MenuBarTimer.swift in Sources */,
 				471AC410750E1BBBB89BDBDC /* Models.swift in Sources */,
 				097F6024855A8B8AA75B5F22 /* ModernTabs.swift in Sources */,
 				FEB96DFDEA9288A2D294F089 /* NetworkScreen.swift in Sources */,
@@ -1529,6 +1540,7 @@
 				D57C860FE1F2B0024B505D5F /* LongBreakProgressIndicator.swift in Sources */,
 				5C333AB5EA1A01C470B1A7FF /* MainContainer.swift in Sources */,
 				DD29161686649850AAB2B663 /* MainTab.swift in Sources */,
+				3C0EA3D6D66A2D7146CBADD3 /* MenuBarTimer.swift in Sources */,
 				B07D8AF9405E6B21B227E084 /* Models.swift in Sources */,
 				3D717572FDDCE6D8156E1DF3 /* ModernTabs.swift in Sources */,
 				570A96C71EC12D92DC7E0536 /* NetworkScreen.swift in Sources */,

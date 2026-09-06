@@ -26,7 +26,7 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
 
         // Malformed invite fails fast in local invite decoding, before any
         // networking: deterministic failed join without a slow peer.
-        let inviteField = app.textViews["Room invite"].firstMatch
+        let inviteField = app.textFields["Room invite"].firstMatch
         XCTAssertTrue(inviteField.waitForExistence(timeout: 5))
         inviteField.tap()
         inviteField.typeText("not-a-valid-invite")

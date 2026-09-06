@@ -4,6 +4,10 @@ import SwiftUI
 struct PomodoroughApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AppModel
+#if os(macOS)
+    @StateObject private var menuBarClock = MenuBarTimerClock()
+    @AppStorage(MenuBarTimerDisplay.defaultsKey) private var menuBarDisplay = MenuBarTimerDisplay.current
+#endif
 
     init() {
         SentrySetup.startIfConfigured()
@@ -21,7 +25,7 @@ struct PomodoroughApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             RootView(model: model)
 #if os(iOS)
                 .modifier(TimerLiveActivityModifier(model: model))
@@ -43,6 +47,14 @@ struct PomodoroughApp: App {
         .defaultSize(width: 920, height: 760)
         .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
+#endif
+#if os(macOS)
+        MenuBarExtra {
+            MenuBarTimerMenu(model: model)
+        } label: {
+            MenuBarTimerLabel(model: model, date: menuBarClock.date, display: menuBarDisplay)
+        }
+        .menuBarExtraStyle(.menu)
 #endif
     }
 

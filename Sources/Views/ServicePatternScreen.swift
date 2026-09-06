@@ -19,6 +19,16 @@ struct ServicePatternScreen: View {
         ScrollView {
             VStack(spacing: 12) {
                 ServicePatternCard(model: model)
+#if os(macOS)
+                VStack(alignment: .leading, spacing: 8) {
+                    MenuBarTimerPicker()
+                    Text("Total includes today’s completed Pomodoros and the current focus session.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(18)
+                .background(.background, in: .rect(cornerRadius: 22))
+#endif
                 AppVersionFooter()
             }
                 .padding()
