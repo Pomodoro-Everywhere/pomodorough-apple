@@ -18,6 +18,7 @@ struct TasksScreen: View {
         suppliedNewTaskTitle = newTaskTitle
     }
 
+    // size-exception: single declarative ScrollView composes hero, composer, board card, and day-refresh task/onReceive chain; splitting would duplicate summaries/delete wiring and hide toolbar/navigation/modifier ordering.
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 18) {
