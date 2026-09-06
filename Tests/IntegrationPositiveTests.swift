@@ -896,6 +896,26 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func enablingAutoStartMidFocusAppliesToCurrentFinishPlan() throws {
+        // Backs the ServicePatternCard guidance: the toggle controls the break
+        // after the current focus (AppModel passes the live autoStartBreaks
+        // value into the active timer's finish plan), not some later timer.
+        let suiteName = "PomodoroughTests.AutoStartMidFocus.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        model.setDurationMinutes(1, for: .focus)
+        model.start()
+        let focus = try #require(model.canonicalTimer)
+
+        model.autoStartBreaks = true
+        model.finish(at: focus.anchorAt.addingTimeInterval(60))
+
+        #expect(model.canonicalTimer?.status == .running)
+        #expect(model.canonicalTimer?.phase == .shortBreak)
+    }
+
+    @Test @MainActor
     func manualCompletionPreservesPhaseExplicitlySelectedDuringActiveTimer() throws {
         let suiteName = "PomodoroughTests.ExplicitPhaseManual.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

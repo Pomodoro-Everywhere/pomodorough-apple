@@ -19,6 +19,7 @@
 		097F6024855A8B8AA75B5F22 /* ModernTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B78A6C72FEDDC6BCC6B7DC1 /* ModernTabs.swift */; };
 		09FAB91AC913CC5933287240 /* SharedCoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CEEC2337A192634D24A340C /* SharedCoreModels.swift */; };
 		0A4D8FC8A0D036F6FCF4F3CC /* LogoutRevocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */; };
+		0AF4C50D480CC6082A74DE13 /* PomodoroughRoomJoinSafetyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EFAB86CC0ADE4867B4A82FE /* PomodoroughRoomJoinSafetyUITests.swift */; };
 		0B92B5590C5D19F65096200D /* AppVersionFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */; };
 		0BA0AC733AC870B50A7FEAE7 /* AccountSyncToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */; };
 		0DD0CA0C903D547E17D0117D /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
@@ -112,6 +113,7 @@
 		570A96C71EC12D92DC7E0536 /* NetworkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54E2C7C5FCA242076B7751F /* NetworkScreen.swift */; };
 		57B33D06F7E83F3B81EFAEA3 /* SynchronizedWorkspaceMutationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DBF33085619E72BB5BBAB /* SynchronizedWorkspaceMutationController.swift */; };
 		57D8E1F2CF24C7AADEC1CB78 /* JoinIrohRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */; };
+		581FCE6E75E99A19ED4C5545 /* PomodoroughTimerAlertsRecoveryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 315B527B45DDC450EEFF760D /* PomodoroughTimerAlertsRecoveryUITests.swift */; };
 		5862A7D6D3EADE07CCF50926 /* persisted-state-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EF0207037F1AEB5512B76963 /* persisted-state-v1.json */; };
 		586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
 		58962D0E6040C10A030364BB /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A8EC0FFF7A089F16E6CA30F /* RootView.swift */; };
@@ -371,6 +373,7 @@
 		0BA59D00B6874FCABDC0711C /* TickMarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickMarks.swift; sourceTree = "<group>"; };
 		0CD90C5209D4958A810F507D /* SyncToolbarStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncToolbarStatus.swift; sourceTree = "<group>"; };
 		0E7CBF752AEDFAD4EFAF3248 /* PomodoroughUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PomodoroughUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0EFAB86CC0ADE4867B4A82FE /* PomodoroughRoomJoinSafetyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughRoomJoinSafetyUITests.swift; sourceTree = "<group>"; };
 		16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationWireModels.swift; sourceTree = "<group>"; };
 		17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationServiceCoverageTests.swift; sourceTree = "<group>"; };
 		17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Pomodorough.swift"; sourceTree = "<group>"; };
@@ -390,6 +393,7 @@
 		2E603B243D29FD1320E6153B /* LegacyMigrationSourceRaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyMigrationSourceRaceTests.swift; sourceTree = "<group>"; };
 		2E9EE6D33C5F45430FDF22C6 /* Localizable.ar-XB.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Localizable.ar-XB.json"; sourceTree = "<group>"; };
 		2FE6D3C420FC1AB911E53262 /* ServicePatternCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServicePatternCard.swift; sourceTree = "<group>"; };
+		315B527B45DDC450EEFF760D /* PomodoroughTimerAlertsRecoveryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughTimerAlertsRecoveryUITests.swift; sourceTree = "<group>"; };
 		32AB090A3DD1B6C42AD41A1B /* ApplicationPresentationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationPresentationModels.swift; sourceTree = "<group>"; };
 		339967D3D78893FBEB4565F6 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
 		363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomReplicationController.swift; sourceTree = "<group>"; };
@@ -675,6 +679,8 @@
 			children = (
 				9223397CA303F7E682AC131A /* PomodoroughAccessibilityUITests.swift */,
 				9C30CF22C2104AE306728CEB /* PomodoroughHistoryRefreshUITests.swift */,
+				0EFAB86CC0ADE4867B4A82FE /* PomodoroughRoomJoinSafetyUITests.swift */,
+				315B527B45DDC450EEFF760D /* PomodoroughTimerAlertsRecoveryUITests.swift */,
 			);
 			path = UITests;
 			sourceTree = "<group>";
@@ -1278,6 +1284,8 @@
 			files = (
 				B52ADEA1251692A7CD150328 /* PomodoroughAccessibilityUITests.swift in Sources */,
 				7180787487196791B4BC5DBD /* PomodoroughHistoryRefreshUITests.swift in Sources */,
+				0AF4C50D480CC6082A74DE13 /* PomodoroughRoomJoinSafetyUITests.swift in Sources */,
+				581FCE6E75E99A19ED4C5545 /* PomodoroughTimerAlertsRecoveryUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
