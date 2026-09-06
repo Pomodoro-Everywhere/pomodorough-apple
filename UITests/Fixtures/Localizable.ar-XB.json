@@ -788,6 +788,12 @@
         "value": "‏⟦Checking line⟧"
       }
     },
+    "Checking…": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Checking…⟧"
+      }
+    },
     "Choose history": {
       "stringUnit": {
         "state": "translated",
@@ -858,6 +864,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Continues without timer alerts. The timer still works while Pomodorough is open.⟧"
+      }
+    },
+    "Controls the break after the current focus. Short after focus. Long every fourth completed focus.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Controls the break after the current focus. Short after focus. Long every fourth completed focus.⟧"
       }
     },
     "Create Iroh room": {
@@ -936,6 +948,30 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Double tap to select. Swipe up or down to change duration.⟧"
+      }
+    },
+    "Duration changes apply to next timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Duration changes apply to next timer⟧"
+      }
+    },
+    "Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus.⟧"
+      }
+    },
+    "Enable timer alerts": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Enable timer alerts⟧"
+      }
+    },
+    "Enabling timer alerts": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Enabling timer alerts⟧"
       }
     },
     "Exchanging changes": {
@@ -1202,6 +1238,12 @@
         "value": "‏⟦Leaving restores the workspace you used before joining. The room's retained operation log stays saved on this device so you can return later.⟧"
       }
     },
+    "Limited": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Limited⟧"
+      }
+    },
     "Line status": {
       "stringUnit": {
         "state": "translated",
@@ -1316,6 +1358,12 @@
         "value": "‏⟦Not connected⟧"
       }
     },
+    "Not enabled": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Not enabled⟧"
+      }
+    },
     "Not now": {
       "stringUnit": {
         "state": "translated",
@@ -1340,10 +1388,22 @@
         "value": "‏⟦OPEN A PEER ROUTE⟧"
       }
     },
+    "Off": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Off⟧"
+      }
+    },
     "Offline": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Offline⟧"
+      }
+    },
+    "On": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦On⟧"
       }
     },
     "On device": {
@@ -1362,6 +1422,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦One through 64 characters. Room name is display-only.⟧"
+      }
+    },
+    "Open Settings": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Open Settings⟧"
       }
     },
     "Opening Google": {
@@ -1386,6 +1452,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Opens cloud synchronization and Iroh room controls.⟧"
+      }
+    },
+    "Opens system settings to re-enable timer alerts after denial.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Opens system settings to re-enable timer alerts after denial.⟧"
       }
     },
     "P": {
@@ -1898,6 +1970,12 @@
         "value": "‏⟦Start %@⟧"
       }
     },
+    "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus.⟧"
+      }
+    },
     "Stop sound": {
       "stringUnit": {
         "state": "translated",
@@ -2148,6 +2226,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Timer alert limits⟧"
+      }
+    },
+    "Timer alerts": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Timer alerts⟧"
       }
     },
     "Timer continues in Pomodorough, but its system alarm could not be updated. %@": {

@@ -437,7 +437,7 @@ def main() -> int:
     task_picker = read("Sources/Views/TimerTaskPicker.swift")
     permission = read("Sources/Views/PermissionIntroductionView.swift")
     account = read("Sources/Views/AccountView.swift")
-    require('Label("Applies to next timer"' in pattern, "active pattern edits lack next-timer disclosure", failures)
+    require('Label("Duration changes apply to next timer"' in pattern, "active pattern edits lack next-timer disclosure", failures)
     require('Picker("Next focus task"' in task_picker, "active task picker lacks next-focus semantics", failures)
     require('Text("Active timer task")' in task_picker, "active task assignment is not separately announced", failures)
     guarantee = "subject to the operating system's delivery policy"
