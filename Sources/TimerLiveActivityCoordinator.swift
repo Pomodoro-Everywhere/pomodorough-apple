@@ -82,7 +82,7 @@ final class TimerLiveActivityCoordinator {
 
     private func takeMatchingActivity(
         keeping desiredID: String?
-    ) async -> Activity<TimerActivityAttributes>? {
+    ) async -> sending Activity<TimerActivityAttributes>? {
         // Reuse activities restored by ActivityKit after process termination.
         var matching: Activity<TimerActivityAttributes>?
         for activity in Activity<TimerActivityAttributes>.activities {
