@@ -9,24 +9,6 @@ import WatchConnectivity
 final class WatchSyncService: NSObject, ObservableObject {
     @Published private(set) var snapshot: WatchTimerSnapshot?
     @Published private(set) var isReachable = false
-    /// Temporary debug: nil = no reply yet, true/false = iOS acked or failed.
-    @Published private(set) var iosAck: Bool?
-    /// Temporary debug: last report string received from iOS.
-    @Published private(set) var iosReport: String?
-    /// Temporary debug: keys of the last application context received.
-    @Published private(set) var lastContextKeys: [String] = []
-
-    /// Temporary debug line for the empty state.
-    var diag: String {
-        let s = WCSession.default
-        let ack: String
-        switch iosAck {
-        case nil: ack = "?"
-        case true?: ack = "y"
-        case false?: ack = "n"
-        }
-        return "act=\(s.activationState.rawValue) comp=\(s.isCompanionAppInstalled) reach=\(isReachable) ctx=\(lastContextKeys) ack=\(ack)"
-    }
 
     private let storeKey = "watch-timer-snapshot"
 
@@ -36,6 +18,22 @@ final class WatchSyncService: NSObject, ObservableObject {
            let snapshot = try? JSONDecoder().decode(WatchTimerSnapshot.self, from: data) {
             self.snapshot = snapshot
         }
+        // TEMP-CRASH-REPRO (simulator only, never device): seed a running
+        // snapshot to exercise syncedView without WC.
+        #if targetEnvironment(simulator)
+        if self.snapshot == nil {
+            let now = Date()
+            self.snapshot = WatchTimerSnapshot(
+                phase: "focus", status: "running",
+                plannedDurationMs: 25 * 60 * 1_000, elapsedAtAnchorMs: 0, anchorAt: now,
+                selectedPhase: "focus",
+                focusDurationMs: 25 * 60 * 1_000,
+                shortBreakDurationMs: 5 * 60 * 1_000,
+                longBreakDurationMs: 15 * 60 * 1_000,
+                updatedAt: now
+            )
+        }
+        #endif
         if WCSession.isSupported() {
             WCSession.default.delegate = self
             WCSession.default.activate()
@@ -52,19 +50,13 @@ final class WatchSyncService: NSObject, ObservableObject {
                 payload,
                 replyHandler: { [weak self] reply in
                     Task { @MainActor in
-                        self?.iosAck = true
-                        if let text = reply[WatchSyncKeys.report] as? String, text != "ack" {
-                            self?.iosReport = text
-                        }
                         if let data = reply[WatchSyncKeys.snapshot] as? Data,
                            let snapshot = try? JSONDecoder().decode(WatchTimerSnapshot.self, from: data) {
                             self?.ingest(snapshot)
                         }
                     }
                 },
-                errorHandler: { [weak self] _ in
-                    Task { @MainActor in self?.iosAck = false }
-                }
+                errorHandler: nil
             )
         } else {
             try? session.updateApplicationContext(payload)
@@ -111,9 +103,6 @@ extension WatchSyncService: WCSessionDelegate {
         _ session: WCSession,
         didReceiveMessage message: [String: Any]
     ) {
-        if let text = message[WatchSyncKeys.report] as? String {
-            Task { @MainActor [weak self] in self?.iosReport = text }
-        }
         if message[WatchSyncKeys.snapshot] != nil {
             storeSnapshot(from: message)
         }
@@ -127,15 +116,10 @@ extension WatchSyncService: WCSessionDelegate {
     }
 
     private nonisolated func storeSnapshot(from dictionary: [String: Any]) {
-        let keys = Array(dictionary.keys)
         guard let data = dictionary[WatchSyncKeys.snapshot] as? Data,
               let snapshot = try? JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
-        else {
-            Task { @MainActor [weak self] in self?.lastContextKeys = keys }
-            return
-        }
+        else { return }
         Task { @MainActor [weak self] in
-            self?.lastContextKeys = keys
             self?.ingest(snapshot)
         }
     }

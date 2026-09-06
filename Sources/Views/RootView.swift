@@ -24,12 +24,6 @@ struct RootView: View {
         .frame(minWidth: 320, minHeight: 420)
 #endif
         .tint(PomodoroughTheme.signal)
-#if os(iOS)
-        .overlay(alignment: .top) {
-            WatchDiagLine(sync: model.watchSync)
-                .padding(.top, 4)
-        }
-#endif
         .alert("Pomodorough", isPresented: errorPresented) {
             Button("OK") { model.errorMessage = nil }
         } message: {
@@ -80,20 +74,6 @@ struct RootView: View {
 #endif
     }
 }
-
-#if os(iOS)
-// TEMP debug: iOS-side WatchConnectivity state, remove once watch sync is live.
-private struct WatchDiagLine: View {
-    @ObservedObject var sync: WatchSyncService
-
-    var body: some View {
-        Text(sync.diagLine)
-            .font(.system(size: 9, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .padding(4)
-    }
-}
-#endif
 
 #if DEBUG
 #Preview {

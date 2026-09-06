@@ -1,4 +1,6 @@
 import Foundation
+import Combine
+#if os(iOS)
 import OSLog
 import WatchConnectivity
 
@@ -9,13 +11,6 @@ import WatchConnectivity
 @MainActor
 final class WatchSyncService: NSObject, ObservableObject {
     private weak var model: AppModel?
-    /// Temporary debug: iOS-side session state + last push result, shown on screen.
-    @Published private(set) var diagLine = "init"
-
-    private func refreshDiag(_ note: String) {
-        let s = WCSession.isSupported() ? WCSession.default : nil
-        diagLine = "st=\(s?.activationState.rawValue ?? -1) paired=\(s?.isPaired ?? false) watchApp=\(s?.isWatchAppInstalled ?? false) reach=\(s?.isReachable ?? false) | \(note)"
-    }
 
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
@@ -30,7 +25,6 @@ final class WatchSyncService: NSObject, ObservableObject {
         guard session.activationState == .notActivated else { return }
         session.activate()
         log("attach: activating, paired=\(session.isPaired) watchAppInstalled=\(session.isWatchAppInstalled)")
-        refreshDiag("attached")
     }
 
     @discardableResult
@@ -44,7 +38,6 @@ final class WatchSyncService: NSObject, ObservableObject {
         else {
             report = "skip st=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchApp=\(session?.isWatchAppInstalled ?? false)"
             log("push: \(report)")
-            refreshDiag(report)
             return report
         }
         do {
@@ -55,12 +48,11 @@ final class WatchSyncService: NSObject, ObservableObject {
             report = "FAIL \(error)"
             log("push: \(report)")
         }
-        // Best-effort live report so the watch can display iOS-side state.
+        // Best-effort live report (wire-compat; snapshot remains source of truth).
         if session.isReachable {
             let text = report
             session.sendMessage([WatchSyncKeys.report: text], replyHandler: nil, errorHandler: nil)
         }
-        refreshDiag(report)
         return report
     }
 }
@@ -120,3 +112,12 @@ extension WatchSyncService: WCSessionDelegate {
         }
     }
 }
+#else
+@MainActor
+final class WatchSyncService: NSObject, ObservableObject {
+    func attach(_ model: AppModel) {}
+
+    @discardableResult
+    func push() -> String { "Watch sync unavailable" }
+}
+#endif
