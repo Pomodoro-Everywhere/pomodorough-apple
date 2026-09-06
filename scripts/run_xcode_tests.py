@@ -293,6 +293,7 @@ class DescriptorCloseState:
     identity_captured: bool = False
     closed: bool = False
     uncertain: bool = False
+    creation_identity: tuple[int, int, int, int] | None = None
 
 
 def descriptor_identity(descriptor: int) -> tuple[int, int, int, int] | None:
@@ -311,14 +312,50 @@ def descriptor_close_completed(
     return descriptor_identity(descriptor) != identity
 
 
+def snapshot_creation_identity(descriptor: int) -> tuple[int, int, int, int] | None:
+    try:
+        return descriptor_identity(descriptor)
+    except BaseException:
+        return None
+
+
+def descriptor_number_closed(descriptor: int) -> bool:
+    try:
+        return descriptor_identity(descriptor) is None
+    except BaseException:
+        return False
+
+
+def close_error_reports_ebadf(error: BaseException) -> bool:
+    return isinstance(error, OSError) and error.errno == errno.EBADF
+
+
 def descriptor_close_required(state: DescriptorCloseState) -> bool:
     identity = descriptor_identity(state.descriptor)
     if not state.identity_captured:
+        if (
+            state.creation_identity is not None
+            and identity != state.creation_identity
+        ):
+            if identity is None:
+                state.uncertain = True
+                return True
+            state.closed = True
+            state.uncertain = False
+            return False
         state.identity = identity
         state.identity_captured = True
         state.uncertain = False
         return True
-    if state.identity is None or identity != state.identity:
+    if state.identity is None:
+        if identity is None:
+            state.closed = True
+            state.uncertain = False
+            return False
+        state.identity = identity
+        state.uncertain = False
+        return True
+    if identity != state.identity:
         state.closed = True
         state.uncertain = False
         return False
@@ -329,18 +366,29 @@ def descriptor_close_required(state: DescriptorCloseState) -> bool:
 def record_descriptor_close_error(
     state: DescriptorCloseState, primary_error: BaseException
 ) -> None:
-    if state.identity is None:
+    if close_error_reports_ebadf(primary_error):
         state.closed = True
         state.uncertain = False
         return
+    if state.identity is None:
+        state.uncertain = True
+        return
     try:
-        state.closed = descriptor_close_completed(state.descriptor, state.identity)
-        state.uncertain = False
+        completed = descriptor_close_completed(state.descriptor, state.identity)
+        still_present = (
+            descriptor_identity(state.descriptor) is not None if completed else True
+        )
     except BaseException as state_error:
         state.uncertain = True
         append_secondary_error(
             primary_error, "descriptor close state check failed", state_error
         )
+        return
+    if completed and not still_present:
+        state.uncertain = True
+        return
+    state.closed = completed
+    state.uncertain = False
 
 
 def close_descriptor_transition(
@@ -376,7 +424,17 @@ def close_descriptor_transition(
         sys.settrace(previous_trace)
 
 
-class AcquiredDescriptor(ctypes.c_int):
+class _AcquiredDescriptorMeta(type(ctypes.c_int)):
+    # ctypes simple types reject __init__/__new__ overrides, so snapshot
+    # ownership identity here. from_buffer views bypass __call__ and keep
+    # no baseline (their number is not owned yet), which is correct.
+    def __call__(cls, *args: object, **kwargs: object) -> object:
+        instance = super().__call__(*args, **kwargs)
+        instance._creation_identity = snapshot_creation_identity(instance.value)
+        return instance
+
+
+class AcquiredDescriptor(ctypes.c_int, metaclass=_AcquiredDescriptorMeta):
     def fileno(self) -> int:
         return self.value
 
@@ -391,6 +449,7 @@ class AcquiredDescriptor(ctypes.c_int):
         state = getattr(self, "_descriptor_close_state", None)
         if not isinstance(state, DescriptorCloseState) or state.descriptor != descriptor:
             state = DescriptorCloseState(descriptor)
+            state.creation_identity = getattr(self, "_creation_identity", None)
             self._descriptor_close_state = state
         return state
 
@@ -413,18 +472,27 @@ class AcquiredDescriptor(ctypes.c_int):
         with DESCRIPTOR_CLOSE_LOCK:
             if self.value < 0:
                 return
+            descriptor = self.value
         try:
-            interruption_safe_call(self._close_owned)
+            run_owned_close(self._close_owned)
         except BaseException as primary_error:
-            recover_control_interrupted_close(self._close_owned, primary_error)
+            recover_control_interrupted_close(
+                self._close_owned,
+                primary_error,
+                skip_retry_when_closed=lambda: descriptor_number_closed(descriptor),
+            )
             raise
-        descriptor = self.release()
-        if descriptor >= 0:
+        leftover = self.release()
+        if leftover >= 0:
             raise SimulatorLifecycleError("descriptor close ownership remained armed")
 
     def __del__(self) -> None:
         try:
-            finalize_descriptor_close(self._close_owned, self.close)
+            finalize_descriptor_close(
+                self._close_owned,
+                self.close,
+                skip_retry_when_closed=lambda: descriptor_number_closed(self.fileno()),
+            )
         except BaseException:
             pass
 
@@ -579,13 +647,29 @@ def interruption_safe_call(
     raise cast(BaseException, value)
 
 
+def run_owned_close(operation: Callable[[], None]) -> None:
+    if descriptor_close_lock_owned_by_current_thread():
+        operation()
+    else:
+        interruption_safe_call(operation)
+
+
 def recover_control_interrupted_close(
     operation: Callable[[], None],
     primary_error: BaseException,
     inline: bool = False,
+    skip_retry_when_closed: Callable[[], bool] | None = None,
 ) -> None:
     if isinstance(primary_error, Exception):
         return
+    if not inline and descriptor_close_lock_owned_by_current_thread():
+        inline = True
+    if skip_retry_when_closed is not None:
+        try:
+            if skip_retry_when_closed():
+                return
+        except BaseException:
+            pass
     try:
         if inline:
             operation()
@@ -603,7 +687,9 @@ def descriptor_close_lock_owned_by_current_thread() -> bool:
 
 
 def finalize_descriptor_close(
-    operation: Callable[[], None], close: Callable[[], None]
+    operation: Callable[[], None],
+    close: Callable[[], None],
+    skip_retry_when_closed: Callable[[], bool] | None = None,
 ) -> None:
     if not descriptor_close_lock_owned_by_current_thread():
         close()
@@ -611,7 +697,12 @@ def finalize_descriptor_close(
     try:
         operation()
     except BaseException as primary_error:
-        recover_control_interrupted_close(operation, primary_error, inline=True)
+        recover_control_interrupted_close(
+            operation,
+            primary_error,
+            inline=True,
+            skip_retry_when_closed=skip_retry_when_closed,
+        )
         raise
 
 
@@ -664,6 +755,13 @@ class DirectDescriptorOwner:
         default=None, init=False, repr=False
     )
 
+    def __post_init__(self) -> None:
+        try:
+            number = self.fileno()
+        except BaseException:
+            number = -1
+        self._creation_identity = snapshot_creation_identity(number)
+
     def fileno(self) -> int:
         if isinstance(self.descriptor, AcquiredDescriptor):
             return self.descriptor.fileno()
@@ -684,6 +782,9 @@ class DirectDescriptorOwner:
             if descriptor >= 0:
                 if self._pending_close_state is None:
                     self._pending_close_state = DescriptorCloseState(descriptor)
+                    self._pending_close_state.creation_identity = getattr(
+                        self, "_creation_identity", None
+                    )
                 close_descriptor_transition(
                     descriptor,
                     lambda: self._disarm_closed(descriptor),
@@ -727,10 +828,15 @@ class DirectDescriptorOwner:
         self._close_pending()
 
     def close(self) -> None:
+        descriptor = self.fileno()
         try:
-            interruption_safe_call(self._close_owned)
+            run_owned_close(self._close_owned)
         except BaseException as primary_error:
-            recover_control_interrupted_close(self._close_owned, primary_error)
+            recover_control_interrupted_close(
+                self._close_owned,
+                primary_error,
+                skip_retry_when_closed=lambda: descriptor_number_closed(descriptor),
+            )
             raise
 
     def __eq__(self, other: object) -> bool:
@@ -740,7 +846,11 @@ class DirectDescriptorOwner:
 
     def __del__(self) -> None:
         try:
-            finalize_descriptor_close(self._close_owned, self.close)
+            finalize_descriptor_close(
+                self._close_owned,
+                self.close,
+                skip_retry_when_closed=lambda: descriptor_number_closed(self.fileno()),
+            )
         except BaseException:
             pass
 

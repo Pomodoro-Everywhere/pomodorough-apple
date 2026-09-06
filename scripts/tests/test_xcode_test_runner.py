@@ -4,6 +4,7 @@ import argparse
 import ctypes
 from dataclasses import replace
 import dis
+import errno
 import gc
 import io
 import os
@@ -63,6 +64,41 @@ FINALIZER_LOCK_CASE_SOURCE = textwrap.dedent(
         os.fstat(descriptor)
         os.close(descriptor)
     owner.__del__()
+    os.close(peer)
+    """
+)
+
+
+ROUND49_LOCK_CLOSE_CASE_SOURCE = textwrap.dedent(
+    """
+    import errno
+    import os
+    import sys
+    from scripts import run_xcode_tests as runner
+
+    descriptor, peer = os.pipe()
+    direct = sys.argv[1] == "direct"
+    armed = sys.argv[2] == "armed"
+    owner = (runner.DirectDescriptorOwner(descriptor) if direct
+             else runner.AcquiredDescriptor(descriptor))
+    if not armed:
+        if direct:
+            owner._armed = False
+        else:
+            assert owner.release() == descriptor
+    with runner.DESCRIPTOR_CLOSE_LOCK:
+        owner.close()
+    if armed:
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            assert error.errno == errno.EBADF
+        else:
+            raise AssertionError("armed descriptor remained open")
+    else:
+        os.fstat(descriptor)
+        os.close(descriptor)
+    owner.close()
     os.close(peer)
     """
 )
@@ -4211,6 +4247,232 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     self.assert_transient_unknown_state_finishes_cleanup(
                         direct, finalizer
                     )
+
+    def test_lock_held_close_completes_without_worker_wait(self) -> None:
+        for direct in (False, True):
+            for armed in (False, True):
+                with self.subTest(direct=direct, armed=armed):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-c",
+                            ROUND49_LOCK_CLOSE_CASE_SOURCE,
+                            "direct" if direct else "acquired",
+                            "armed" if armed else "unarmed",
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def assert_spoofed_capture_retains_open_owner(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        primary = KeyboardInterrupt("close failed while descriptor stayed open")
+        real_fstat = os.fstat
+
+        def close(candidate: int) -> None:
+            raise primary
+
+        def fstat(candidate: int) -> object:
+            if candidate == descriptor:
+                raise OSError(errno.EBADF, "spoofed bad descriptor")
+            return real_fstat(candidate)
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(run_xcode_tests.os, "fstat", side_effect=fstat):
+                try:
+                    if finalizer:
+                        owner.__del__()
+                    else:
+                        owner.close()
+                except BaseException:
+                    pass
+            real_fstat(descriptor)
+            self.assert_owner_recoverable(owner, descriptor, direct)
+            owner.close()
+            owner.close()
+            owner.__del__()
+            self.assert_owner_disarmed(owner, direct)
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            owner.close()
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+
+    def test_spoofed_capture_retains_open_owner(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_spoofed_capture_retains_open_owner(direct, finalizer)
+
+    def assert_late_check_failure_retains_open_owner(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        primary = SystemExit("close failed while descriptor stayed open")
+        real_fstat = os.fstat
+        checks = []
+
+        def close(candidate: int) -> None:
+            raise primary
+
+        def fstat(candidate: int) -> object:
+            checks.append(candidate)
+            if candidate == descriptor and len(checks) > 1:
+                raise OSError(errno.EBADF, "late identity check unavailable")
+            return real_fstat(candidate)
+
+        try:
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(run_xcode_tests.os, "fstat", side_effect=fstat):
+                try:
+                    if finalizer:
+                        owner.__del__()
+                    else:
+                        owner.close()
+                except BaseException:
+                    pass
+            real_fstat(descriptor)
+            self.assert_owner_recoverable(owner, descriptor, direct)
+            owner.close()
+            owner.__del__()
+            self.assert_owner_disarmed(owner, direct)
+            self.assert_descriptor_closed(descriptor)
+        finally:
+            owner.close()
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+
+    def test_late_check_failure_retains_open_owner(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_late_check_failure_retains_open_owner(direct, finalizer)
+
+    def assert_alias_close_after_reuse_spares_replacement(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        canonical = self.descriptor_owner(direct, descriptor)
+        alias = self.descriptor_owner(direct, descriptor)
+        try:
+            canonical.close()
+            reuse_descriptor_number(descriptor)
+            if finalizer:
+                alias.__del__()
+            else:
+                alias.close()
+            os.fstat(descriptor)
+            self.assert_owner_disarmed(alias, direct)
+            alias.close()
+            alias.__del__()
+            os.fstat(descriptor)
+        finally:
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+            canonical.close()
+            alias.close()
+
+    def test_alias_close_after_reuse_spares_replacement(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_alias_close_after_reuse_spares_replacement(
+                        direct, finalizer
+                    )
+
+    def assert_owner_close_after_external_reuse_spares_replacement(
+        self, direct: bool, finalizer: bool
+    ) -> None:
+        descriptor, peer = os.pipe()
+        owner = self.descriptor_owner(direct, descriptor)
+        try:
+            SYSTEM_OS_CLOSE(descriptor)
+            reuse_descriptor_number(descriptor)
+            if finalizer:
+                owner.__del__()
+            else:
+                owner.close()
+            os.fstat(descriptor)
+            self.assert_owner_disarmed(owner, direct)
+        finally:
+            close_test_descriptor(descriptor)
+            close_test_descriptor(peer)
+            owner.close()
+
+    def test_owner_close_after_external_reuse_spares_replacement(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                with self.subTest(direct=direct, finalizer=finalizer):
+                    self.assert_owner_close_after_external_reuse_spares_replacement(
+                        direct, finalizer
+                    )
+
+    def assert_same_identity_reuse_after_disarm_error(
+        self, direct: bool, finalizer: bool, always: bool
+    ) -> None:
+        handle, path = tempfile.mkstemp(prefix="round49-reuse-")
+        os.close(handle)
+        descriptor = os.open(path, os.O_RDONLY)
+        owner = None
+        try:
+            owner = self.descriptor_owner(direct, descriptor)
+            owner_type = type(owner)
+            original_disarm = owner_type._disarm_closed
+            primary = KeyboardInterrupt("ownership disarm interrupted")
+            real_close = SYSTEM_OS_CLOSE
+            close_calls: list[int] = []
+            disarm_calls: list[int] = []
+
+            def close(candidate: int) -> None:
+                close_calls.append(candidate)
+                real_close(candidate)
+
+            def disarm(candidate_owner: object, candidate: int) -> None:
+                disarm_calls.append(candidate)
+                if len(disarm_calls) == 1 or always:
+                    same = os.open(path, os.O_RDONLY)
+                    if same != candidate:
+                        os.dup2(same, candidate)
+                        real_close(same)
+                    raise primary
+                original_disarm(candidate_owner, candidate)
+
+            with mock.patch.object(run_xcode_tests.os, "close", side_effect=close), \
+                mock.patch.object(owner_type, "_disarm_closed", new=disarm):
+                try:
+                    if finalizer:
+                        owner.__del__()
+                    else:
+                        owner.close()
+                except BaseException:
+                    pass
+            self.assertEqual(close_calls, [descriptor])
+            os.fstat(descriptor)
+        finally:
+            if owner is not None:
+                owner.close()
+            close_test_descriptor(descriptor)
+            os.unlink(path)
+
+    def test_same_identity_reuse_after_disarm_error(self) -> None:
+        for direct in (False, True):
+            for finalizer in (False, True):
+                for always in (False, True):
+                    with self.subTest(
+                        direct=direct, finalizer=finalizer, always=always
+                    ):
+                        self.assert_same_identity_reuse_after_disarm_error(
+                            direct, finalizer, always
+                        )
 
     def test_duplicate_descriptor_owner_is_disarmed_before_fd_reuse(self) -> None:
         descriptor, peer = os.pipe()
