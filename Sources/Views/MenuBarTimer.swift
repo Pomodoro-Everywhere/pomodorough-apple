@@ -19,8 +19,8 @@ enum MenuBarTimerDisplay: String, CaseIterable, Identifiable {
     func text(current: String, total: String) -> String {
         switch self {
         case .current: current
-        case .total: "Σ \(total)"
-        case .both: "\(current) · Σ \(total)"
+        case .total: String(localized: "Σ \(total)")
+        case .both: String(localized: "\(current) · Σ \(total)")
         }
     }
 }

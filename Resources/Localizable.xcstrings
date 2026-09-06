@@ -3382,6 +3382,116 @@
           }
         }
       }
+    },
+    "Both": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Both"
+          }
+        }
+      }
+    },
+    "Current timer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current timer"
+          }
+        }
+      }
+    },
+    "Menu bar display": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menu bar display"
+          }
+        }
+      }
+    },
+    "Open Pomodorough": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Pomodorough"
+          }
+        }
+      }
+    },
+    "Pause timer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause timer"
+          }
+        }
+      }
+    },
+    "Quit Pomodorough": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit Pomodorough"
+          }
+        }
+      }
+    },
+    "Resume timer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume timer"
+          }
+        }
+      }
+    },
+    "Total Pomodoro time": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total Pomodoro time"
+          }
+        }
+      }
+    },
+    "Total includes today’s completed Pomodoros and the current focus session.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total includes today’s completed Pomodoros and the current focus session."
+          }
+        }
+      }
+    },
+    "Σ %arg": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Σ %arg"
+          }
+        }
+      }
+    },
+    "%arg · Σ %arg": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%arg · Σ %arg"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

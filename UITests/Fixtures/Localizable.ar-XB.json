@@ -2491,6 +2491,72 @@
         "state": "translated",
         "value": "‏⟦This removes the task from the board. Completed focus runs stay in history.⟧"
       }
+    },
+    "Both": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Both⟧"
+      }
+    },
+    "Current timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Current timer⟧"
+      }
+    },
+    "Menu bar display": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Menu bar display⟧"
+      }
+    },
+    "Open Pomodorough": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Open Pomodorough⟧"
+      }
+    },
+    "Pause timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Pause timer⟧"
+      }
+    },
+    "Quit Pomodorough": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Quit Pomodorough⟧"
+      }
+    },
+    "Resume timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Resume timer⟧"
+      }
+    },
+    "Total Pomodoro time": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Total Pomodoro time⟧"
+      }
+    },
+    "Total includes today’s completed Pomodoros and the current focus session.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Total includes today’s completed Pomodoros and the current focus session.⟧"
+      }
+    },
+    "Σ %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Σ %arg⟧"
+      }
+    },
+    "%arg · Σ %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg · Σ %arg⟧"
+      }
     }
   },
   "version": 1
