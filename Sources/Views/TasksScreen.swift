@@ -8,8 +8,10 @@ struct TasksScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var localNewTaskTitle = ""
     @State private var today = Date.now
+    @State private var pendingDeleteTaskID: UUID?
     @FocusState private var taskFieldFocused: Bool
     private let suppliedNewTaskTitle: Binding<String>?
 
@@ -23,8 +25,8 @@ struct TasksScreen: View {
         ScrollView {
             LazyVStack(spacing: 18) {
                 TaskBoardHero(
-                    finishedPomodoros: summaries.reduce(0) { $0 + $1.finishedPomodoros },
-                    timeSpentMs: summaries.reduce(0) { $0 + $1.timeSpentMs },
+                    finishedPomodoros: dayTotals.finishedPomodoros,
+                    timeSpentMs: dayTotals.timeSpentMs,
                     date: today
                 )
                 TaskComposer(
@@ -41,11 +43,11 @@ struct TasksScreen: View {
                         ForEach(summaries) { summary in
                             Divider().overlay(PomodoroughTheme.steel.opacity(0.45))
                             TaskSummaryRow(summary: summary) {
-                                model.deleteTask(id: summary.id)
+                                pendingDeleteTaskID = summary.id
                             }
                             .contextMenu {
                                 Button("Delete task", systemImage: "trash", role: .destructive) {
-                                    model.deleteTask(id: summary.id)
+                                    pendingDeleteTaskID = summary.id
                                 }
                             }
                         }
@@ -57,7 +59,7 @@ struct TasksScreen: View {
                         .stroke(PomodoroughTheme.steel, lineWidth: 2)
                 }
                 .clipShape(.rect(cornerRadius: 20))
-                .animation(.smooth(duration: 0.3), value: summaries.map(\.id))
+                .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: summaries.map(\.id))
             }
             .padding()
             .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 80 : 0)
@@ -68,6 +70,15 @@ struct TasksScreen: View {
         .navigationTitle("Tasks")
         .inlineNavigationTitleIfSupported()
         .primaryRouteAccountToolbar(model: model)
+        .alert(
+            deleteConfirmationTitle,
+            isPresented: deleteConfirmationPresented
+        ) {
+            Button("Delete task", role: .destructive, action: confirmDelete)
+            Button("Cancel", role: .cancel) { pendingDeleteTaskID = nil }
+        } message: {
+            Text("This removes the task from the board. Completed focus runs stay in history.")
+        }
         .task(id: today) {
             let midnight = Self.nextMidnight(after: today)
             let delay = midnight.timeIntervalSinceNow
@@ -98,6 +109,31 @@ struct TasksScreen: View {
 
     private var summaries: [TaskDailySummary] {
         model.taskSummaries(for: today)
+    }
+
+    private var dayTotals: (finishedPomodoros: Int, timeSpentMs: Int64) {
+        model.dayFocusTotals(for: today)
+    }
+
+    private var deleteConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteTaskID != nil },
+            set: { if !$0 { pendingDeleteTaskID = nil } }
+        )
+    }
+
+    private var deleteConfirmationTitle: String {
+        if let id = pendingDeleteTaskID,
+           let title = summaries.first(where: { $0.id == id })?.task.title {
+            return String(localized: "Delete “\(title)”?")
+        }
+        return String(localized: "Delete task?")
+    }
+
+    private func confirmDelete() {
+        guard let id = pendingDeleteTaskID else { return }
+        pendingDeleteTaskID = nil
+        model.deleteTask(id: id)
     }
 
     static func nextMidnight(after date: Date, calendar: Calendar = .current) -> Date {

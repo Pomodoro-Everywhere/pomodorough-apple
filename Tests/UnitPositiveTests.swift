@@ -2,9 +2,7 @@ import CryptoKit
 import Foundation
 import Security
 import Testing
-#if os(iOS)
 import UserNotifications
-#endif
 @testable import Pomodorough
 
 @Suite("Unit Positive")
@@ -2363,6 +2361,35 @@ struct UnitPositiveTests {
         #expect(loaded.storedData != nil)
         #expect(loaded.decodedState == legacy)
         #expect(loaded.localState == legacy)
+    }
+
+    @Test func timerAlertPresentationMapsAuthorizationToAccountControls() {
+        let cases: [(UNAuthorizationStatus, AlarmAuthorizationProbe, TimerAlertState, Bool, Bool)] = [
+            (.authorized, .denied, .on, false, false),
+            (.provisional, .notDetermined, .on, false, false),
+            (.notDetermined, .authorized, .on, false, false),
+            (.denied, .denied, .off, false, true),
+            (.denied, .unavailable, .off, false, true),
+            (.notDetermined, .notDetermined, .notEnabled, true, false),
+            (.notDetermined, .unavailable, .notEnabled, true, false),
+            (.denied, .notDetermined, .limited, true, true),
+            (.notDetermined, .denied, .limited, true, true),
+        ]
+        for (notification, alarm, state, canEnable, needsSettings) in cases {
+            let presentation = timerAlertPresentation(notification: notification, alarm: alarm)
+
+            #expect(presentation.state == state)
+            #expect(presentation.canEnable == canEnable)
+            #expect(presentation.needsSettings == needsSettings)
+        }
+#if os(iOS)
+        if #available(iOS 18.0, *) {
+            let ephemeral = timerAlertPresentation(notification: .ephemeral, alarm: .unavailable)
+            #expect(ephemeral.state == .on)
+            #expect(ephemeral.canEnable == false)
+            #expect(ephemeral.needsSettings == false)
+        }
+#endif
     }
 }
 

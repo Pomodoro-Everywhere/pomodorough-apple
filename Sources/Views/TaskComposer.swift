@@ -13,7 +13,7 @@ struct TaskComposer: View {
             Text("ADD TASK")
                 .font(.caption2.monospaced().bold())
                 .tracking(1.2)
-                .foregroundStyle(PomodoroughTheme.signal)
+                .foregroundStyle(PomodoroughTheme.signalText)
                 .accessibilityHidden(true)
             Group {
                 if dynamicTypeSize.isAccessibilitySize {
@@ -38,15 +38,10 @@ struct TaskComposer: View {
             .submitLabel(.done)
             .onSubmit(add)
             .accessibilityLabel("New task")
-            .accessibilityAction(named: "Add task") {
-                guard canAdd else { return }
-                add()
-            }
         Button("Add task", systemImage: "plus", action: add)
             .buttonStyle(.borderedProminent)
             .tint(PomodoroughTheme.signal)
             .disabled(!canAdd)
-            .accessibilityHidden(true)
     }
 }
 

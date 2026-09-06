@@ -603,6 +603,14 @@ final class AppModel {
         )
     }
 
+    func dayFocusTotals(for date: Date = .now, calendar: Calendar = .current) -> (finishedPomodoros: Int, timeSpentMs: Int64) {
+        statePublisher.dayFocusTotals(
+            for: date,
+            calendar: calendar,
+            snapshot: publicationSnapshot
+        )
+    }
+
     func completedFocusSummaries() -> [CompletedFocusSummary] {
         statePublisher.completedFocusSummaries(snapshot: publicationSnapshot)
     }

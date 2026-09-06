@@ -4,6 +4,7 @@ struct TimerScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,7 +40,7 @@ struct TimerScreen: View {
                     .timerChromeHidden(false)
                 }
             }
-            .animation(.default, value: layout)
+            .animation(reduceMotion ? nil : .default, value: layout)
         }
         .background(TimerBackdrop())
         .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Timer" : "Pomodorough")

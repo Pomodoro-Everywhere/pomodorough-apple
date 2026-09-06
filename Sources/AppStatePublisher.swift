@@ -137,6 +137,26 @@ struct AppStatePublisher: Sendable {
         }
     }
 
+    func dayFocusTotals(
+        for date: Date,
+        calendar: Calendar,
+        snapshot: Snapshot
+    ) -> (finishedPomodoros: Int, timeSpentMs: Int64) {
+        // Hero totals count every completed focus run that day, including runs whose
+        // task is unassigned or has since been deleted (those never appear in taskSummaries).
+        var finished = 0
+        var timeMs: Int64 = 0
+        for item in snapshot.history {
+            guard item.phase == .focus,
+                  item.status == "completed",
+                  let completedAt = item.completedAt,
+                  calendar.isDate(completedAt, inSameDayAs: date) else { continue }
+            finished += 1
+            timeMs += item.plannedDurationMs
+        }
+        return (finished, timeMs)
+    }
+
     func completedFocusSummaries(
         snapshot: Snapshot
     ) -> [CompletedFocusSummary] {

@@ -108,6 +108,108 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertGreaterThan(app.buttons["Timer"].frame.midX, app.buttons["Arrivals"].frame.midX)
     }
 
+    func testDialFaceCountdownGrowsWithDynamicType() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += [
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityXL",
+        ]
+        launchAndWaitForTimer(app)
+        let face = elements(labelled: "Focus timer", in: app).firstMatch
+        XCTAssertTrue(face.waitForExistence(timeout: 5))
+        let defaultHeight = face.frame.height
+        XCTAssertGreaterThan(defaultHeight, 0)
+        app.terminate()
+
+        app.launchArguments = makeApplication().launchArguments + [
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityXXXL",
+        ]
+        launchAndWaitForTimer(app)
+        defer { app.terminate() }
+        let largeFace = elements(labelled: "Focus timer", in: app).firstMatch
+        XCTAssertTrue(largeFace.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(largeFace.frame.height, defaultHeight)
+        XCTAssertTrue(app.buttons["Start focus"].exists)
+    }
+
+    func testTaskDeletionCancelKeepsTask() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+
+        createTaskForDeletionTest(named: "UI keep me", in: app)
+        let row = elements(labelled: "UI keep me", in: app).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        waitForHittable(row, timeout: 5)
+
+        tapRowTrashButton(for: row)
+        summonDeleteDialog(in: app)
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        waitForDisappearance(of: app.buttons["Delete task"], timeout: 5)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+    }
+
+    func testTaskDeletionConfirmRemovesTask() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+
+        createTaskForDeletionTest(named: "UI delete me", in: app)
+        let row = elements(labelled: "UI delete me", in: app).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        waitForHittable(row, timeout: 5)
+
+        tapRowTrashButton(for: row)
+        summonDeleteDialog(in: app)
+        app.buttons["Delete task"].tap()
+        XCTAssertFalse(row.waitForExistence(timeout: 5))
+    }
+
+    private func createTaskForDeletionTest(named title: String, in app: XCUIApplication) {
+        app.buttons["Tasks"].tap()
+        let field = elements(labelled: "New task", in: app).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(title)
+        app.buttons["Add task"].tap()
+    }
+
+    private func tapRowTrashButton(for row: XCUIElement) {
+        // The row's visible trash button is folded into its accessibility
+        // representation, so it cannot be queried as a button. Tap it by
+        // coordinate at the row's trailing edge, where the trash icon sits.
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+    }
+
+    private func summonDeleteDialog(in app: XCUIApplication) {
+        // The trash tap presents the delete confirmation alert directly.
+        let delete = app.buttons["Delete task"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+    }
+
+    private func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval) {
+        let gone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: element
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: timeout), .completed)
+    }
+
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval) {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: element
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [hittable], timeout: timeout), .completed)
+    }
+
     private func makeApplication() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [

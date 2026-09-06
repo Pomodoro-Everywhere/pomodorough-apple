@@ -377,26 +377,40 @@ struct UnitNegativeTests {
     }
 
     @Test @MainActor
-    func timerAlarmSchedulerKeepsExistingNotificationWhenAlarmReplacementFails() async throws {
+    func timerAlarmSchedulerFallsBackToNotificationWhenAlarmScheduleFails() async throws {
         let uuid = try #require(UUID(uuidString: "83A06D73-1D2D-441E-AFC2-E36DA0518613"))
         let timerID = "timer-\(uuid.uuidString.lowercased())"
         let notificationID = TimerAlarmScheduler.notificationID(for: timerID)
         let notifications = RecordingNotificationBackend()
         notifications.canScheduleResult = true
         let alarms = RecordingSystemAlarmBackend()
-        alarms.authorizationState = .denied
-        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
-        try await scheduler.schedule(timerID: timerID, phase: .focus, duration: 60)
-
         alarms.authorizationState = .authorized
         alarms.operationError = AppError.invalidResponse
-        await #expect(throws: AppError.self) {
-            try await scheduler.schedule(timerID: timerID, phase: .focus, duration: 30)
-        }
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+        try await scheduler.schedule(timerID: timerID, phase: .focus, duration: 60)
 
         #expect(notifications.operations == [
             .canSchedule,
             .schedule(identifier: notificationID, phase: .focus, duration: 60),
+        ])
+    }
+
+    @Test @MainActor
+    func timerAlarmSchedulerResumeFallsBackToNotificationWhenAlarmReplacementFails() async throws {
+        let uuid = try #require(UUID(uuidString: "83A06D73-1D2D-441E-AFC2-E36DA0518613"))
+        let timerID = "timer-\(uuid.uuidString.lowercased())"
+        let notificationID = TimerAlarmScheduler.notificationID(for: timerID)
+        let notifications = RecordingNotificationBackend()
+        notifications.canScheduleResult = true
+        let alarms = RecordingSystemAlarmBackend()
+        alarms.authorizationState = .authorized
+        alarms.operationError = AppError.invalidResponse
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+        try await scheduler.resume(timerID: timerID, phase: .focus, duration: 30)
+
+        #expect(notifications.operations == [
+            .canSchedule,
+            .schedule(identifier: notificationID, phase: .focus, duration: 30),
         ])
     }
 

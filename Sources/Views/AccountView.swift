@@ -12,6 +12,7 @@ import AppKit
 struct AccountView: View {
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var confirmsSignOut = false
     @State private var confirmsAccountDeletion = false
     @State private var accountDeletionConfirmation = ""
@@ -210,6 +211,11 @@ struct AccountView: View {
                 .accessibilityIdentifier("account.timer-alert-limits")
         }
         .task { await refreshTimerAlertStatus() }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                Task { await refreshTimerAlertStatus() }
+            }
+        }
     }
 
     private func refreshTimerAlertStatus() async {
@@ -220,24 +226,22 @@ struct AccountView: View {
             alarmState = AlarmAuthorizationProbe.current()
         }
 #endif
-        switch (notificationStatus, alarmState) {
-        case (.authorized, _), (.provisional, _), (.ephemeral, _), (_, .authorized):
+        applyTimerAlertPresentation(timerAlertPresentation(notification: notificationStatus, alarm: alarmState))
+    }
+
+    private func applyTimerAlertPresentation(_ presentation: TimerAlertPresentation) {
+        switch presentation.state {
+        case .on:
             timerAlertStatusLabel = String(localized: "On")
-            timerAlertCanEnable = false
-            timerAlertNeedsSettings = false
-        case (.denied, .denied), (.denied, .unavailable):
+        case .off:
             timerAlertStatusLabel = String(localized: "Off")
-            timerAlertCanEnable = false
-            timerAlertNeedsSettings = true
-        case (.notDetermined, .notDetermined), (.notDetermined, .unavailable):
+        case .notEnabled:
             timerAlertStatusLabel = String(localized: "Not enabled")
-            timerAlertCanEnable = true
-            timerAlertNeedsSettings = false
-        default:
+        case .limited:
             timerAlertStatusLabel = String(localized: "Limited")
-            timerAlertCanEnable = true
-            timerAlertNeedsSettings = notificationStatus == .denied || alarmState == .denied
         }
+        timerAlertCanEnable = presentation.canEnable
+        timerAlertNeedsSettings = presentation.needsSettings
     }
 
     private func openTimerAlertSettings() {
@@ -281,25 +285,6 @@ struct AccountView: View {
             Text("Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.")
         }
     }
-}
-
-private enum AlarmAuthorizationProbe {
-    case unavailable
-    case notDetermined
-    case authorized
-    case denied
-
-#if os(iOS)
-    @available(iOS 26.0, *)
-    static func current() -> AlarmAuthorizationProbe {
-        switch AlarmManager.shared.authorizationState {
-        case .notDetermined: return .notDetermined
-        case .authorized: return .authorized
-        case .denied: return .denied
-        @unknown default: return .denied
-        }
-    }
-#endif
 }
 
 #if DEBUG

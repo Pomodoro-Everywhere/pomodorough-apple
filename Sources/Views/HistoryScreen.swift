@@ -31,8 +31,14 @@ struct HistoryScreen: View {
                 }
                 .accessibilityIdentifier("history.empty-scroll")
             } else {
-                List(model.history) { item in
-                    HistoryRow(item: item, taskContext: model.taskContext(for: item))
+                List {
+                    Section {
+                        ForEach(model.history) { item in
+                            HistoryRow(item: item, taskContext: model.taskContext(for: item))
+                        }
+                    } header: {
+                        Text("\(model.history.count) arrivals")
+                    }
                 }
                 .listStyle(.plain)
                 .refreshable { await model.refreshForPull() }
@@ -63,12 +69,17 @@ struct HistoryScreen: View {
                 }
             }
         }
-        .accessibilityLabel("\(model.history.count) history entries")
+        .accessibilityLabel("View focus breakdown")
+        .accessibilityValue("\(completedRunCount) completed of \(model.history.count) runs")
         .accessibilityHint("Shows completed focus time by task")
     }
 
+    private var completedRunCount: Int {
+        model.history.count { $0.phase == .focus && $0.status == "completed" }
+    }
+
     private var completedFocusBreakdownLabel: some View {
-        Text("\(model.history.count) total")
+        Text("Completed focus: \(completedRunCount)")
             .font(.caption.weight(.medium).monospacedDigit())
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)

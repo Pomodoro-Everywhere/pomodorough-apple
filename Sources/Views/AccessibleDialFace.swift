@@ -6,13 +6,15 @@ struct AccessibleDialFace: View {
     let status: String
     let timeText: String
 
+    @ScaledMetric(relativeTo: .largeTitle) private var countdownSize: CGFloat = 56
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(phase.title)
                 .font(.title2.bold())
                 .foregroundStyle(PomodoroughTheme.signal)
             Text(timeText)
-                .font(.system(size: 56, weight: .black, design: .rounded))
+                .font(.system(size: countdownSize, weight: .black, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -22,7 +24,6 @@ struct AccessibleDialFace: View {
             ProgressView(value: max(0, min(1, progress)))
                 .tint(PomodoroughTheme.danger)
         }
-        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .digitalReadoutPanel(cornerRadius: 18)

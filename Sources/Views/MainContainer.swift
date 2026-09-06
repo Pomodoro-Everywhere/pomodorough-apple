@@ -18,6 +18,7 @@ final class MacOSDestinationState {
 
 struct MainContainer: View {
     let model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 #if os(iOS)
     @State private var selectedTab = MainTab.timer
 #else
@@ -63,7 +64,7 @@ struct MainContainer: View {
 #if os(macOS)
     private var macOSContent: some View {
         macOSDestination
-            .animation(.default, value: destinationState.selectedTab)
+            .animation(reduceMotion ? nil : .default, value: destinationState.selectedTab)
             .inspector(isPresented: $showsSettings) {
                 ServicePatternScreen(model: model, showsNavigationTitle: false)
                     .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
@@ -166,7 +167,7 @@ struct MainContainer: View {
                 ?? NSApp.mainWindow
                 ?? NSApp.windows.first(where: \.isVisible),
               window.frame.width < 896 else {
-            withAnimation(.default) {
+            withAnimation(reduceMotion ? nil : .default) {
                 showsSettings = willShowSettings
             }
             return
@@ -180,11 +181,11 @@ struct MainContainer: View {
         }
 
         let duration = window.animationResizeTime(targetFrame)
-        withAnimation(.easeInOut(duration: duration)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: duration)) {
             showsSettings = true
         }
         DispatchQueue.main.async {
-            window.setFrame(targetFrame, display: true, animate: true)
+            window.setFrame(targetFrame, display: true, animate: !self.reduceMotion)
         }
     }
 #endif

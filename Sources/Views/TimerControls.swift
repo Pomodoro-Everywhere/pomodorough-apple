@@ -17,6 +17,7 @@ struct TimerControls: View {
 
     let model: AppModel
     let layout: TimerLayout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var glassNamespace
 
     var body: some View {
@@ -25,7 +26,7 @@ struct TimerControls: View {
                 GlassEffectContainer(spacing: 14) {
                     controls(glass: true)
                 }
-                .animation(.smooth(duration: 0.4), value: controlState)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.4), value: controlState)
             } else {
                 controls(glass: false)
             }
@@ -35,24 +36,16 @@ struct TimerControls: View {
 
     @ViewBuilder
     private var accessibilityControls: some View {
-        let button = Button(primaryAccessibilityTitle, action: primaryAccessibilityAction)
+        Button(primaryAccessibilityTitle, action: primaryAccessibilityAction)
             .accessibilityValue(activeTaskAccessibilityValue)
         if model.isTimerActive {
+            Button("Finish timer") { model.finish() }
+            Button("Cancel timer") { model.cancel() }
             if model.hasActiveCompletionAlert {
-                button
-                    .accessibilityAction(named: "Finish timer") { model.finish() }
-                    .accessibilityAction(named: "Cancel timer") { model.cancel() }
-                    .accessibilityAction(named: stopSoundTitle, model.stopSound)
-            } else {
-                button
-                    .accessibilityAction(named: "Finish timer") { model.finish() }
-                    .accessibilityAction(named: "Cancel timer") { model.cancel() }
+                Button(stopSoundTitle, action: model.stopSound)
             }
         } else if hasClearableTimer {
-            button
-                .accessibilityAction(named: terminalActionTitle, terminalAction)
-        } else {
-            button
+            Button(terminalActionTitle, action: terminalAction)
         }
     }
 

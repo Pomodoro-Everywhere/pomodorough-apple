@@ -822,6 +822,40 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func dayFocusTotalsIncludeUnassignedAndDeletedTaskRuns() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let today = try #require(calendar.date(from: DateComponents(year: 2026, month: 7, day: 21, hour: 12)))
+        let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: today))
+        let writing = try #require(FocusTask(title: "Writing"))
+        let deletedTaskID = UUID().uuidString.lowercased()
+        var timerState = PersistedTimerState.fresh()
+        timerState.history = [
+            TestFixtures.history(id: "assigned-25", durationMs: 25 * 60_000, date: today, taskID: writing.id.uuidString.lowercased()),
+            TestFixtures.history(id: "unassigned-10", durationMs: 10 * 60_000, date: today),
+            TestFixtures.history(id: "deleted-15", durationMs: 15 * 60_000, date: today, taskID: deletedTaskID),
+            TestFixtures.history(id: "write-cancelled", status: "cancelled", durationMs: 90 * 60_000, date: today, taskID: writing.id.uuidString.lowercased()),
+            TestFixtures.history(id: "write-break", phase: .shortBreak, durationMs: 5 * 60_000, date: today),
+            TestFixtures.history(id: "write-yesterday", durationMs: 40 * 60_000, date: yesterday, taskID: writing.id.uuidString.lowercased())
+        ]
+        let localTasks = LocalTaskState(tasks: [writing], selectedTaskID: writing.id, assignments: [:])
+        defaults.set(try JSONEncoder.api.encode(timerState), forKey: "timer-state-v2")
+        defaults.set(try JSONEncoder.api.encode(localTasks), forKey: "local-tasks-v1")
+
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        let totals = model.dayFocusTotals(for: today, calendar: calendar)
+        #expect(totals.finishedPomodoros == 3)
+        #expect(totals.timeSpentMs == 50 * 60_000)
+        // Per-task rows still only cover the surviving assigned task.
+        #expect(model.taskSummaries(for: today, calendar: calendar) == [
+            TaskDailySummary(task: writing, finishedPomodoros: 1, timeSpentMs: 25 * 60_000)
+        ])
+    }
+
+    @Test @MainActor
     func localTimerSurvivesOfflineLaunchWithoutCredentials() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

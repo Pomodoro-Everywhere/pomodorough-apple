@@ -283,7 +283,10 @@ struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
 #if os(iOS)
         if #available(iOS 26.0, *) {
             let attributes = AlarmAttributes(
-                presentation: AlarmPresentation(alert: Self.alert(for: phase)),
+                presentation: AlarmPresentation(
+                    alert: Self.alert(for: phase),
+                    countdown: AlarmPresentation.Countdown(title: Self.countdownTitle(for: phase))
+                ),
                 metadata: TimerAlarmMetadata(timerID: timerID, phase: phase.rawValue),
                 tintColor: Color(red: 1, green: 96.0 / 255.0, blue: 79.0 / 255.0)
             )
@@ -401,9 +404,15 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
             guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
             if alarms.authorizationState == .authorized,
                let alarmID = Self.alarmID(for: timerID) {
-                try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
-                notifications.remove(identifier: Self.notificationID(for: timerID))
-                return
+                do {
+                    try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
+                    notifications.remove(identifier: Self.notificationID(for: timerID))
+                    return
+                } catch {
+                    // AlarmKit can fail at fire time (e.g. quota, transient store error).
+                    // Fall through to the notification path so the timer still alerts.
+                    try? alarms.cancel(id: alarmID)
+                }
             }
             guard await notifications.canSchedule() else { throw TimerAlarmError.authorizationDenied }
             let notificationID = Self.notificationID(for: timerID)
@@ -438,10 +447,15 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                let alarmID = Self.alarmID(for: timerID) {
                 // Reconcile canonical remaining: resuming would restore AlarmKit's stored
                 // remaining time, so replace the alarm with the canonical deadline instead.
-                try alarms.cancel(id: alarmID)
-                try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
-                notifications.remove(identifier: Self.notificationID(for: timerID))
-                return
+                // If the replacement fails, fall through to notifications so the timer still alerts.
+                do {
+                    try alarms.cancel(id: alarmID)
+                    try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
+                    notifications.remove(identifier: Self.notificationID(for: timerID))
+                    return
+                } catch {
+                    try? alarms.cancel(id: alarmID)
+                }
             }
             guard await notifications.canSchedule() else { throw TimerAlarmError.authorizationDenied }
             let notificationID = Self.notificationID(for: timerID)
@@ -489,13 +503,15 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
 
 #if os(iOS)
 @available(iOS 26.0, *)
-private struct TimerAlarmMetadata: AlarmMetadata {
-    let timerID: String
-    let phase: String
-}
-
-@available(iOS 26.0, *)
 private extension SystemTimerAlarmBackend {
+    static func countdownTitle(for phase: TimerPhase) -> LocalizedStringResource {
+        switch phase {
+        case .focus: "Focus"
+        case .shortBreak: "Short break"
+        case .longBreak: "Long break"
+        }
+    }
+
     static func alert(for phase: TimerPhase) -> AlarmPresentation.Alert {
         let title: LocalizedStringResource = switch phase {
         case .focus: "Focus complete"
