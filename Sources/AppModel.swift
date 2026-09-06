@@ -26,6 +26,12 @@ private struct AppModelStartup {
     let accountDeletionRecovery: AccountDeletionRecovery
 }
 
+private struct AppModelCoordinators {
+    let workspaceMutationController: SynchronizedWorkspaceMutationController
+    let accountSessionCoordinator: CentralizedAccountSessionCoordinator
+    let alarmEffectCoordinator: AlarmEffectCoordinator
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -121,15 +127,12 @@ final class AppModel {
         self.now = now
         self.uptime = uptime
         timerSessionController = startup.timerSessionController
-        workspaceMutationController = SynchronizedWorkspaceMutationController(
-            timerSessionController: startup.timerSessionController
-        )
-        accountSessionCoordinator = Self.makeAccountSessionCoordinator(
+        let coordinators = Self.makeCoordinators(
             api: api, googleIdentityProvider: googleIdentityProvider,
-            sharedCoreProvider: sharedCoreProvider, persistence: startup.persistence, roomStore: roomStore,
-            initialState: startup.initialState.transition.state
-        )
-        alarmEffectCoordinator = AlarmEffectCoordinator(timerSessionController: startup.timerSessionController)
+            sharedCoreProvider: sharedCoreProvider, startup: startup, roomStore: roomStore)
+        workspaceMutationController = coordinators.workspaceMutationController
+        accountSessionCoordinator = coordinators.accountSessionCoordinator
+        alarmEffectCoordinator = coordinators.alarmEffectCoordinator
         taskIdentityCoreProvider = sharedCoreProvider
         replicationMode = startup.initialState.replicationMode
         timerState = startup.initialState.transition.state
@@ -172,6 +175,28 @@ final class AppModel {
             ),
             accountDeletionRecovery: loadAccountDeletionRecovery(
                 journal: journal, defaults: defaults, roomStore: roomStore
+            )
+        )
+    }
+
+    private static func makeCoordinators(
+        api: APIClient,
+        googleIdentityProvider: any GoogleIdentityProviding,
+        sharedCoreProvider: @escaping @MainActor () throws -> SharedCore,
+        startup: AppModelStartup,
+        roomStore: IrohRoomStore
+    ) -> AppModelCoordinators {
+        AppModelCoordinators(
+            workspaceMutationController: SynchronizedWorkspaceMutationController(
+                timerSessionController: startup.timerSessionController
+            ),
+            accountSessionCoordinator: makeAccountSessionCoordinator(
+                api: api, googleIdentityProvider: googleIdentityProvider,
+                sharedCoreProvider: sharedCoreProvider, persistence: startup.persistence,
+                roomStore: roomStore, initialState: startup.initialState.transition.state
+            ),
+            alarmEffectCoordinator: AlarmEffectCoordinator(
+                timerSessionController: startup.timerSessionController
             )
         )
     }

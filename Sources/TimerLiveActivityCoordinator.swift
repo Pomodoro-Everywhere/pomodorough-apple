@@ -33,33 +33,9 @@ final class TimerLiveActivityCoordinator {
     }
 
     private func reconcile(timer: CanonicalTimer?, taskTitle: String?, canStart: Bool) async {
-        if let trackedActivityID,
-           !Activity<TimerActivityAttributes>.activities.contains(where: {
-               $0.id == trackedActivityID && ($0.activityState == .active || $0.activityState == .stale)
-           }) {
-            dismissedTimerID = trackedTimerID
-            self.trackedActivityID = nil
-        }
-        var desired = timer
-        if let timer {
-            let active = timer.status == .running || timer.status == .paused
-            if !active || timer.remaining(at: .now) <= 0
-                || hasNativeAlarm(timer.id) || dismissedTimerID == timer.id {
-                desired = nil
-            }
-        }
-        // Reuse activities restored by ActivityKit after process termination.
-        var matching: Activity<TimerActivityAttributes>?
-        for activity in Activity<TimerActivityAttributes>.activities {
-            if activity.attributes.timerID == desired?.id,
-               activity.activityState == .active || activity.activityState == .stale,
-               matching == nil {
-                matching = activity
-            } else {
-                if trackedActivityID == activity.id { trackedActivityID = nil }
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
-        }
+        pruneDismissedTracking()
+        let desired = resolveDesiredTimer(from: timer)
+        let matching = await takeMatchingActivity(keeping: desired?.id)
         guard let desired else { return }
         let state = TimerActivityAttributes.ContentState(timer: desired, taskTitle: taskTitle)
         let content = ActivityContent(state: state, staleDate: state.isPaused ? nil : state.endsAt)
@@ -82,6 +58,44 @@ final class TimerLiveActivityCoordinator {
                 logger.error("Could not start timer Live Activity: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    private func pruneDismissedTracking() {
+        if let trackedActivityID,
+           !Activity<TimerActivityAttributes>.activities.contains(where: {
+               $0.id == trackedActivityID && ($0.activityState == .active || $0.activityState == .stale)
+           }) {
+            dismissedTimerID = trackedTimerID
+            self.trackedActivityID = nil
+        }
+    }
+
+    private func resolveDesiredTimer(from timer: CanonicalTimer?) -> CanonicalTimer? {
+        guard let timer else { return nil }
+        let active = timer.status == .running || timer.status == .paused
+        if !active || timer.remaining(at: .now) <= 0
+            || hasNativeAlarm(timer.id) || dismissedTimerID == timer.id {
+            return nil
+        }
+        return timer
+    }
+
+    private func takeMatchingActivity(
+        keeping desiredID: String?
+    ) async -> Activity<TimerActivityAttributes>? {
+        // Reuse activities restored by ActivityKit after process termination.
+        var matching: Activity<TimerActivityAttributes>?
+        for activity in Activity<TimerActivityAttributes>.activities {
+            if activity.attributes.timerID == desiredID,
+               activity.activityState == .active || activity.activityState == .stale,
+               matching == nil {
+                matching = activity
+            } else {
+                if trackedActivityID == activity.id { trackedActivityID = nil }
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+        return matching
     }
 
     private func hasNativeAlarm(_ timerID: String) -> Bool {
