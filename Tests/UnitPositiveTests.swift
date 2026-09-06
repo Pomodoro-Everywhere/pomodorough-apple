@@ -898,7 +898,8 @@ struct UnitPositiveTests {
         #expect(alarms.operations == [
             .schedule(id: uuid, timerID: timerID, phase: .focus, duration: 0),
             .pause(id: uuid),
-            .resume(id: uuid),
+            .cancel(id: uuid),
+            .schedule(id: uuid, timerID: timerID, phase: .focus, duration: 30),
             .cancel(id: uuid),
         ])
         #expect(notifications.operations == Array(

@@ -7,10 +7,10 @@ struct ServicePatternCard: View {
         VStack(alignment: .leading, spacing: 16) {
             SectionHeading(kicker: "ROUTE", title: "Service pattern", subtitle: "Choose a mode and duration")
             if model.isTimerActive {
-                Label("Applies to next timer", systemImage: "forward.end.fill")
+                Label("Duration changes apply to next timer", systemImage: "forward.end.fill")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(PomodoroughTheme.signal)
-                    .accessibilityHint("These changes do not alter the running or paused timer.")
+                    .accessibilityHint("Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus.")
             }
             ForEach(TimerPhase.allCases) { phase in
                 DurationRow(
@@ -26,9 +26,11 @@ struct ServicePatternCard: View {
             Toggle("Auto-start breaks", isOn: $model.autoStartBreaks)
                 .font(.headline)
                 .accessibilityHint(model.isTimerActive
-                    ? "Applies to next timer. Short after focus. Long every fourth completed focus."
+                    ? "Controls the break after the current focus. Short after focus. Long every fourth completed focus."
                     : "Short after focus. Long every fourth completed focus.")
-            Text("Short after focus. Long every fourth completed focus.")
+            Text(model.isTimerActive
+                ? "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus."
+                : "Short after focus. Long every fourth completed focus.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)

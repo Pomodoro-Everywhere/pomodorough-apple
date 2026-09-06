@@ -18,6 +18,9 @@ struct JoinIrohRoomView: View {
                         .disabled(isJoining)
                 }
             }
+#if os(iOS)
+            .interactiveDismissDisabled(isJoining)
+#endif
         }
 #if os(macOS)
         .frame(minWidth: 520, minHeight: 460)

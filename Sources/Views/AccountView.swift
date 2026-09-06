@@ -1,5 +1,13 @@
 import GoogleSignInSwift
 import SwiftUI
+import UserNotifications
+
+#if os(iOS)
+import AlarmKit
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 struct AccountView: View {
 
@@ -7,6 +15,10 @@ struct AccountView: View {
     @State private var confirmsSignOut = false
     @State private var confirmsAccountDeletion = false
     @State private var accountDeletionConfirmation = ""
+    @State private var timerAlertStatusLabel = String(localized: "Checking…")
+    @State private var timerAlertCanEnable = false
+    @State private var timerAlertNeedsSettings = false
+    @State private var isEnablingTimerAlerts = false
 
     let model: AppModel
 
@@ -164,10 +176,78 @@ struct AccountView: View {
         Section {
             Text("Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.")
                 .fixedSize(horizontal: false, vertical: true)
+            LabeledContent("Timer alerts", value: timerAlertStatusLabel)
+                .accessibilityIdentifier("account.timer-alerts-status")
+            if timerAlertCanEnable {
+                Button {
+                    isEnablingTimerAlerts = true
+                    Task {
+                        await model.allowTimerAlerts()
+                        await refreshTimerAlertStatus()
+                        isEnablingTimerAlerts = false
+                    }
+                } label: {
+                    if isEnablingTimerAlerts {
+                        ProgressView("Enabling timer alerts")
+                    } else {
+                        Label("Enable timer alerts", systemImage: "bell.badge.fill")
+                    }
+                }
+                .disabled(isEnablingTimerAlerts)
+                .accessibilityIdentifier("account.timer-alerts-enable")
+            }
+            if timerAlertNeedsSettings {
+                Button {
+                    openTimerAlertSettings()
+                } label: {
+                    Label("Open Settings", systemImage: "gear")
+                }
+                .accessibilityIdentifier("account.timer-alerts-settings")
+                .accessibilityHint("Opens system settings to re-enable timer alerts after denial.")
+            }
         } header: {
             Text("Timer alert limits")
                 .accessibilityIdentifier("account.timer-alert-limits")
         }
+        .task { await refreshTimerAlertStatus() }
+    }
+
+    private func refreshTimerAlertStatus() async {
+        let notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        var alarmState: AlarmAuthorizationProbe = .unavailable
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            alarmState = AlarmAuthorizationProbe.current()
+        }
+#endif
+        switch (notificationStatus, alarmState) {
+        case (.authorized, _), (.provisional, _), (.ephemeral, _), (_, .authorized):
+            timerAlertStatusLabel = String(localized: "On")
+            timerAlertCanEnable = false
+            timerAlertNeedsSettings = false
+        case (.denied, .denied), (.denied, .unavailable):
+            timerAlertStatusLabel = String(localized: "Off")
+            timerAlertCanEnable = false
+            timerAlertNeedsSettings = true
+        case (.notDetermined, .notDetermined), (.notDetermined, .unavailable):
+            timerAlertStatusLabel = String(localized: "Not enabled")
+            timerAlertCanEnable = true
+            timerAlertNeedsSettings = false
+        default:
+            timerAlertStatusLabel = String(localized: "Limited")
+            timerAlertCanEnable = true
+            timerAlertNeedsSettings = notificationStatus == .denied || alarmState == .denied
+        }
+    }
+
+    private func openTimerAlertSettings() {
+#if os(iOS)
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        Task { _ = await UIApplication.shared.open(url) }
+#elseif os(macOS)
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
+        NSWorkspace.shared.open(url)
+#endif
     }
 
     private var networkSection: some View {
@@ -201,6 +281,25 @@ struct AccountView: View {
             Text("Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.")
         }
     }
+}
+
+private enum AlarmAuthorizationProbe {
+    case unavailable
+    case notDetermined
+    case authorized
+    case denied
+
+#if os(iOS)
+    @available(iOS 26.0, *)
+    static func current() -> AlarmAuthorizationProbe {
+        switch AlarmManager.shared.authorizationState {
+        case .notDetermined: return .notDetermined
+        case .authorized: return .authorized
+        case .denied: return .denied
+        @unknown default: return .denied
+        }
+    }
+#endif
 }
 
 #if DEBUG

@@ -15,15 +15,21 @@ struct HistoryScreen: View {
     var body: some View {
         Group {
             if model.history.isEmpty {
-                ContentUnavailableView(
-                    "No arrivals yet",
-                    systemImage: "clock.badge.questionmark",
-                    description: Text("Your first run appears here.")
-                )
+                ScrollView {
+                    ContentUnavailableView(
+                        "No arrivals yet",
+                        systemImage: "clock.badge.questionmark",
+                        description: Text("Your first run appears here.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 80)
+                }
+                .refreshable { await model.refreshForPull() }
                 .accessibilityRepresentation {
                     Text("No arrivals yet")
                         .accessibilityValue("Your first run appears here.")
                 }
+                .accessibilityIdentifier("history.empty-scroll")
             } else {
                 List(model.history) { item in
                     HistoryRow(item: item, taskContext: model.taskContext(for: item))

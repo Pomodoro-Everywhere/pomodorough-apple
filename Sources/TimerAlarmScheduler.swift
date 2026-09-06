@@ -436,10 +436,9 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
             guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
             if alarms.authorizationState == .authorized,
                let alarmID = Self.alarmID(for: timerID) {
-                if try alarms.resume(id: alarmID) {
-                    notifications.remove(identifier: Self.notificationID(for: timerID))
-                    return
-                }
+                // Reconcile canonical remaining: resuming would restore AlarmKit's stored
+                // remaining time, so replace the alarm with the canonical deadline instead.
+                try alarms.cancel(id: alarmID)
                 try await alarms.schedule(id: alarmID, timerID: timerID, phase: phase, duration: duration)
                 notifications.remove(identifier: Self.notificationID(for: timerID))
                 return
