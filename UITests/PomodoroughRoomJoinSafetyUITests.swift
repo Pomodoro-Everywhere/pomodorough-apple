@@ -26,8 +26,15 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
 
         // Malformed invite fails fast in local invite decoding, before any
         // networking: deterministic failed join without a slow peer.
-        let inviteField = app.textFields["Room invite"].firstMatch
-        XCTAssertTrue(inviteField.waitForExistence(timeout: 5))
+        // Type-agnostic query: multiline TextField exposes as textField on
+        // newer iOS but as textView (or unlabeled container child) on older
+        // runtimes. Dump the hierarchy on failure for decisive evidence.
+        let inviteField = app.descendants(matching: .any)["Room invite"].firstMatch
+        if !inviteField.waitForExistence(timeout: 5) {
+            print("ROOM-JOIN-DIAG hierarchy:
+" + app.debugDescription)
+        }
+        XCTAssertTrue(inviteField.exists)
         inviteField.tap()
         inviteField.typeText("not-a-valid-invite")
         app.buttons["Validate and join"].tap()
