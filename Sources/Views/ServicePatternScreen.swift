@@ -17,7 +17,10 @@ struct ServicePatternScreen: View {
 
     private var content: some View {
         ScrollView {
-            ServicePatternCard(model: model)
+            VStack(spacing: 12) {
+                ServicePatternCard(model: model)
+                AppVersionFooter()
+            }
                 .padding()
                 .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 80 : 0)
                 .frame(maxWidth: 760)

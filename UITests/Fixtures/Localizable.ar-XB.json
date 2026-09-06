@@ -2192,6 +2192,12 @@
         "value": "‏⟦Validate and join⟧"
       }
     },
+    "Version %@ (%@)": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Version %@ (%@)⟧"
+      }
+    },
     "Waiting for peers": {
       "stringUnit": {
         "state": "translated",

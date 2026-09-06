@@ -19,6 +19,7 @@
 		097F6024855A8B8AA75B5F22 /* ModernTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B78A6C72FEDDC6BCC6B7DC1 /* ModernTabs.swift */; };
 		09FAB91AC913CC5933287240 /* SharedCoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CEEC2337A192634D24A340C /* SharedCoreModels.swift */; };
 		0A4D8FC8A0D036F6FCF4F3CC /* LogoutRevocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */; };
+		0B92B5590C5D19F65096200D /* AppVersionFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */; };
 		0BA0AC733AC870B50A7FEAE7 /* AccountSyncToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */; };
 		0DD0CA0C903D547E17D0117D /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
 		0EAF8323E5B547A935B98DB1 /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
@@ -62,10 +63,12 @@
 		2F6DFF9EA992B61C0FC6BE40 /* AccountDeletionRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB09E46A90764AA003DFF9 /* AccountDeletionRetryTests.swift */; };
 		2FE2B8F3D32C47449D4298C3 /* PreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */; };
 		3048700E5517109AD34C77D4 /* TimerCompletionScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CFD328BAB1D26FBBC212D4 /* TimerCompletionScheduler.swift */; };
+		30E628A65B1E39F112112726 /* AppVersionFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */; };
 		3272D417CFE6E7BC0C61D505 /* SessionRevocationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */; };
 		32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */; };
 		32CD7FD4021BF0DF052D4CF7 /* IrohRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */; };
 		32E6F4F113879D715D9BE1E3 /* SynchronizationWireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */; };
+		32E94256D732CB58A1BDBB25 /* AppVersionInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */; };
 		3304111FE49CB985AC2504F5 /* CentralizedAccountSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98F3DC0FF23AE7DA1D3BA0B /* CentralizedAccountSessionCoordinator.swift */; };
 		3546DB83BA987246ED2FB6AF /* EndpointIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5131154CE2452672A3A4F700 /* EndpointIdentity.swift */; };
 		356D58FFF6FC74C9885068D6 /* PomodoroughTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4755E1928278877B4EA62348 /* PomodoroughTheme.swift */; };
@@ -255,6 +258,7 @@
 		CC223DE9D55BEA683FAC6CBB /* RPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21209644D253E40E15EC9998 /* RPCMessage.swift */; };
 		CC8A04E89886DFA189F17026 /* TimerCompletionSchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */; };
 		CCC109267B0A5DD7201A043C /* IrohLegacyTaskMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7473097A54FEEC975EC408 /* IrohLegacyTaskMigration.swift */; };
+		CD96FFBA3BF9914403BFE044 /* AppVersionInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */; };
 		CEB90DB97C70133BC2011DE6 /* AccountLifecycleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7153AF2C965F64F578C6007 /* AccountLifecycleController.swift */; };
 		CF7B4F61AE398CE7EEDCB5FE /* IrohRoomModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE50A4937E18D925FD8F8CCC /* IrohRoomModels.swift */; };
 		D0A8B53E87AC59CBF177A3A7 /* TimerCompletionScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CFD328BAB1D26FBBC212D4 /* TimerCompletionScheduler.swift */; };
@@ -451,6 +455,7 @@
 		8A7019E349578A8ECD708783 /* HistoryResolutionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryResolutionView.swift; sourceTree = "<group>"; };
 		8BE293E4CC407E944F414FC0 /* AppStateEffectCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateEffectCoordinatorTests.swift; sourceTree = "<group>"; };
 		8C3454A72650907D5ABE4854 /* HistoryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRow.swift; sourceTree = "<group>"; };
+		8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVersionFooter.swift; sourceTree = "<group>"; };
 		8E424BDE1951688EFEBA81AF /* PomodoroughMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PomodoroughMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9223397CA303F7E682AC131A /* PomodoroughAccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughAccessibilityUITests.swift; sourceTree = "<group>"; };
 		92728957F3129B011194935E /* AuthenticationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationModels.swift; sourceTree = "<group>"; };
@@ -504,6 +509,7 @@
 		E9151C5F69A1F64F86529666 /* IrohProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohProtocol.swift; sourceTree = "<group>"; };
 		EB318E39A9F2F2070F3114D6 /* PersistedTimerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedTimerState.swift; sourceTree = "<group>"; };
 		ED3762000A0338A5D822855F /* TimerSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerSessionController.swift; sourceTree = "<group>"; };
+		ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVersionInfoTests.swift; sourceTree = "<group>"; };
 		EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughApp.swift; sourceTree = "<group>"; };
 		EE1BDE2B23EECA56B289F6B0 /* LandscapeDialFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeDialFace.swift; sourceTree = "<group>"; };
 		EE9592BD58F7F316E722046D /* uuidv7-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "uuidv7-v1.json"; sourceTree = "<group>"; };
@@ -619,6 +625,7 @@
 				7992AEDBA039737DA91F4360 /* APIDateRetainedStoreTests.swift */,
 				99FD08EB834A612834A4FC51 /* AppModelDecompositionTests.swift */,
 				8BE293E4CC407E944F414FC0 /* AppStateEffectCoordinatorTests.swift */,
+				ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */,
 				5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */,
 				7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */,
 				2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */,
@@ -675,6 +682,7 @@
 				C78515075F02ADC6AD55E4C5 /* AccessibleDialFace.swift */,
 				C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */,
 				CD275FEDF06634D4FC072390 /* AccountView.swift */,
+				8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */,
 				BB8C8481EAB6EB262147BFEB /* CompletedFocusBreakdownScreen.swift */,
 				7A213BE759E634BCEE87C4C3 /* ConflictBanner.swift */,
 				38E2B967974C1E80FDE7E8EE /* DialFace.swift */,
@@ -1055,6 +1063,7 @@
 				2F6DFF9EA992B61C0FC6BE40 /* AccountDeletionRetryTests.swift in Sources */,
 				6FC998ECBF9E243A266F62FD /* AppModelDecompositionTests.swift in Sources */,
 				A93F7A68B6662404E0E5AF71 /* AppStateEffectCoordinatorTests.swift in Sources */,
+				CD96FFBA3BF9914403BFE044 /* AppVersionInfoTests.swift in Sources */,
 				08B842AA74B8633316A97C7A /* CoverageGapBehaviorTests.swift in Sources */,
 				C3A869CE2835EC339576D607 /* IntegrationNegativeTests.swift in Sources */,
 				F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */,
@@ -1113,6 +1122,7 @@
 				BD5F06E734560EC2E00CC879 /* AccountDeletionRetryTests.swift in Sources */,
 				C71685A085B7B597A55EDA9B /* AppModelDecompositionTests.swift in Sources */,
 				D18F9A7146ED5CDF13954780 /* AppStateEffectCoordinatorTests.swift in Sources */,
+				32E94256D732CB58A1BDBB25 /* AppVersionInfoTests.swift in Sources */,
 				24F82419C7483BD364F2E187 /* CoverageGapBehaviorTests.swift in Sources */,
 				98B4B39B908271919830386D /* IntegrationNegativeTests.swift in Sources */,
 				3FFA600ACA6A8AA43B56AF17 /* IntegrationPositiveTests.swift in Sources */,
@@ -1160,6 +1170,7 @@
 				5C5F3C5C652265C7C81ACB31 /* AppModel.swift in Sources */,
 				6F6BED1A6FC1A684271A8EAF /* AppStatePersistenceCoordinator.swift in Sources */,
 				D60B269071AAC3DB77975630 /* AppStatePublisher.swift in Sources */,
+				30E628A65B1E39F112112726 /* AppVersionFooter.swift in Sources */,
 				D295F0576E68387FECA9F408 /* ApplicationPresentationModels.swift in Sources */,
 				D4276F441C34E5DD5E94F12B /* AuthenticatedFrameCodec.swift in Sources */,
 				270B68C547A38260159578BE /* AuthenticationModels.swift in Sources */,
@@ -1282,6 +1293,7 @@
 				D33FAB5D214DE97A6B1B9AC7 /* AppModel.swift in Sources */,
 				1D978F93119160CA122BF7FE /* AppStatePersistenceCoordinator.swift in Sources */,
 				5204E798A30C57AA6E2E0DF4 /* AppStatePublisher.swift in Sources */,
+				0B92B5590C5D19F65096200D /* AppVersionFooter.swift in Sources */,
 				F61D402A25FE4CA4E066E672 /* ApplicationPresentationModels.swift in Sources */,
 				00B2E3403AAB6EED6F233A62 /* AuthenticatedFrameCodec.swift in Sources */,
 				11BA335C3A8DB0743B028CDB /* AuthenticationModels.swift in Sources */,
@@ -1602,7 +1614,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1624,7 +1636,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.11.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1727,7 +1739,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1743,7 +1755,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.11.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
