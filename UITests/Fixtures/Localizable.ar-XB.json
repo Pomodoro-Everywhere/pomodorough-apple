@@ -2449,6 +2449,48 @@
         "state": "translated",
         "value": "‏⟦%1$02lld:%2$02lld⟧"
       }
+    },
+    "%arg arrivals": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg arrivals⟧"
+      }
+    },
+    "%arg completed of %arg runs": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg completed of %arg runs⟧"
+      }
+    },
+    "Completed focus: %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Completed focus: %arg⟧"
+      }
+    },
+    "View focus breakdown": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦View focus breakdown⟧"
+      }
+    },
+    "Delete task?": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Delete task?⟧"
+      }
+    },
+    "Delete “%arg”?": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Delete “%arg”?⟧"
+      }
+    },
+    "This removes the task from the board. Completed focus runs stay in history.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This removes the task from the board. Completed focus runs stay in history.⟧"
+      }
     }
   },
   "version": 1

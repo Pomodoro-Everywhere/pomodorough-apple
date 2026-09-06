@@ -3312,6 +3312,76 @@
           }
         }
       }
+    },
+    "%arg arrivals": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%arg arrivals"
+          }
+        }
+      }
+    },
+    "%arg completed of %arg runs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%arg completed of %arg runs"
+          }
+        }
+      }
+    },
+    "Completed focus: %arg": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed focus: %arg"
+          }
+        }
+      }
+    },
+    "View focus breakdown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View focus breakdown"
+          }
+        }
+      }
+    },
+    "Delete task?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete task?"
+          }
+        }
+      }
+    },
+    "Delete “%arg”?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete “%arg”?"
+          }
+        }
+      }
+    },
+    "This removes the task from the board. Completed focus runs stay in history.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This removes the task from the board. Completed focus runs stay in history."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
