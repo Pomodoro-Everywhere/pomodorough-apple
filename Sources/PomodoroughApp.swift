@@ -6,6 +6,7 @@ struct PomodoroughApp: App {
     @State private var model: AppModel
 
     init() {
+        SentrySetup.startIfConfigured()
 #if DEBUG
         if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_RESET"] == "1" {
             if let bundleIdentifier = Bundle.main.bundleIdentifier {

@@ -16,6 +16,7 @@ xcuserdata/
 *.p12
 *.p8
 GoogleService-Info.plist
+Supporting/SentryDSN.local
 *.mobileprovision
 .cache_ggshield
 .ruff_cache/

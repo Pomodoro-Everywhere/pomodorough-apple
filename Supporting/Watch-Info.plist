@@ -23,6 +23,10 @@
 	<key>WKApplication</key>
 	<true/>
 	<key>WKWatchOnly</key>
-	<true/>
+	<false/>
+	<key>WKRunsIndependentlyOfCompanionApp</key>
+	<false/>
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>me.egigoka.pomodorough</string>
 </dict>
 </plist>

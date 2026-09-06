@@ -6,6 +6,8 @@ import Foundation
 enum WatchSyncKeys {
     static let snapshot = "snapshot"
     static let command = "command"
+    static let requestSync = "requestSync"
+    static let report = "report"
 }
 
 struct WatchTimerSnapshot: Codable, Equatable, Sendable {

@@ -19,12 +19,20 @@ struct WatchTimerView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    Text(sync.diag)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    if let report = sync.iosReport {
+                        Text("ios: \(report)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .padding(.vertical, 16)
             }
         }
         .navigationTitle("Pomodorough")
-        .onAppear { startTicker() }
+        .onAppear { startTicker(); sync.requestSync() }
         .onDisappear { stopTicker() }
     }
 

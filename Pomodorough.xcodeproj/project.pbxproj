@@ -31,6 +31,7 @@
 		1048F26158F4DD98631A2EBC /* LegacyPendingOperationRebase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0255DC2576EECA4059C086 /* LegacyPendingOperationRebase.swift */; };
 		10649455CA7469E9BEF8014E /* TimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EFD2642B87CC51E870120B /* TimerDial.swift */; };
 		10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */; };
+		115E7FE098975B760A87E56B /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 096DF78AFDEF90CCC25319EB /* Sentry */; };
 		11AB92A0968D38950FB91B91 /* TimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EFD2642B87CC51E870120B /* TimerDial.swift */; };
 		11BA335C3A8DB0743B028CDB /* AuthenticationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92728957F3129B011194935E /* AuthenticationModels.swift */; };
 		12389EBDBDA43A8A9AA94A1C /* PrimaryRouteAccountToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E189447B3C110A6F7321E4F3 /* PrimaryRouteAccountToolbar.swift */; };
@@ -105,6 +106,7 @@
 		45F867DC911B7B3F85D0AEE0 /* RPCMessageValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99AC746729ADB1BBFF8FEE6C /* RPCMessageValidation.swift */; };
 		465741A0371919D20FC630B8 /* SSERevisionStreamLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645DF6461B89E328FD8FDD43 /* SSERevisionStreamLimitsTests.swift */; };
 		471AC410750E1BBBB89BDBDC /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF58A4FC46A48C3BEAA7E13E /* Models.swift */; };
+		47CFD3836BF758380600DC02 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 7351A2B05F86353D745678C2 /* Sentry */; };
 		47E1B93D51C9431987F1057A /* protocol-fixtures-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 22A0FB54C793C4B2090D7DBD /* protocol-fixtures-v1.json */; };
 		485A35A30D9CBE5B4716DDED /* PermissionIntroductionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9365C061D3DC88DA100565B2 /* PermissionIntroductionCard.swift */; };
 		487DF4813A7E1241DE089C1C /* LegacyMigrationDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA9D8F351248CDEAAFCD570 /* LegacyMigrationDurabilityTests.swift */; };
@@ -162,6 +164,7 @@
 		74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
 		7564DA5618CDD127FD5532B2 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD275FEDF06634D4FC072390 /* AccountView.swift */; };
 		76231512AB810E2424C54239 /* TimerControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B908C0CE40CB2094D4A76D84 /* TimerControls.swift */; };
+		76704F0E8D2DDCCD7F628E18 /* Pomodorough.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = F44FBD7F4AFB28A7C738ECCF /* Pomodorough.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		76D3399CEAAA1DCCF9D3F954 /* IrohProtocolCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5A77AB25CA8D2BEBC52E4E /* IrohProtocolCompatibilityTests.swift */; };
 		773AEB98B6A6EE50655C58E7 /* ModelsSourceSplitCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23E73A1D6F89C1AAFBC49A74 /* ModelsSourceSplitCompatibilityTests.swift */; };
 		77B6F6076ED0895F9C164E1C /* CanonicalRecordValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5592EA673519FEA79B21B2C3 /* CanonicalRecordValidation.swift */; };
@@ -294,6 +297,8 @@
 		D66ACE3D1488CAF5B712287F /* TimerTaskPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E68FD6BB00A16B79EFC34AC7 /* TimerTaskPicker.swift */; };
 		D71BC324CAE1DF74369577E1 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */; };
 		D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */; };
+		D78ED3D504C0542605BB9A61 /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
+		D89474D724A1904C8240127C /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
 		D9748460069EA29BC8F5E723 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */; };
 		DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2455C8C8ECE4B1401FA78CC8 /* RouteClockMark.swift */; };
 		DBE062F45B36BEB21BF35F20 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A2F56FE27D4AA634729FFC7 /* WasmKit */; };
@@ -387,6 +392,13 @@
 			remoteGlobalIDString = BEFBBBD85527B968D0F33FCE;
 			remoteInfo = "Pomodorough-iOS";
 		};
+		7027E998EAA5589EAD9A8DEA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E83323A28E5C29E2DB0C0729 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7B09F430DCB3D4E827ACA309;
+			remoteInfo = "Pomodorough-watchOS";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -399,6 +411,17 @@
 				13C231C63B35130008BBF295 /* PomodoroughLiveActivity.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B8C787105F02995A86B14941 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				76704F0E8D2DDCCD7F628E18 /* Pomodorough.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -489,6 +512,7 @@
 		7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerCompletionSchedulingTests.swift; sourceTree = "<group>"; };
 		756912FE081EC76B3B459175 /* SynchronizationLifecycleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationLifecycleModels.swift; sourceTree = "<group>"; };
 		75D48B773F39678A5656B048 /* PersistedStateCompatibilityTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PersistedStateCompatibilityTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		77503581F23F5EA85ECC4D0C /* SentrySetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentrySetup.swift; sourceTree = "<group>"; };
 		7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogoutRevocationTests.swift; sourceTree = "<group>"; };
 		7992AEDBA039737DA91F4360 /* APIDateRetainedStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIDateRetainedStoreTests.swift; sourceTree = "<group>"; };
 		79CCD9795C8F102246EAE998 /* TaskBoardHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardHeader.swift; sourceTree = "<group>"; };
@@ -589,6 +613,7 @@
 				AB492C16E7AF250315F8F18C /* GoogleSignInSwift in Frameworks */,
 				505B2B0AF04A88EB671C899A /* IrohLib in Frameworks */,
 				A1332F63477B2332EF05279D /* WasmKit in Frameworks */,
+				47CFD3836BF758380600DC02 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -600,6 +625,7 @@
 				D31A942F600F2AD2BD57150D /* GoogleSignInSwift in Frameworks */,
 				8F896A75991DA7E095E805E0 /* IrohLib in Frameworks */,
 				DBE062F45B36BEB21BF35F20 /* WasmKit in Frameworks */,
+				115E7FE098975B760A87E56B /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -641,6 +667,7 @@
 				F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */,
 				363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */,
 				E07295C5A8844F45C157C394 /* RoomReplicationTransitions.swift */,
+				77503581F23F5EA85ECC4D0C /* SentrySetup.swift */,
 				20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */,
 				29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */,
 				9CEEC2337A192634D24A340C /* SharedCoreModels.swift */,
@@ -1029,6 +1056,7 @@
 				35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */,
 				F883AB1431F3186814AACEF4 /* IrohLib */,
 				2334730AA8BEE8CA1C39A2AD /* WasmKit */,
+				7351A2B05F86353D745678C2 /* Sentry */,
 			);
 			productName = "Pomodorough-macOS";
 			productReference = 05C431FDA9B5C4273A3A48BC /* Pomodorough.app */;
@@ -1061,10 +1089,12 @@
 				8BBD8165ECACBC2803BF51D8 /* Resources */,
 				988456C7E5F4DCA0281C5499 /* Frameworks */,
 				15331352B3BE3A013E495D7C /* Embed Foundation Extensions */,
+				B8C787105F02995A86B14941 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				EAA8EC1F36C7139B5A9A6EE3 /* PBXTargetDependency */,
 				2D5F81418CE9BD0A32391275 /* PBXTargetDependency */,
 			);
 			name = "Pomodorough-iOS";
@@ -1073,6 +1103,7 @@
 				0EE041835DA15370CCB79786 /* GoogleSignInSwift */,
 				8314F34588484234E7441061 /* IrohLib */,
 				0A2F56FE27D4AA634729FFC7 /* WasmKit */,
+				096DF78AFDEF90CCC25319EB /* Sentry */,
 			);
 			productName = "Pomodorough-iOS";
 			productReference = 80A775511EF0C665343A6BF3 /* Pomodorough.app */;
@@ -1120,6 +1151,7 @@
 			packageReferences = (
 				4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				8B8C149D80299360883ECC8B /* XCRemoteSwiftPackageReference "iroh-ffi" */,
+				00AD3875649F848939C08192 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				A22EC1D57EC781DF67C044B8 /* XCRemoteSwiftPackageReference "WasmKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -1392,6 +1424,7 @@
 				58962D0E6040C10A030364BB /* RootView.swift in Sources */,
 				409ACBCFB90A9510366B2111 /* RouteClockMark.swift in Sources */,
 				F7538DA7270901F11D96D9F8 /* SectionHeading.swift in Sources */,
+				D78ED3D504C0542605BB9A61 /* SentrySetup.swift in Sources */,
 				AFA72B55F24D175A803F93BF /* ServicePatternCard.swift in Sources */,
 				388A95C362B47A5F9C63E734 /* ServicePatternScreen.swift in Sources */,
 				D65BD6C38713D53E03C57251 /* SessionRevocationController.swift in Sources */,
@@ -1522,6 +1555,7 @@
 				8D183381FCF4A56733917E9F /* RootView.swift in Sources */,
 				DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */,
 				64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */,
+				D89474D724A1904C8240127C /* SentrySetup.swift in Sources */,
 				CBD6A118EB50CD13A585FD53 /* ServicePatternCard.swift in Sources */,
 				BE2AFABAAE1ADE3CC7C78A1B /* ServicePatternScreen.swift in Sources */,
 				3272D417CFE6E7BC0C61D505 /* SessionRevocationController.swift in Sources */,
@@ -1601,6 +1635,11 @@
 			target = BEFBBBD85527B968D0F33FCE /* Pomodorough-iOS */;
 			targetProxy = 696513D6BA37325721A44ECE /* PBXContainerItemProxy */;
 		};
+		EAA8EC1F36C7139B5A9A6EE3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7B09F430DCB3D4E827ACA309 /* Pomodorough-watchOS */;
+			targetProxy = 7027E998EAA5589EAD9A8DEA /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -1612,6 +1651,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/iOS-Info.plist";
+				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1682,6 +1722,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/iOS-Info.plist";
+				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1833,7 +1874,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1855,7 +1896,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.12.0;
+				MARKETING_VERSION = 0.14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1878,6 +1919,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/macOS-Info.plist";
+				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -1931,6 +1973,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/macOS-Info.plist";
+				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -1975,7 +2018,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1991,7 +2034,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.12.0;
+				MARKETING_VERSION = 0.14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -2149,6 +2192,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		00AD3875649F848939C08192 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = exactVersion;
+				version = 9.27.0;
+			};
+		};
 		4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/google/GoogleSignIn-iOS.git";
@@ -2176,6 +2227,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		096DF78AFDEF90CCC25319EB /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00AD3875649F848939C08192 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 		0A2F56FE27D4AA634729FFC7 /* WasmKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A22EC1D57EC781DF67C044B8 /* XCRemoteSwiftPackageReference "WasmKit" */;
@@ -2200,6 +2256,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4C30AC0E84504D8D3B3E3A3A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
+		};
+		7351A2B05F86353D745678C2 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00AD3875649F848939C08192 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 		7A7020DD3D1717913BB5F1D8 /* GoogleSignIn */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -15,6 +15,9 @@ packages:
   WasmKit:
     url: https://github.com/swiftwasm/WasmKit.git
     exactVersion: 0.3.1
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa.git
+    exactVersion: 9.27.0
 schemes:
   Pomodorough-iOS:
     build:
@@ -53,8 +56,8 @@ settings:
   base:
     SWIFT_VERSION: 6.0
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: 0.12.0
-    CURRENT_PROJECT_VERSION: 26
+    MARKETING_VERSION: 0.14.0
+    CURRENT_PROJECT_VERSION: 27
     GOOGLE_CLIENT_ID: "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com"
     GOOGLE_REVERSED_CLIENT_ID: "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr"
 targets:
@@ -98,6 +101,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     dependencies:
+      - target: Pomodorough-watchOS
       - target: PomodoroughLiveActivity
         embed: true
       - package: GoogleSignIn
@@ -108,6 +112,8 @@ targets:
         product: IrohLib
       - package: WasmKit
         product: WasmKit
+      - package: Sentry
+        product: Sentry
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough
@@ -116,6 +122,7 @@ targets:
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_SENTRY_DSN: $(SENTRY_DSN)
   PomodoroughLiveActivity:
     type: app-extension
     platform: iOS
@@ -168,6 +175,8 @@ targets:
         product: IrohLib
       - package: WasmKit
         product: WasmKit
+      - package: Sentry
+        product: Sentry
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac
@@ -176,6 +185,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Pomodorough-macOS.entitlements
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
+        INFOPLIST_KEY_SENTRY_DSN: $(SENTRY_DSN)
   Pomodorough-watchOS:
     type: application
     platform: watchOS
@@ -191,7 +201,9 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
-        WKWatchOnly: true
+        WKWatchOnly: false
+        WKRunsIndependentlyOfCompanionApp: false
+        WKCompanionAppBundleIdentifier: me.egigoka.pomodorough
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.watch

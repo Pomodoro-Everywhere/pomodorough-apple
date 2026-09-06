@@ -8,6 +8,11 @@ INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 BUILT_APP="$DERIVED_DATA_DIR/Build/Products/Release/Pomodorough.app"
 INSTALLED_APP="$INSTALL_DIR/Pomodorough.app"
 
+if [[ -f "$ROOT_DIR/Supporting/SentryDSN.local" ]]; then
+    SENTRY_DSN="$(tr -d '[:space:]' < "$ROOT_DIR/Supporting/SentryDSN.local")"
+    export SENTRY_DSN
+fi
+
 xcodebuild \
     -project "$ROOT_DIR/Pomodorough.xcodeproj" \
     -scheme Pomodorough-macOS \

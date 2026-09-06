@@ -66,7 +66,7 @@ final class AppModel {
     @ObservationIgnored private var projectedSelectedTaskID: UUID?
     @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private lazy var roomReplicationController = makeRoomReplicationController()
-    @ObservationIgnored private let watchSync = WatchSyncService()
+    @ObservationIgnored let watchSync = WatchSyncService()
 
     private(set) var sessionState: SessionState = .restoring
     private(set) var canonicalTimer: CanonicalTimer?

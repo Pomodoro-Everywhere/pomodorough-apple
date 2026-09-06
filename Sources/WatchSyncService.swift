@@ -7,8 +7,15 @@ import WatchConnectivity
 /// from the watch are applied as regular mutations. No-op wherever
 /// WatchConnectivity is unsupported (macOS compiles this file too).
 @MainActor
-final class WatchSyncService: NSObject {
+final class WatchSyncService: NSObject, ObservableObject {
     private weak var model: AppModel?
+    /// Temporary debug: iOS-side session state + last push result, shown on screen.
+    @Published private(set) var diagLine = "init"
+
+    private func refreshDiag(_ note: String) {
+        let s = WCSession.isSupported() ? WCSession.default : nil
+        diagLine = "st=\(s?.activationState.rawValue ?? -1) paired=\(s?.isPaired ?? false) watchApp=\(s?.isWatchAppInstalled ?? false) reach=\(s?.isReachable ?? false) | \(note)"
+    }
 
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
@@ -16,28 +23,45 @@ final class WatchSyncService: NSObject {
 
     func attach(_ model: AppModel) {
         self.model = model
-        guard let session, session.activationState == .notActivated else { return }
+        guard let session else { return }
+        // Always (re)claim the delegate: a previous AppModel instance may have
+        // activated the session and been deallocated, leaving a dangling delegate.
         session.delegate = self
+        guard session.activationState == .notActivated else { return }
         session.activate()
         log("attach: activating, paired=\(session.isPaired) watchAppInstalled=\(session.isWatchAppInstalled)")
+        refreshDiag("attached")
     }
 
-    func push() {
+    @discardableResult
+    func push() -> String {
+        let report: String
         guard let session,
               session.activationState == .activated,
               session.isPaired,
               let model,
               let data = try? JSONEncoder().encode(model.makeWatchSnapshot())
         else {
-            log("push: skipped state=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchAppInstalled=\(session?.isWatchAppInstalled ?? false)")
-            return
+            report = "skip st=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchApp=\(session?.isWatchAppInstalled ?? false)"
+            log("push: \(report)")
+            refreshDiag(report)
+            return report
         }
         do {
             try session.updateApplicationContext([WatchSyncKeys.snapshot: data])
-            log("push: ok paired=\(session.isPaired) watchAppInstalled=\(session.isWatchAppInstalled)")
+            report = "ok \(data.count)B watchApp=\(session.isWatchAppInstalled)"
+            log("push: \(report)")
         } catch {
-            log("push: FAILED \(error)")
+            report = "FAIL \(error)"
+            log("push: \(report)")
         }
+        // Best-effort live report so the watch can display iOS-side state.
+        if session.isReachable {
+            let text = report
+            session.sendMessage([WatchSyncKeys.report: text], replyHandler: nil, errorHandler: nil)
+        }
+        refreshDiag(report)
+        return report
     }
 }
 
@@ -53,8 +77,7 @@ extension WatchSyncService: WCSessionDelegate {
     ) {
         log("activation: state=\(activationState.rawValue) paired=\(session.isPaired) watchAppInstalled=\(session.isWatchAppInstalled) error=\(String(describing: error))")
         guard activationState == .activated else { return }
-        Task { @MainActor [weak self] in self?.push() }
-    }
+        Task { @MainActor [weak self] in self?.push() }    }
 
     nonisolated func session(
         _ session: WCSession,
@@ -69,7 +92,9 @@ extension WatchSyncService: WCSessionDelegate {
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
         handleIncoming(message)
-        replyHandler([:])
+        // Instant ack proves the iOS delegate is alive; the push result
+        // follows via sendMessage report (see push()).
+        replyHandler([WatchSyncKeys.report: "ack"])
     }
 
 #if os(iOS)
@@ -83,6 +108,10 @@ extension WatchSyncService: WCSessionDelegate {
 #endif
 
     private nonisolated func handleIncoming(_ dictionary: [String: Any]) {
+        if dictionary[WatchSyncKeys.requestSync] != nil {
+            Task { @MainActor [weak self] in self?.push() }
+            return
+        }
         guard let data = dictionary[WatchSyncKeys.command] as? Data,
               let command = try? JSONDecoder().decode(WatchTimerCommand.self, from: data)
         else { return }
