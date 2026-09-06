@@ -29,6 +29,13 @@ struct MainContainer: View {
 
     var body: some View {
         platformContent
+#if os(iOS)
+            .onOpenURL { url in
+                if url.scheme == "pomodorough", url.host == "timer" {
+                    selectedTab = .timer
+                }
+            }
+#endif
             .disabled(model.isHistoryResolutionBlocking)
             .confirmationDialog(
                 "Switch to \(model.pendingAccountSwitchUser?.email ?? "this account")?",

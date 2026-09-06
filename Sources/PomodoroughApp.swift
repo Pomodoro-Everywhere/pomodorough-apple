@@ -22,6 +22,9 @@ struct PomodoroughApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(model: model)
+#if os(iOS)
+                .modifier(TimerLiveActivityModifier(model: model))
+#endif
                 .task {
                     model.setSceneActive(scenePhase == .active)
                     await model.restore()

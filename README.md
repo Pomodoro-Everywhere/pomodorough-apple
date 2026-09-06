@@ -42,6 +42,21 @@ local-first synchronization with the Pomodorough service.
 
 The project uses Swift 6 with complete strict-concurrency checking.
 
+Timers appear in the Dynamic Island (compact, minimal, and expanded) and on the
+Lock Screen with phase colors, a countdown, progress, and paused/completed states.
+Tap the activity to open the Timer tab. On iOS 26+, the widget renders AlarmKit's
+native countdown; timers without a native alarm use an ActivityKit fallback,
+including on iOS 18. Live Activities must be enabled in system settings.
+The fallback updates from canonical timer changes and uses system-rendered dates
+while the app is suspended; an expired fallback shows completion until the app
+can dismiss it. It does not start the next session in the background.
+
+For device QA, start each phase, leave the app, expand the island, and inspect the
+Lock Screen. Pause/resume in the app and check the remaining time; cancel and
+verify dismissal. Also check a three-hour timer, a long task title, and opening
+the activity while another app tab is selected. Repeat with AlarmKit permission
+denied to exercise the fallback.
+
 ## Architecture
 
 | File | Responsibility |

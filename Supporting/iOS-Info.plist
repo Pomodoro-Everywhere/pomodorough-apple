@@ -23,6 +23,12 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>pomodorough</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
 				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
 			</array>
 		</dict>
@@ -35,6 +41,8 @@
 	<string>Pomodorough schedules alarms so completed focus sessions and breaks alert you even when the app is not open.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pomodorough uses your local network to connect directly to trusted Iroh room peers.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

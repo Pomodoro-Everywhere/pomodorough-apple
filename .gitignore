@@ -14,6 +14,8 @@ dist/
 xcuserdata/
 .env
 *.p12
+*.p8
+GoogleService-Info.plist
 *.mobileprovision
 .cache_ggshield
 .ruff_cache/

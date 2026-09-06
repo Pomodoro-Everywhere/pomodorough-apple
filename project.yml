@@ -4,6 +4,7 @@ options:
   deploymentTarget:
     iOS: "18.0"
     macOS: "15.0"
+    watchOS: "11.0"
 packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS.git
@@ -30,6 +31,10 @@ schemes:
     test:
       targets:
         - PomodoroughMacTests
+  Pomodorough-watchOS:
+    build:
+      targets:
+        Pomodorough-watchOS: all
   PersistedStateCompatibility-iOS:
     build:
       targets:
@@ -59,6 +64,7 @@ targets:
     productName: Pomodorough
     sources:
       - path: Sources
+      - path: Shared
       - path: Resources
         excludes: [SharedCore]
         buildPhase: resources
@@ -72,8 +78,11 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         GIDClientID: $(GOOGLE_CLIENT_ID)
         NSAlarmKitUsageDescription: Pomodorough schedules alarms so completed focus sessions and breaks alert you even when the app is not open.
+        NSSupportsLiveActivities: true
         NSLocalNetworkUsageDescription: Pomodorough uses your local network to connect directly to trusted Iroh room peers.
         CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - pomodorough
           - CFBundleURLSchemes:
               - $(GOOGLE_REVERSED_CLIENT_ID)
         UIApplicationSceneManifest:
@@ -89,6 +98,8 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     dependencies:
+      - target: PomodoroughLiveActivity
+        embed: true
       - package: GoogleSignIn
         product: GoogleSignIn
       - package: GoogleSignIn
@@ -105,6 +116,28 @@ targets:
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  PomodoroughLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: LiveActivity
+    info:
+      path: Supporting/LiveActivity-Info.plist
+      properties:
+        CFBundleDisplayName: Pomodorough Timer
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.liveactivity
+        DEVELOPMENT_TEAM: PTT6GCQ699
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
   Pomodorough-macOS:
     type: application
     platform: macOS
@@ -143,6 +176,30 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Pomodorough-macOS.entitlements
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
+  Pomodorough-watchOS:
+    type: application
+    platform: watchOS
+    productName: Pomodorough
+    deploymentTarget: "11.0"
+    sources:
+      - path: Watch
+      - path: Sources/WatchSyncPayload.swift
+    info:
+      path: Supporting/Watch-Info.plist
+      properties:
+        CFBundleDisplayName: Pomodorough
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        WKApplication: true
+        WKWatchOnly: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.watch
+        PRODUCT_NAME: Pomodorough
+        DEVELOPMENT_TEAM: PTT6GCQ699
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "4"
+        SKIP_INSTALL: NO
   PomodoroughTests:
     type: bundle.unit-test
     platform: iOS

@@ -66,6 +66,7 @@ final class AppModel {
     @ObservationIgnored private var projectedSelectedTaskID: UUID?
     @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private lazy var roomReplicationController = makeRoomReplicationController()
+    @ObservationIgnored private let watchSync = WatchSyncService()
 
     private(set) var sessionState: SessionState = .restoring
     private(set) var canonicalTimer: CanonicalTimer?
@@ -137,6 +138,7 @@ final class AppModel {
         physicalAnchor = startup.initialState.physicalAnchor
         needsPermissionIntroduction = startup.initialState.needsPermissionIntroduction
         restoreInitialState(startup.initialState.transition)
+        watchSync.attach(self)
     }
 
     private static func makeStartup(
@@ -553,6 +555,64 @@ final class AppModel {
     }
 
     func durationMinutes(for phase: TimerPhase) -> Int { timerState.settings.minutes(for: phase) }
+
+    func makeWatchSnapshot() -> WatchTimerSnapshot {
+        let settings = timerState.settings
+        let nowDate = now()
+        if let timer = activeTimer {
+            let status: String
+            switch timer.status {
+            case .running: status = "running"
+            case .paused: status = "paused"
+            default: status = "idle"
+            }
+            return WatchTimerSnapshot(
+                phase: timer.phase.rawValue,
+                status: status,
+                plannedDurationMs: timer.plannedDurationMs,
+                elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
+                anchorAt: timer.anchorAt,
+                selectedPhase: settings.selectedPhase.rawValue,
+                focusDurationMs: settings.durationsMs.focus,
+                shortBreakDurationMs: settings.durationsMs.shortBreak,
+                longBreakDurationMs: settings.durationsMs.longBreak,
+                updatedAt: nowDate
+            )
+        }
+        let selected = settings.selectedPhase
+        let planned = settings.durationsMs.durationMs(for: selected)
+        return WatchTimerSnapshot(
+            phase: selected.rawValue,
+            status: "idle",
+            plannedDurationMs: planned,
+            elapsedAtAnchorMs: 0,
+            anchorAt: nowDate,
+            selectedPhase: selected.rawValue,
+            focusDurationMs: settings.durationsMs.focus,
+            shortBreakDurationMs: settings.durationsMs.shortBreak,
+            longBreakDurationMs: settings.durationsMs.longBreak,
+            updatedAt: nowDate
+        )
+    }
+
+    func applyWatchCommand(_ command: WatchTimerCommand) {
+        switch command.name {
+        case "start": start()
+        case "pause": pause()
+        case "resume": resume()
+        case "finish": finish()
+        case "selectPhase":
+            if let raw = command.phase, let phase = TimerPhase(rawValue: raw) {
+                selectPhase(phase)
+            }
+        case "setDuration":
+            if let raw = command.phase, let phase = TimerPhase(rawValue: raw),
+               let minutes = command.minutes {
+                setDurationMinutes(minutes, for: phase)
+            }
+        default: break
+        }
+    }
 
     func selectPhase(_ phase: TimerPhase) {
         _ = performWorkspaceMutation(.selectPhase(phase))
@@ -1857,7 +1917,9 @@ final class AppModel {
                 intent,
                 from: mutationSnapshot()
             ) else { return false }
-            return applyWorkspaceMutation(transition)
+            let applied = applyWorkspaceMutation(transition)
+            if applied { watchSync.push() }
+            return applied
         } catch AppError.invalidLocalClock {
             reportInvalidLocalClock()
             return false
