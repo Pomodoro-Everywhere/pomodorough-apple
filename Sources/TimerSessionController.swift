@@ -61,6 +61,11 @@ final class TimerSessionController {
     private let sharedCoreProvider: @MainActor () throws -> SharedCore
     private var sharedCore: SharedCore?
 
+    /// Delay for the single millisecond-boundary recheck in planFinish. Covers the
+    /// sub-millisecond trusted/physical mapping disagreement; completion timestamps
+    /// routinely land later than this through normal alarm delivery.
+    private static let quantizationRetryDelay: TimeInterval = 0.010
+
     init(sharedCoreProvider: @escaping @MainActor () throws -> SharedCore) {
         self.sharedCoreProvider = sharedCoreProvider
     }
@@ -131,7 +136,8 @@ final class TimerSessionController {
         replicationMode: ReplicationMode,
         physicalNow: Date,
         automatic: Bool,
-        autoStartsBreak: Bool
+        autoStartsBreak: Bool,
+        quantizationCompensated: Bool = false
     ) throws -> FinishTransition? {
         let requestPlan = try finishRequestPlan(
             timer: timer,
@@ -142,8 +148,70 @@ final class TimerSessionController {
             automatic: automatic,
             autoStartsBreak: autoStartsBreak
         )
-        guard requestPlan.commandEligible else { return nil }
-        let commandTransition = try makeCommand(
+        guard requestPlan.commandEligible else {
+            return try retryFinishAcrossMillisecondBoundary(
+                timer: timer,
+                completionDate: completionDate,
+                occurredAt: occurredAt,
+                localDate: localDate,
+                state: state,
+                replicationMode: replicationMode,
+                physicalNow: physicalNow,
+                automatic: automatic,
+                autoStartsBreak: autoStartsBreak,
+                quantizationCompensated: quantizationCompensated
+            )
+        }
+        return try buildFinishTransition(
+            timer: timer,
+            completionDate: completionDate,
+            occurredAt: occurredAt,
+            localDate: localDate,
+            state: state,
+            replicationMode: replicationMode,
+            physicalNow: physicalNow,
+            requestPlan: requestPlan,
+            autoStartsBreak: autoStartsBreak
+        )
+    }
+
+    private func buildFinishTransition(
+        timer: CanonicalTimer,
+        completionDate: Date,
+        occurredAt: Date,
+        localDate: Date,
+        state: PersistedTimerState,
+        replicationMode: ReplicationMode,
+        physicalNow: Date,
+        requestPlan: CoreCompletionPlanOutput,
+        autoStartsBreak: Bool
+    ) throws -> FinishTransition? {
+        let commandTransition = try makeFinishCommand(
+            timer: timer,
+            completionDate: completionDate,
+            occurredAt: occurredAt,
+            localDate: localDate,
+            state: state
+        )
+        return try finishTransition(
+            commandTransition,
+            timer: timer,
+            completionDate: completionDate,
+            requestPlan: requestPlan,
+            autoStartsBreak: autoStartsBreak,
+            replicationMode: replicationMode,
+            physicalNow: physicalNow
+        )
+    }
+
+    private func makeFinishCommand(
+        timer: CanonicalTimer,
+        completionDate: Date,
+        occurredAt: Date,
+        localDate: Date,
+        state: PersistedTimerState
+    ) throws -> CommandTransition {
+        try makeCommand(
             CommandRequest(
                 type: .finish,
                 timerID: timer.id,
@@ -156,14 +224,40 @@ final class TimerSessionController {
             ),
             state: state
         )
-        return try finishTransition(
-            commandTransition,
+    }
+
+    private func retryFinishAcrossMillisecondBoundary(
+        timer: CanonicalTimer,
+        completionDate: Date,
+        occurredAt: Date,
+        localDate: Date,
+        state: PersistedTimerState,
+        replicationMode: ReplicationMode,
+        physicalNow: Date,
+        automatic: Bool,
+        autoStartsBreak: Bool,
+        quantizationCompensated: Bool
+    ) throws -> FinishTransition? {
+        // The Swift-side session anchor and the pending START command's occurred
+        // date pass through different trusted/physical clock mappings whose
+        // sub-microsecond disagreement can straddle a millisecond boundary. Core
+        // truncates both sides to whole milliseconds, so an exactly-complete
+        // session can read one millisecond short in core time. Retry once a few
+        // milliseconds later, only when Swift already measures the session as
+        // complete; anything else stays fail-closed.
+        guard !quantizationCompensated,
+              timer.elapsed(at: completionDate) >= timer.plannedDuration else { return nil }
+        return try planFinish(
             timer: timer,
-            completionDate: completionDate,
-            requestPlan: requestPlan,
-            autoStartsBreak: autoStartsBreak,
+            completionDate: completionDate.addingTimeInterval(Self.quantizationRetryDelay),
+            occurredAt: occurredAt,
+            localDate: localDate,
+            state: state,
             replicationMode: replicationMode,
-            physicalNow: physicalNow
+            physicalNow: physicalNow,
+            automatic: automatic,
+            autoStartsBreak: autoStartsBreak,
+            quantizationCompensated: true
         )
     }
 
