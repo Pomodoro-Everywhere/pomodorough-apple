@@ -4,6 +4,7 @@ struct JoinIrohRoomView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var inviteText = ""
     @State private var isJoining = false
+    @State private var joinError: String?
 
     let model: AppModel
 
@@ -38,6 +39,7 @@ struct JoinIrohRoomView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     inviteField
                     joinButton
+                    joinErrorView
                     Text("Invite contains room secret and peer addresses. Treat it as sensitive. Endpoint secret key never leaves this device.")
                         .font(.footnote)
                         .foregroundStyle(PomodoroughTheme.steel)
@@ -75,13 +77,23 @@ struct JoinIrohRoomView: View {
             .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 14))
             .accessibilityLabel("Room invite")
             .accessibilityHint("Paste complete invite beginning with pomodorough1 dot")
+            .onChange(of: inviteText) { joinError = nil }
     }
 
     private var joinButton: some View {
         Button {
             isJoining = true
+            joinError = nil
             Task {
-                if await model.joinIrohRoom(inviteText: inviteText) { dismiss() }
+                if await model.joinIrohRoom(inviteText: inviteText) {
+                    dismiss()
+                } else if let message = model.errorMessage {
+                    // Keep the failure inside the sheet: the global RootView
+                    // error alert would displace this sheet and drop the
+                    // typed invite (fail-closed join contract).
+                    model.errorMessage = nil
+                    joinError = message
+                }
                 isJoining = false
             }
         } label: {
@@ -96,6 +108,17 @@ struct JoinIrohRoomView: View {
         .foregroundStyle(PomodoroughTheme.platformDeep)
         .background(PomodoroughTheme.ticket, in: .rect(cornerRadius: 14))
         .disabled(isJoining || inviteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @ViewBuilder
+    private var joinErrorView: some View {
+        if let joinError {
+            Text(joinError)
+                .font(.footnote)
+                .foregroundStyle(PomodoroughTheme.signal)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("Join room error")
+        }
     }
 }
 

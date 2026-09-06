@@ -41,14 +41,29 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
         // Regression guard for the dismissal race: the sheet must still be
         // here after the failure (no silent workspace switch behind it) and
         // Cancel must be usable again.
+        assertFailedJoinKeepsSheet(app)
+
+        // Workspace untouched: back on the idle local timer.
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+    }
+
+    private func assertFailedJoinKeepsSheet(_ app: XCUIApplication) {
         sleep(3)
+        dumpRoomJoinDiagnostics(app, "post-failure")
+        XCTAssertTrue(app.staticTexts["Join room error"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["Join room"].exists)
         let cancel = app.buttons["Cancel"]
         XCTAssertTrue(cancel.exists)
         XCTAssertTrue(cancel.isEnabled)
         cancel.tap()
+    }
 
-        // Workspace untouched: back on the idle local timer.
-        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+    private func dumpRoomJoinDiagnostics(_ app: XCUIApplication, _ context: String) {
+        let sheet = app.navigationBars["Join room"]
+        let cancel = app.buttons["Cancel"]
+        print("ROOM-JOIN-DIAG \(context): navBar=\(sheet.exists) alerts=\(app.alerts.count) cancel=\(cancel.exists)")
+        if !sheet.exists {
+            print("ROOM-JOIN-DIAG hierarchy:\n" + app.debugDescription)
+        }
     }
 }
