@@ -3492,6 +3492,36 @@
           }
         }
       }
+    },
+    "Open Pomodorough on iPhone to connect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Pomodorough on iPhone to connect"
+          }
+        }
+      }
+    },
+    "Start": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start"
+          }
+        }
+      }
+    },
+    "iPhone": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

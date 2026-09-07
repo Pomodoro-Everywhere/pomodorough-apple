@@ -282,8 +282,363 @@ struct SentryCaptureTests {
         #expect(WatchSyncLogDedupe.shouldLog(key: key + "-other") == true)
     }
 
+    // AP29: room Iroh failure boundaries keep their user-visible outcome and
+    // capture exactly once with no PII (no room names, IDs, or secrets).
+    @Test @MainActor
+    func roomCreateServiceFailureStaysFailedAndCaptures() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .offline)
+        await fixture.service.setStartError(SentryRoomServiceError.endpointUnavailable)
+        let transition = await fixture.controller.createRoom(
+            name: "Secret Room Name",
+            environment: sentryRoomEnvironment()
+        )
+        #expect(transition == .failed(SentryRoomServiceError.endpointUnavailable.localizedDescription))
+        #expect(fixture.store.activeRoomID == nil)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("Secret Room Name"))
+    }
+
+    @Test @MainActor
+    func roomPrepareStateSuspendFailureStaysFailedAndCaptures() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .iroh)
+        let transition = await fixture.controller.changeMode(
+            to: .offline,
+            environment: sentryRoomEnvironment()
+        )
+        guard case .failed = transition else {
+            Issue.record("Expected failed, got \(transition)")
+            return
+        }
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func roomActivateFailureStaysFailedAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .offline)
+        let secret = Data(repeating: 5, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try fixture.store.prepareJoinedRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Secret Join Name",
+            returnState: .fresh(),
+            initialPeer: IrohPeer(
+                endpointID: "endpoint-sentry0001",
+                endpointTicket: "endpoint-ticket-sentry0001",
+                deviceID: nil,
+                displayName: nil,
+                lastSeenAt: nil
+            )
+        )
+        let transition = await fixture.controller.changeMode(
+            to: .iroh,
+            environment: sentryRoomEnvironment()
+        )
+        guard case .failed = transition else {
+            Issue.record("Expected failed, got \(transition)")
+            return
+        }
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("Secret Join Name"))
+        #expect(!recorded.value[0].contains(roomID))
+    }
+
+    @Test @MainActor
+    func roomLeaveSuspendFailureStaysFailedAndCaptures() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .iroh)
+        let transition = await fixture.controller.leaveRoom(
+            environment: sentryRoomEnvironment()
+        )
+        guard case .failed = transition else {
+            Issue.record("Expected failed, got \(transition)")
+            return
+        }
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func roomStartFailureReportsUnavailableAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .iroh)
+        let secret = Data(repeating: 9, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        var local = PersistedTimerState.fresh()
+        local.deviceId = "device-sentry-start"
+        _ = try fixture.store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: "Secret Start Room",
+            returnState: local,
+            genesis: sentryRoomGenesis(from: local)
+        )
+        await fixture.service.setStartError(SentryRoomServiceError.endpointUnavailable)
+        let roomState = try #require(fixture.store.activeRoomState)
+        fixture.workspace.value = sentryRoomWorkspace(from: roomState)
+        fixture.controller.setSceneActive(true, environment: sentryRoomEnvironment(for: roomState))
+        let expected = RoomReplicationEvent.statusChanged(
+            .unavailable(SentryRoomServiceError.endpointUnavailable.localizedDescription)
+        )
+        for _ in 0..<200 {
+            if fixture.events.value.contains(expected) { break }
+            await Task.yield()
+        }
+        #expect(fixture.events.value.contains(expected))
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("Secret Start Room"))
+        #expect(!recorded.value[0].contains(roomID))
+    }
+
+    @Test
+    func corruptRoomStoreLoadStaysEmptyAndCapturesWithoutSecrets() throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryRoomStore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "sentry-room-secret not-json".write(
+            to: directory.appendingPathComponent("rooms.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let store = IrohRoomStore(
+            fileURL: directory.appendingPathComponent("rooms.json"),
+            secretStore: MemoryIrohRoomSecretStore()
+        )
+        #expect(store.activeSnapshot == nil)
+        #expect(store.roomIDs.isEmpty)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("sentry-room-secret"))
+    }
+
+    @Test @MainActor
+    func accountRestoreFailureStaysLocalOnlyAndCapturesWithoutTokens() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let store = RecordingTokenStore(
+            tokens: TokenPair(
+                accessToken: "restore-access", accessTokenExpiresAt: .distantFuture,
+                refreshToken: "restore-refresh", refreshTokenExpiresAt: .distantFuture
+            ),
+            failures: [.load]
+        )
+        let controller = AccountLifecycleController(
+            api: APIClient(keychain: store),
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: TestLogoutRevocationStore()
+        )
+        let transition = await controller.restore(cachedUser: TestFixtures.user)
+        #expect(transition == .localOnly(invalidatesSynchronization: false))
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("restore-access"))
+        #expect(!recorded.value[0].contains("restore-refresh"))
+    }
+
+    @Test
+    func revocationRetryCancelStaysSilentWithoutCapture() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let store = TestLogoutRevocationStore()
+        try store.append(LogoutRevocationObligation(tokens: TokenPair(
+            accessToken: "revocation-access", accessTokenExpiresAt: .distantFuture,
+            refreshToken: "revocation-refresh", refreshTokenExpiresAt: .distantFuture
+        )))
+        let controller = SessionRevocationController(
+            revoker: SentryRetryRevoker(result: .retry),
+            store: store,
+            retryDelay: .milliseconds(50),
+            storageReadRetryDelays: [.milliseconds(50)]
+        )
+        await controller.resumePending()
+        try await Task.sleep(for: .milliseconds(200))
+        await controller.cancelRetry()
+        #expect(await controller.isRetryRunning == false)
+        #expect(recorded.value.count == 0)
+    }
+
+#if os(iOS)
+    @Test
+    func liveActivityStartFailureCapturesOnceAndKeepsTimerUnaffected() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        TimerLiveActivityCoordinator.startFailed(URLError(.notConnectedToInternet))
+        TimerLiveActivityCoordinator.startFailed(URLError(.timedOut))
+        #expect(recorded.value.count == 1)
+    }
+#endif
+
     @Test
     func sentrySetupWithoutDSNReturnsWithoutCrashing() {
         SentrySetup.startIfConfigured()
+    }
+
+    // AP29: compact room fixture mirroring RoomReplicationControllerTests so
+    // Sentry tests drive the real controller failure boundaries.
+    @MainActor
+    private func sentryRoomFixture(mode: ReplicationMode) -> SentryRoomFixture {
+        let store = IrohRoomStore(
+            fileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("SentryRoom-\(UUID().uuidString)")
+                .appendingPathComponent("rooms.json"),
+            secretStore: MemoryIrohRoomSecretStore()
+        )
+        let service = SentryRoomServiceStub()
+        let state = LockedTestValue(RoomReplicationCentralizedState(
+            sessionGeneration: 7,
+            isSignedIn: true,
+            isWorkspaceMutationBlocked: false,
+            isSessionVerified: true,
+            localRevision: 0,
+            isSyncing: false,
+            isTimerActive: false,
+            isHistoryResolutionBlocking: false
+        ))
+        let events = LockedTestValue<[RoomReplicationEvent]>([])
+        let operations = LockedTestValue<[RoomReplicationOperation]>([])
+        let workspace = LockedTestValue(sentryRoomWorkspace(from: .fresh()))
+        let dependencies = RoomReplicationController.Dependencies(
+            roomStore: store,
+            retryDelay: .seconds(5),
+            centralizedState: { state.value },
+            workspaceSnapshot: { workspace.value },
+            revisionEvents: { AsyncThrowingStream { $0.finish() } },
+            sleep: { _ in throw CancellationError() },
+            secureRandomBytes: { _ in Data(repeating: 7, count: 32) },
+            encodeInvite: { _, _, _, _ in "encoded-invite" },
+            makeService: { _ in service }
+        )
+        let controller = RoomReplicationController(
+            mode: mode,
+            dependencies: dependencies,
+            eventHandler: { event in events.value.append(event) },
+            operationHandler: { operation in operations.value.append(operation) }
+        )
+        return SentryRoomFixture(
+            controller: controller,
+            store: store,
+            service: service,
+            events: events,
+            operations: operations,
+            workspace: workspace
+        )
+    }
+
+    @MainActor
+    private func sentryRoomEnvironment(for state: PersistedTimerState = .fresh()) -> RoomReplicationEnvironment {
+        RoomReplicationEnvironment(deviceID: state.deviceId, displayName: nil, platform: "macos")
+    }
+
+    private func sentryRoomWorkspace(from state: PersistedTimerState) -> RoomReplicationWorkspaceSnapshot {
+        RoomReplicationWorkspaceSnapshot(state: state, genesis: sentryRoomGenesis(from: state))
+    }
+
+    private func sentryRoomGenesis(from state: PersistedTimerState) -> IrohGenesis {
+        IrohGenesis(
+            canonicalTimer: state.canonicalTimer,
+            history: state.history,
+            tasks: state.tasks,
+            durationsMs: state.settings.durationsMs,
+            autoStartBreaks: state.autoStartBreaks,
+            selectedTaskId: state.selectedTaskID?.uuidString.lowercased(),
+            hlcWallMs: state.hlcWallMs,
+            hlcCounter: state.hlcCounter
+        )
+    }
+}
+
+private enum SentryRoomServiceError: Error {
+    case endpointUnavailable
+}
+
+private actor SentryRoomServiceStub: RoomReplicationServing {
+    private(set) var startedContexts: [IrohServiceContext] = []
+    private var startError: SentryRoomServiceError?
+
+    func setStartError(_ error: SentryRoomServiceError?) {
+        startError = error
+    }
+
+    func start(_ context: IrohServiceContext) async throws -> String {
+        startedContexts.append(context)
+        if let startError { throw startError }
+        return "endpoint-ticket"
+    }
+
+    func stop() async {}
+    func currentEndpointTicket() async throws -> String { "endpoint-ticket" }
+    func syncNow() async {}
+    func markConflict(roomID: String?) async {}
+    func join(invite: IrohRoomInvite) async throws {}
+}
+
+@MainActor
+private struct SentryRoomFixture {
+    let controller: RoomReplicationController
+    let store: IrohRoomStore
+    let service: SentryRoomServiceStub
+    let events: LockedTestValue<[RoomReplicationEvent]>
+    let operations: LockedTestValue<[RoomReplicationOperation]>
+    let workspace: LockedTestValue<RoomReplicationWorkspaceSnapshot>
+}
+
+private struct SentryRetryRevoker: LogoutRevoking, Sendable {
+    let result: LogoutRevocationResult
+
+    func revoke(_ obligation: LogoutRevocationObligation) async -> LogoutRevocationResult {
+        result
     }
 }

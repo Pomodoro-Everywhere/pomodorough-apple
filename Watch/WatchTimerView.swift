@@ -37,7 +37,7 @@ struct WatchTimerView: View {
                 Circle()
                     .fill(sync.isReachable ? Color.green : Color.gray)
                     .frame(width: 6, height: 6)
-                Text(sync.isReachable ? "iPhone" : "Offline")
+                Text(sync.isReachable ? String(localized: "iPhone") : String(localized: "Offline"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

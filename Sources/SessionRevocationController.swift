@@ -310,7 +310,11 @@ actor SessionRevocationController {
             guard let delay = delay(after: outcome) else { return }
             do {
                 try await Task.sleep(for: delay)
+            } catch is CancellationError {
+                return
             } catch {
+                Self.logger.error("logout revocation retry sleep failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 return
             }
         }

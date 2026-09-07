@@ -2557,6 +2557,24 @@
         "state": "translated",
         "value": "‏⟦%arg · Σ %arg⟧"
       }
+    },
+    "Open Pomodorough on iPhone to connect": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Open Pomodorough on iPhone to connect⟧"
+      }
+    },
+    "Start": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Start⟧"
+      }
+    },
+    "iPhone": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦iPhone⟧"
+      }
     }
   },
   "version": 1

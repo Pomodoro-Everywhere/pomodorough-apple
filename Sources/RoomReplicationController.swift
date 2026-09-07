@@ -1,7 +1,13 @@
 import Foundation
+import OSLog
 
 @MainActor
 final class RoomReplicationController {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "RoomReplication"
+    )
+
     private enum RevisionTaskContext {
         @TaskLocal static var id: UUID?
     }
@@ -153,6 +159,8 @@ final class RoomReplicationController {
                     from: dependencies.workspaceSnapshot().state
                 )
             } catch {
+                Self.logger.error("prepareState captureAndSuspend failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 await startIrohIfNeeded(environment: environment)
                 if resumesCentralized { resumeCentralized() }
                 return .failed(error.localizedDescription)
@@ -181,6 +189,8 @@ final class RoomReplicationController {
                 returnState: state
             ))
         } catch {
+            Self.logger.error("activateExistingRoom failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             if resumesCentralized { resumeCentralized() }
             return .failed(error.localizedDescription)
         }
@@ -207,6 +217,8 @@ final class RoomReplicationController {
                 environment: environment
             )
         } catch {
+            Self.logger.error("createRoom failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             await service.stop()
             if resumesCentralized { resumeCentralized() }
             return .failed(error.localizedDescription)
@@ -343,6 +355,8 @@ final class RoomReplicationController {
             mode = .offline
             return .roomLeft(returned)
         } catch {
+            Self.logger.error("leaveRoom captureAndSuspend failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             await startIrohIfNeeded(environment: environment)
             return .failed(error.localizedDescription)
         }
@@ -434,6 +448,8 @@ final class RoomReplicationController {
         do {
             _ = try await service.start(context)
         } catch {
+            Self.logger.error("startIrohIfNeeded failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             eventHandler(.statusChanged(.unavailable(error.localizedDescription)))
         }
     }

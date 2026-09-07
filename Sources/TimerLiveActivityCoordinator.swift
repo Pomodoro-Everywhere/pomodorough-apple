@@ -52,6 +52,7 @@ final class TimerLiveActivityCoordinator {
                 } catch {
                     // A denied Live Activity must never prevent timer or alarm operation.
                     logger.error("Could not start timer Live Activity: \(error.localizedDescription, privacy: .public)")
+                    Self.startFailed(error)
                 }
             }
             return
@@ -113,6 +114,16 @@ final class TimerLiveActivityCoordinator {
             return (try? AlarmManager.shared.alarms.contains { $0.id == id }) == true
         }
         return false
+    }
+}
+
+// Test seam: real start-failure body shared so the unit-test bundle drives
+// the same capture logic on iOS without ActivityKit authorization.
+// Silent delivery kept: timer and alarm operation continue unaffected.
+// captureOnce: a denied Live Activity would otherwise spam on every sync.
+extension TimerLiveActivityCoordinator {
+    nonisolated static func startFailed(_ error: Error) {
+        SentryCapture.captureOnce(key: "live-activity-start", error: error)
     }
 }
 

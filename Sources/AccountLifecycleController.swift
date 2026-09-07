@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum AccountSessionState: Equatable, Sendable {
     case restoring
@@ -17,6 +18,11 @@ enum AccountHistoryResolutionState: Equatable, Sendable {
 
 @MainActor
 final class AccountLifecycleController {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "AccountLifecycle"
+    )
+
     struct Operation: Equatable, Sendable {
         let generation: Int
     }
@@ -175,6 +181,8 @@ final class AccountLifecycleController {
         } catch AppError.unauthorized {
             return owns(operation) ? .unauthorized : .stale
         } catch {
+            Self.logger.error("restore failed, staying local-only: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return owns(operation)
                 ? .localOnly(invalidatesSynchronization: false)
                 : .stale

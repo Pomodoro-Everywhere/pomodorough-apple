@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 struct AccountDeletionRoomTopology: Equatable, Sendable {
     let roomIDs: [String]
@@ -6,6 +7,11 @@ struct AccountDeletionRoomTopology: Equatable, Sendable {
 }
 
 final class IrohRoomStore: @unchecked Sendable {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "IrohRoomStore"
+    )
+
     struct JoinPreparation: Sendable {
         fileprivate let roomID: String
         fileprivate let original: IrohRoomWorkspace?
@@ -65,6 +71,8 @@ final class IrohRoomStore: @unchecked Sendable {
                 state = .empty
             }
         } catch {
+            Self.logger.error("IrohRoomStore load failed, starting empty: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             state = .empty
             loadError = Self.loadFailureMessage(error)
         }
