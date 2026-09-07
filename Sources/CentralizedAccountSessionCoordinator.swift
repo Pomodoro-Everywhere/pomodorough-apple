@@ -1,7 +1,13 @@
 import Foundation
+import OSLog
 
 @MainActor
 final class CentralizedAccountSessionCoordinator {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "AccountSession"
+    )
+
     typealias Operation = AccountLifecycleController.Operation
 
     private let lifecycle: AccountLifecycleController
@@ -795,7 +801,19 @@ extension CentralizedAccountSessionCoordinator {
     }
 }
 
-private extension CentralizedAccountSessionCoordinator {
+// Internal (not private) so SentryCaptureTests drives the real legacy-record
+// check instead of calling SentryCapture directly.
+extension CentralizedAccountSessionCoordinator {
+    // Test-only seam to stage a legacy migration without driving the full
+    // load/persist pipeline. Production callers use loadCompletionEffects.
+    func setLegacyMigrationForTesting(
+        transition: AppStatePersistenceCoordinator.LoadTransition?,
+        roomID: String?
+    ) {
+        pendingLegacyMigration = transition
+        pendingLegacyMigrationRoomID = roomID
+    }
+
     func appendLegacyMigrationCompletion(
         from application: AppStatePersistenceCoordinator.ApplicationTransition,
         destination: AppStatePersistenceCoordinator.Destination,
@@ -869,6 +887,8 @@ private extension CentralizedAccountSessionCoordinator {
                 return committed == [record]
             }
         } catch {
+            Self.logger.error("containsCommittedLegacyRecords failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return false
         }
     }

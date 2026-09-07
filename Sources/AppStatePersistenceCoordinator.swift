@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -186,6 +187,11 @@ struct AccountDeletionJournal: Sendable {
 
 @MainActor
 final class AppStatePersistenceCoordinator {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "Persistence"
+    )
+
     enum SnapshotLoadFailure: LocalizedError, Equatable, Sendable {
         case unreadable(String)
         case corrupt
@@ -276,6 +282,8 @@ final class AppStatePersistenceCoordinator {
             snapshotLoadFailure = nil
             snapshotRecoveryState = nil
         } catch {
+            Self.logger.error("loadSnapshot failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             let failure = error as? SnapshotLoadFailure ?? (snapshotRecoveryState == nil
                 ? .unreadable(error.localizedDescription) : .durabilityUncertain(error.localizedDescription))
             snapshotLoadFailure = failure
@@ -404,6 +412,8 @@ final class AppStatePersistenceCoordinator {
             } catch let failure as AtomicDurableFileStore.ReplacementFailure {
                 return reconcileReplacementFailure(failure, proposed: state)
             } catch {
+                Self.logger.error("persistLocal failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 return .failed
             }
         }

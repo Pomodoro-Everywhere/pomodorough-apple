@@ -964,7 +964,9 @@ final class AppModel {
         await resumeAccountDeletion()
     }
 
-    private func finishConfirmedAccountDeletion() async {
+    // Internal (not private) so SentryCaptureTests drives the real
+    // purge path instead of calling SentryCapture directly.
+    func finishConfirmedAccountDeletion() async {
         guard let retainedRoomIDs = accountDeletionRoomIDs(),
               let retainedAccounts = accountDeletionRoomSecretAccounts() else {
             quarantineAccountDeletion()
@@ -985,6 +987,8 @@ final class AppModel {
                 roomSecretAccounts: retainedAccounts
             )
         } catch {
+            Self.logger.error("purgeAccountData failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             quarantineAccountDeletion()
             errorMessage = String(localized: "Account deletion was confirmed; use Retry account deletion to continue room cleanup.")
             return
@@ -1364,7 +1368,9 @@ final class AppModel {
         }
     }
 
-    private func completeIrohTimerIfNeeded(_ timer: CanonicalTimer, at date: Date) {
+    // Internal (not private) so SentryCaptureTests drives the real
+    // iroh-completion path instead of calling SentryCapture directly.
+    func completeIrohTimerIfNeeded(_ timer: CanonicalTimer, at date: Date) {
         let physicalNow = effectivePhysicalNow() ?? now()
         do {
             guard let plan = try alarmEffectCoordinator.irohCompletionPlan(
@@ -1387,6 +1393,8 @@ final class AppModel {
                 )
             }
         } catch {
+            Self.logger.error("completeIrohTimerIfNeeded failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             errorMessage = error.localizedDescription
         }
     }
@@ -1966,6 +1974,8 @@ final class AppModel {
             reportInvalidLocalClock()
             return false
         } catch {
+            Self.logger.error("performWorkspaceMutation failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             errorMessage = error.localizedDescription
             return false
         }
@@ -2153,6 +2163,8 @@ final class AppModel {
                 try await operation()
             } catch {
                 if reportsError {
+                    Self.logger.error("alarmOperation failed: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.capture(error)
                     self?.errorMessage = AlarmEffectCoordinator.errorMessage(for: error)
                 }
             }
@@ -2166,6 +2178,8 @@ final class AppModel {
             installProjection(output)
             return true
         } catch {
+            Self.logger.error("rebuildOptimisticState failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             installUnreducedBaseSnapshot()
             errorMessage = error.localizedDescription
             return false

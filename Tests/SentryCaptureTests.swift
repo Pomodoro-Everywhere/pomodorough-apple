@@ -139,12 +139,6 @@ struct SentryCaptureTests {
     @Test @MainActor
     func addTaskCoreFailureReturnsFalseAndCapturesWithoutTitle() async throws {
         let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { error in
-            var current = recorded.value
-            current.append(error.localizedDescription)
-            recorded.value = current
-        }
-        defer { SentryCapture.resetForTesting() }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("SentryAddTask-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -159,6 +153,14 @@ struct SentryCaptureTests {
             alarmScheduler: RecordingAlarmScheduler(),
             sharedCoreProvider: { throw SharedCoreError.resourceMissing }
         )
+        // Isolate the addTask boundary: init already ran rebuildOptimisticState
+        // (AP31) without a backend, so only addTask itself is recorded below.
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
         #expect(await model.addTask("Secret Task Title") == false)
         #expect(model.errorMessage != nil)
         #expect(recorded.value.count == 1)
@@ -526,6 +528,362 @@ struct SentryCaptureTests {
         SentrySetup.startIfConfigured()
     }
 
+    // AP31: silent persistence, migration, replication, and model boundaries
+    // keep their user-visible outcome and capture Error-only with no PII.
+    // Watch log-only paths are unchanged and not covered here.
+    @Test @MainActor
+    func rebuildFailureFallsBackAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryRebuild.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryRebuild-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir),
+            alarmScheduler: RecordingAlarmScheduler(),
+            sharedCoreProvider: { throw SharedCoreError.resourceMissing }
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        #expect(model.rebuildOptimisticState() == false)
+        #expect(model.errorMessage != nil)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func workspaceMutationFailureKeepsStateAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryMutation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryMutation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir),
+            alarmScheduler: RecordingAlarmScheduler(),
+            sharedCoreProvider: { throw SharedCoreError.resourceMissing }
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        model.start()
+        #expect(model.errorMessage != nil)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func alarmScheduleFailureReportsAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryAlarm.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryAlarm-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scheduler = RecordingAlarmScheduler()
+        scheduler.schedulingError = URLError(.notConnectedToInternet)
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: scheduler
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        model.start()
+        for _ in 0..<100 {
+            if recorded.value.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(recorded.value.count == 1)
+        #expect(model.errorMessage != nil)
+    }
+
+    @Test @MainActor
+    func irohCompletionFailureKeepsMessageAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryIrohCompletion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryIrohCompletion-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir),
+            alarmScheduler: RecordingAlarmScheduler(),
+            sharedCoreProvider: { throw SharedCoreError.resourceMissing }
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        model.completeIrohTimerIfNeeded(
+            TestFixtures.timer(status: .running, elapsed: 1_000), at: TestFixtures.anchor
+        )
+        #expect(model.errorMessage != nil)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func purgeAccountDataFailureQuarantinesAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryPurge.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryPurge-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let secrets = MemoryIrohRoomSecretStore(secrets: ["stuck-room-secret": Data(repeating: 3, count: 32)])
+        secrets.setDeleteFailure(true, roomID: "stuck-room-secret")
+        let roomStore = IrohRoomStore(
+            fileURL: dir.appendingPathComponent("rooms.json"), secretStore: secrets
+        )
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: roomStore, alarmScheduler: RecordingAlarmScheduler()
+        )
+        defaults.set(try JSONEncoder().encode([String]()), forKey: "account-deletion-room-ids-v1")
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        await model.finishConfirmedAccountDeletion()
+        #expect(model.errorMessage?.contains("room cleanup") == true)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("stuck-room-secret"))
+    }
+
+    @Test @MainActor
+    func snapshotLoadFailureFallsBackAndCaptures() throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryLoad.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(Data("sentry-secret-task".utf8), forKey: PersistedStateLoader.storageKey)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryLoad-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let coordinator = AppStatePersistenceCoordinator(
+            defaults: defaults, durableLocalStore: AtomicDurableFileStore(fileURL: dir)
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let roomStore = TestFixtures.emptyIrohRoomStore(in: dir)
+        let transition = coordinator.load(
+            replicationMode: .centralized, roomStore: roomStore,
+            wallDate: TestFixtures.anchor, uptime: 100
+        )
+        #expect(transition.snapshotLoadFailure != nil)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("sentry-secret-task"))
+    }
+
+    @Test @MainActor
+    func persistLocalWriteFailureStaysFailedAndCaptures() throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryPersist.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryPersist-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blocker = dir.appendingPathComponent("blocker")
+        try Data("block".utf8).write(to: blocker)
+        let store = AtomicDurableFileStore(fileURL: blocker.appendingPathComponent("state.json"))
+        let coordinator = AppStatePersistenceCoordinator(defaults: defaults, durableLocalStore: store)
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let result = coordinator.persist(PersistedTimerState.fresh(), to: .local)
+        guard case .failed = result else { Issue.record("Expected failed"); return }
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test
+    func autoStartMigrationFailureMarksFailedAndCaptures() throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryAutoStart.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try sentryStrippedTimerJSON(removing: ["pendingAutoStartOperations"]),
+            forKey: PersistedStateLoader.storageKey)
+        let loader = PersistedStateLoader(defaults: defaults)
+        let load = loader.load()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let transition = loader.migrating(.fresh(), from: load, replicationMode: .centralized,
+            wallDate: Date(timeIntervalSince1970: 0), uptime: 100, roomStore: nil)
+        #expect(transition.migrationFailed)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test
+    func legacyTasksMigrationFailureMarksFailedAndCaptures() throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryLegacyTasks.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder.api.encode(PersistedTimerState.fresh()),
+            forKey: PersistedStateLoader.storageKey)
+        let task = try #require(FocusTask(title: "Secret Legacy Task"))
+        let legacy = LocalTaskState(tasks: [task], selectedTaskID: task.id, assignments: [:])
+        defaults.set(try JSONEncoder.api.encode(legacy), forKey: PersistedStateLoader.localTaskStorageKey)
+        let loader = PersistedStateLoader(defaults: defaults)
+        let load = loader.load()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let transition = loader.migrating(.fresh(), from: load, replicationMode: .centralized,
+            wallDate: Date(timeIntervalSince1970: 0), uptime: 100, roomStore: nil)
+        #expect(transition.migrationFailed)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("Secret Legacy Task"))
+    }
+
+    @Test
+    func selectedTaskMigrationFailureMarksFailedAndCaptures() throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentrySelectedTask.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try sentryStrippedTimerJSON(removing: ["pendingSelectedTaskOperations"]),
+            forKey: PersistedStateLoader.storageKey)
+        let loader = PersistedStateLoader(defaults: defaults)
+        let load = loader.load()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let transition = loader.migrating(.fresh(), from: load, replicationMode: .centralized,
+            wallDate: Date(timeIntervalSince1970: 0), uptime: 100, roomStore: nil)
+        #expect(transition.migrationFailed)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func peerListFailureStaysUnavailableAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let statuses = LockedTestValue<[IrohConnectionStatus]>([])
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryPeers-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = IrohRoomStore(
+            fileURL: dir.appendingPathComponent("rooms.json"),
+            secretStore: MemoryIrohRoomSecretStore()
+        )
+        let missingRoomID = try IrohProtocolV1.roomID(for: Data(repeating: 9, count: 32))
+        let context = IrohServiceContext(roomID: missingRoomID,
+            roomSecret: Data(repeating: 9, count: 32), deviceID: "device-sentry-test",
+            displayName: nil, platform: "macos")
+        let service = IrohReplicationService(store: store,
+            keyStore: SentryTestKeyStore(),
+            statusHandler: { status in var c = statuses.value; c.append(status); statuses.value = c },
+            projectionHandler: { _, _ in })
+        _ = try await service.start(context)
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        await service.syncNow()
+        await service.stop()
+        #expect(statuses.value.contains { if case .unavailable = $0 { return true }; return false })
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains(missingRoomID))
+    }
+
+    @Test @MainActor
+    func committedRecordsCheckFailureStaysFalseAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryCommitted-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let secret = Data(repeating: 5, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let source = try JSONEncoder.api.encode(LocalTaskState(tasks: [], selectedTaskID: nil, assignments: [:]))
+        let task1 = try #require(FocusTask(title: "Secret Committed Task"))
+        let task2 = try #require(FocusTask(title: "Secret Missing Task"))
+        let op1 = TaskOperation(id: "sentry-op-1", taskId: task1.id.uuidString.lowercased(),
+            type: .upsert, title: task1.title, occurredAt: TestFixtures.anchor, hlcWallMs: 1_000_000, hlcCounter: 0)
+        var base = PersistedTimerState.fresh()
+        base.deviceId = "device-sentry-check"
+        base.tasks = [task1]; base.knownTasks = [task1]
+        base.pendingTaskOperations = [op1]
+        base.irohLegacyTaskMigration = IrohLegacyTaskMigration(roomID: roomID, source: source, state: base)
+        let store = IrohRoomStore(fileURL: dir.appendingPathComponent("rooms.json"),
+            secretStore: MemoryIrohRoomSecretStore())
+        _ = try store.createRoom(roomID: roomID, roomSecret: secret, name: "Secret Room",
+            returnState: base, genesis: sentryEmptyGenesis())
+        // Capture the receipt-bearing local state into the room: roomState
+        // gains the receipt and op1 is committed, so the later extra op2 is
+        // the only missing record when the coordinator re-checks.
+        _ = try store.captureLocalOperations(from: base)
+        let stored = try #require(store.activeRoomState)
+        try #require(stored.irohLegacyTaskMigration == base.irohLegacyTaskMigration)
+        let op2 = TaskOperation(id: "sentry-op-2", taskId: task2.id.uuidString.lowercased(),
+            type: .upsert, title: task2.title, occurredAt: TestFixtures.anchor, hlcWallMs: 1_000_000, hlcCounter: 0)
+        var migrated = stored
+        migrated.pendingTaskOperations.append(op2)
+        migrated.tasks.append(task2); migrated.knownTasks.append(task2)
+        let api = APIClient(keychain: StaticTokenStore())
+        let coordinator = CentralizedAccountSessionCoordinator(
+            lifecycle: AccountLifecycleController(api: api, googleIdentityProvider: RecordingGoogleIdentityProvider()),
+            synchronization: AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() }),
+            initialPublication: .init(sessionState: .localOnly), roomStore: store)
+        let transition = AppStatePersistenceCoordinator.LoadTransition(
+            replicationMode: .iroh, state: migrated, removesLegacyTasksAfterProjection: false,
+            shouldPersistAfterProjection: false, shouldReportInvalidLocalClock: false,
+            snapshotLoadFailure: nil, legacyTaskSource: source)
+        coordinator.setLegacyMigrationForTesting(transition: transition, roomID: roomID)
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        #expect(coordinator.containsCommittedLegacyRecords(migrated, in: stored) == false)
+        #expect(recorded.value.count == 1)
+        if let first = recorded.value.first {
+            #expect(!first.contains("Secret Committed Task"))
+            #expect(!first.contains("Secret Missing Task"))
+            #expect(!first.contains(roomID))
+        }
+    }
+
+    private func sentryStrippedTimerJSON(removing keys: [String]) throws -> Data {
+        let data = try JSONEncoder.api.encode(PersistedTimerState.fresh())
+        let object = try JSONSerialization.jsonObject(with: data)
+        var dict = try #require(object as? [String: Any])
+        for key in keys { dict.removeValue(forKey: key) }
+        return try JSONSerialization.data(withJSONObject: dict)
+    }
+
+    private func sentryEmptyGenesis() -> IrohGenesis {
+        IrohGenesis(canonicalTimer: nil, history: [], tasks: [], durationsMs: .defaults,
+            autoStartBreaks: false, hlcWallMs: 0, hlcCounter: 0)
+    }
+
     // AP29: compact room fixture mirroring RoomReplicationControllerTests so
     // Sentry tests drive the real controller failure boundaries.
     @MainActor
@@ -641,4 +999,9 @@ private struct SentryRetryRevoker: LogoutRevoking, Sendable {
     func revoke(_ obligation: LogoutRevocationObligation) async -> LogoutRevocationResult {
         result
     }
+}
+
+private struct SentryTestKeyStore: IrohEndpointKeyStoring {
+    func load() throws -> Data? { Data(repeating: 7, count: 32) }
+    func save(_ secret: Data) throws {}
 }

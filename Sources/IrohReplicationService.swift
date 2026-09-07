@@ -1,5 +1,6 @@
 import Foundation
 import IrohLib
+import OSLog
 
 struct IrohServiceContext: Sendable {
     let roomID: String
@@ -10,6 +11,11 @@ struct IrohServiceContext: Sendable {
 }
 
 actor IrohReplicationService {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "IrohReplication"
+    )
+
     typealias StatusHandler = @MainActor @Sendable (IrohConnectionStatus) -> Void
     typealias ProjectionHandler = @MainActor @Sendable (String, PersistedTimerState) -> Void
 
@@ -476,6 +482,8 @@ actor IrohReplicationService {
         do {
             peers = try store.peers(roomID: context.roomID)
         } catch {
+            Self.logger.error("syncKnownPeers peers failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             await statusHandler(.unavailable(error.localizedDescription))
             return false
         }

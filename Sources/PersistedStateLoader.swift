@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum PersistedStateMigration: Hashable, Sendable {
     case durationSettings
@@ -35,6 +36,11 @@ struct PersistedStateTransition: Sendable {
 }
 
 struct PersistedStateLoader {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "Persistence"
+    )
+
     static let storageKey = "timer-state-v2"
     static let legacyStorageKey = "timer-state"
     static let localTaskStorageKey = "local-tasks-v1"
@@ -122,6 +128,8 @@ struct PersistedStateLoader {
                 )
                 progress.migrations.insert(.autoStartBreaks)
             } catch {
+                Self.logger.error("migrateLegacyAutoStartBreaks failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 progress.failed = true
             }
         }
@@ -158,6 +166,8 @@ struct PersistedStateLoader {
             progress.migrations.insert(.tasks)
             progress.removesLegacyTasksAfterProjection = true
         } catch {
+            Self.logger.error("migrateLegacyTasks failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             progress.failed = true
         }
         return progress
@@ -192,6 +202,8 @@ struct PersistedStateLoader {
                 progress.migrations.insert(.selectedTask)
             }
         } catch {
+            Self.logger.error("migrateLegacySelectedTask failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             progress.failed = true
         }
         return progress
