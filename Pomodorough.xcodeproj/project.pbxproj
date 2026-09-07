@@ -70,7 +70,6 @@
 		2F6DFF9EA992B61C0FC6BE40 /* AccountDeletionRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB09E46A90764AA003DFF9 /* AccountDeletionRetryTests.swift */; };
 		2FE2B8F3D32C47449D4298C3 /* PreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */; };
 		3048700E5517109AD34C77D4 /* TimerCompletionScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CFD328BAB1D26FBBC212D4 /* TimerCompletionScheduler.swift */; };
-		309C3F5682C241ECDE0F2B18 /* WatchAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEE7E02424070389988E5403 /* WatchAssets.xcassets */; };
 		30E628A65B1E39F112112726 /* AppVersionFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */; };
 		3272D417CFE6E7BC0C61D505 /* SessionRevocationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */; };
 		32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */; };
@@ -243,7 +242,6 @@
 		A93F7A68B6662404E0E5AF71 /* AppStateEffectCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE293E4CC407E944F414FC0 /* AppStateEffectCoordinatorTests.swift */; };
 		AA4BE9ABBF15F1393FBE655D /* TickMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA59D00B6874FCABDC0711C /* TickMarks.swift */; };
 		AB492C16E7AF250315F8F18C /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */; };
-		AC60BEEA2D4A4F589ECADD9F /* WatchAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEE7E02424070389988E5403 /* WatchAssets.xcassets */; };
 		AC87597FC0BB949D7DD7FBE7 /* TrustedClockState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56B8E4C58C1FA9F178CDD269 /* TrustedClockState.swift */; };
 		AE9D7FE4AF2202C1E0C41E07 /* RailwayNetworkLines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724244F638BCEA9648A23B9A /* RailwayNetworkLines.swift */; };
 		AF8EDF2849085D6C6EE5EBD6 /* TasksScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3338212C1D24087870295D /* TasksScreen.swift */; };
@@ -584,7 +582,6 @@
 		CD275FEDF06634D4FC072390 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		CD3338212C1D24087870295D /* TasksScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksScreen.swift; sourceTree = "<group>"; };
 		CE7E580D67B2F342466E4D82 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
-		CEE7E02424070389988E5403 /* WatchAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WatchAssets.xcassets; sourceTree = "<group>"; };
 		CF58A4FC46A48C3BEAA7E13E /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		D37AA3C0AD446428CC3905BE /* TimerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerScreen.swift; sourceTree = "<group>"; };
 		D3E7C2D3341B804E5936AF7B /* APIDateCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIDateCodecTests.swift; sourceTree = "<group>"; };
@@ -933,7 +930,6 @@
 				18D8C0E6D0DD7DDCDCD71F08 /* CompletionChime.wav */,
 				E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */,
 				4643BFF347477A2FCDE31755 /* Localizable.xcstrings */,
-				CEE7E02424070389988E5403 /* WatchAssets.xcassets */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -1229,7 +1225,6 @@
 				10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 				E575B00BC377E0AE8C9AEA4F /* Localizable.xcstrings in Resources */,
 				6C2A94BC1A700F3C2D4E755F /* SentryDSN.local in Resources */,
-				AC60BEEA2D4A4F589ECADD9F /* WatchAssets.xcassets in Resources */,
 				4FAA27BF7055B29C21B03200 /* pomodorough_core.wasm in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1254,7 +1249,6 @@
 				2EC15A7B22650818465F13BE /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 				A57B33DD61AE790852ADDADD /* Localizable.xcstrings in Resources */,
 				32E8DA10B016E10F76887681 /* SentryDSN.local in Resources */,
-				309C3F5682C241ECDE0F2B18 /* WatchAssets.xcassets in Resources */,
 				E07F159A47806F5FD2494D5A /* pomodorough_core.wasm in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
