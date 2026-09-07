@@ -35,29 +35,33 @@ final class TimerLiveActivityCoordinator {
     private func reconcile(timer: CanonicalTimer?, taskTitle: String?, canStart: Bool) async {
         pruneDismissedTracking()
         let desired = resolveDesiredTimer(from: timer)
-        let matching = await takeMatchingActivity(keeping: desired?.id)
+        let (matching, endedTracked) = await takeMatchingActivity(keeping: desired?.id, trackedID: trackedActivityID)
+        if endedTracked { trackedActivityID = nil }
         guard let desired else { return }
         let state = TimerActivityAttributes.ContentState(timer: desired, taskTitle: taskTitle)
         let content = ActivityContent(state: state, staleDate: state.isPaused ? nil : state.endsAt)
-        if let matching {
-            trackedActivityID = matching.id
-            trackedTimerID = desired.id
-            if matching.content.state != state || matching.content.staleDate != content.staleDate {
-                await matching.update(content)
+        guard let matching else {
+            if canStart && ActivityAuthorizationInfo().areActivitiesEnabled {
+                do {
+                    trackedActivityID = try Activity.request(
+                        attributes: TimerActivityAttributes(timerID: desired.id),
+                        content: content,
+                        pushType: nil
+                    ).id
+                    trackedTimerID = desired.id
+                } catch {
+                    // A denied Live Activity must never prevent timer or alarm operation.
+                    logger.error("Could not start timer Live Activity: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        } else if canStart && ActivityAuthorizationInfo().areActivitiesEnabled {
-            do {
-                trackedActivityID = try Activity.request(
-                    attributes: TimerActivityAttributes(timerID: desired.id),
-                    content: content,
-                    pushType: nil
-                ).id
-                trackedTimerID = desired.id
-            } catch {
-                // A denied Live Activity must never prevent timer or alarm operation.
-                logger.error("Could not start timer Live Activity: \(error.localizedDescription, privacy: .public)")
-            }
+            return
         }
+        let activityID = matching.id // local first: storing actor state before the await merges regions (Swift 6)
+        trackedTimerID = desired.id
+        if matching.content.state != state || matching.content.staleDate != content.staleDate {
+            await matching.update(content)
+        }
+        trackedActivityID = activityID
     }
 
     private func pruneDismissedTracking() {
@@ -80,22 +84,28 @@ final class TimerLiveActivityCoordinator {
         return timer
     }
 
-    private func takeMatchingActivity(
-        keeping desiredID: String?
-    ) async -> sending Activity<TimerActivityAttributes>? {
+    // NOTE: nonisolated on purpose — ActivityKit is fully nonisolated and Activity is
+    // non-Sendable, so the returned activity must stay in a disconnected region to reach
+    // nonisolated update/end. A @MainActor producer would merge it into the actor region
+    // and Swift 6 rejects the transfer (Xcode 26.6 CI). Do not re-isolate.
+    nonisolated private func takeMatchingActivity(
+        keeping desiredID: String?,
+        trackedID: String?
+    ) async -> (Activity<TimerActivityAttributes>?, Bool) {
         // Reuse activities restored by ActivityKit after process termination.
         var matching: Activity<TimerActivityAttributes>?
+        var endedTracked = false
         for activity in Activity<TimerActivityAttributes>.activities {
             if activity.attributes.timerID == desiredID,
                activity.activityState == .active || activity.activityState == .stale,
                matching == nil {
                 matching = activity
             } else {
-                if trackedActivityID == activity.id { trackedActivityID = nil }
+                if trackedID == activity.id { endedTracked = true }
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
         }
-        return matching
+        return (matching, endedTracked)
     }
 
     private func hasNativeAlarm(_ timerID: String) -> Bool {
