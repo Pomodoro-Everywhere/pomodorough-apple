@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import WatchConnectivity
 
 /// watchOS side of the sync. The iPhone is the source of truth: this service
@@ -14,9 +15,14 @@ final class WatchSyncService: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        if let data = UserDefaults.standard.data(forKey: storeKey),
-           let snapshot = try? JSONDecoder().decode(WatchTimerSnapshot.self, from: data) {
-            self.snapshot = snapshot
+        if let data = UserDefaults.standard.data(forKey: storeKey) {
+            do {
+                self.snapshot = try JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
+            } catch {
+                // Corrupt cache: drop silently, log once for dev. No Sentry
+                // on watchOS (no Sentry dependency); delivery stays silent.
+                Self.logOnce(key: "watch-cache-decode", error: error)
+            }
         }
         // TEMP-CRASH-REPRO (simulator only, never device): seed a running
         // snapshot to exercise syncedView without WC.
@@ -49,14 +55,27 @@ final class WatchSyncService: NSObject, ObservableObject {
             session.sendMessage(
                 payload,
                 replyHandler: { [weak self] reply in
+                    // Decode on the WC callback thread (same proven-safe pattern as
+                    // storeSnapshot): only Sendable values may cross into the Task.
+                    // Capturing the raw non-Sendable reply dict crashed here (SIGTRAP
+                    // in the actor-isolation check on the WC background queue).
+                    guard let data = reply[WatchSyncKeys.snapshot] as? Data else { return }
+                    let snapshot: WatchTimerSnapshot
+                    do {
+                        snapshot = try JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
+                    } catch {
+                        Self.logOnce(key: "watch-reply-decode", error: error)
+                        return
+                    }
                     Task { @MainActor in
-                        if let data = reply[WatchSyncKeys.snapshot] as? Data,
-                           let snapshot = try? JSONDecoder().decode(WatchTimerSnapshot.self, from: data) {
-                            self?.ingest(snapshot)
-                        }
+                        self?.ingest(snapshot)
                     }
                 },
-                errorHandler: nil
+                errorHandler: { error in
+                    // Silent delivery preserved: no retry, no user surface.
+                    // Log-only (no Sentry on watchOS), deduped to avoid spam.
+                    Self.logOnce(key: "watch-request-send", error: error)
+                }
             )
         } else {
             try? session.updateApplicationContext(payload)
@@ -70,7 +89,15 @@ final class WatchSyncService: NSObject, ObservableObject {
               let data = try? JSONEncoder().encode(command)
         else { return }
         if session.isReachable {
-            session.sendMessage([WatchSyncKeys.command: data], replyHandler: nil, errorHandler: nil)
+            session.sendMessage(
+                [WatchSyncKeys.command: data],
+                replyHandler: nil,
+                errorHandler: { error in
+                    // Silent delivery preserved: command stays queued via
+                    // application context on next reachability change.
+                    Self.logOnce(key: "watch-command-send", error: error)
+                }
+            )
         } else {
             // Queued: delivered as soon as the phone is reachable again.
             try? session.updateApplicationContext([WatchSyncKeys.command: data])
@@ -116,18 +143,48 @@ extension WatchSyncService: WCSessionDelegate {
     }
 
     private nonisolated func storeSnapshot(from dictionary: [String: Any]) {
-        guard let data = dictionary[WatchSyncKeys.snapshot] as? Data,
-              let snapshot = try? JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
-        else { return }
+        guard let data = dictionary[WatchSyncKeys.snapshot] as? Data else { return }
+        let snapshot: WatchTimerSnapshot
+        do {
+            snapshot = try JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
+        } catch {
+            WatchSyncService.logOnce(key: "watch-snapshot-decode", error: error)
+            return
+        }
         Task { @MainActor [weak self] in
             self?.ingest(snapshot)
         }
+    }
+
+    private nonisolated static func logOnce(key: String, error: Error) {
+        guard WatchSyncLogDedupe.shouldLog(key: key) else { return }
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync")
+            .error("\(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
     }
 
     private func ingest(_ snapshot: WatchTimerSnapshot) {
         self.snapshot = snapshot
         if let data = try? JSONEncoder().encode(snapshot) {
             UserDefaults.standard.set(data, forKey: "watch-timer-snapshot")
+        }
+    }
+}
+
+// WatchOS log dedupe: first failure per key logs, repeats stay silent.
+// No Sentry on watchOS; keeps flaky-link failures from spamming dev logs.
+private enum WatchSyncLogDedupe {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var seen = Set<String>()
+    }
+
+    private static let state = State()
+
+    static func shouldLog(key: String) -> Bool {
+        state.lock.withLock {
+            guard !state.seen.contains(key) else { return false }
+            state.seen.insert(key)
+            return true
         }
     }
 }

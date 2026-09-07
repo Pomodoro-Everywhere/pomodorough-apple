@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum AccountDeletionOutcome: Equatable, Sendable {
     case committed
@@ -7,6 +8,10 @@ enum AccountDeletionOutcome: Equatable, Sendable {
 }
 
 actor APIClient: LogoutRevoking, LogoutSessionDetaching {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "APIClient"
+    )
     private let baseURL: URL
     private let session: URLSession
     private let keychain: any TokenStoring
@@ -194,6 +199,8 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             try keychain.delete()
             return true
         } catch {
+            Self.logger.error("deleteDetachedCredential failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return false
         }
     }
@@ -206,6 +213,8 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             } catch AppError.unauthorized {
                 return .refreshUnauthorized
             } catch {
+                Self.logger.error("revoke refresh failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 return .retry
             }
         }
@@ -232,6 +241,8 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             }
             return accountDeletionOutcome(data: result.data, response: result.response)
         } catch {
+            Self.logger.error("deleteAccount failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return .unknown(error.localizedDescription)
         }
     }
@@ -331,6 +342,8 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
         } catch AppError.unauthorized {
             return .accessUnauthorized
         } catch {
+            Self.logger.error("submitRevocation failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return .retry
         }
     }

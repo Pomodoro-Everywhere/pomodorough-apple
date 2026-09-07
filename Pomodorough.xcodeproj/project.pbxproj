@@ -30,6 +30,7 @@
 		10010D73BBFADD6A0F6B6B74 /* TaskTimeText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3A937878674AD4167D99AF8 /* TaskTimeText.swift */; };
 		1048F26158F4DD98631A2EBC /* LegacyPendingOperationRebase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0255DC2576EECA4059C086 /* LegacyPendingOperationRebase.swift */; };
 		10649455CA7469E9BEF8014E /* TimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EFD2642B87CC51E870120B /* TimerDial.swift */; };
+		109A5F0593DACAA600FEB78E /* SentryCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */; };
 		10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */; };
 		115E7FE098975B760A87E56B /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 096DF78AFDEF90CCC25319EB /* Sentry */; };
 		11AB92A0968D38950FB91B91 /* TimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EFD2642B87CC51E870120B /* TimerDial.swift */; };
@@ -255,6 +256,7 @@
 		B26563D648A0DD1F58C749F3 /* TimerLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448CD0D656DE714580FA048E /* TimerLayout.swift */; };
 		B4A628C63910A921C2C58740 /* AccountSynchronization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EE47740E78A20825AAD507B /* AccountSynchronization.swift */; };
 		B52ADEA1251692A7CD150328 /* PomodoroughAccessibilityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9223397CA303F7E682AC131A /* PomodoroughAccessibilityUITests.swift */; };
+		B589F5C71C40CD7ACEFA1240 /* SentryCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */; };
 		B71F20D329485A7FF86CB636 /* AccountSyncToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */; };
 		BBE2A74C824DCB4C7CEB3409 /* PersistedStateMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 555A3AB6D44B26130AB0E534 /* PersistedStateMigration.swift */; };
 		BCEBE32FBCDB606DB1A612C7 /* TimerBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72BF1D497AF443928BE729AE /* TimerBackdrop.swift */; };
@@ -309,6 +311,7 @@
 		D78ED3D504C0542605BB9A61 /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
 		D89474D724A1904C8240127C /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
 		D9748460069EA29BC8F5E723 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */; };
+		DA4A39504FF57E9ACB4251CC /* SentryCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41DAEF25DD519EA966E58700 /* SentryCapture.swift */; };
 		DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2455C8C8ECE4B1401FA78CC8 /* RouteClockMark.swift */; };
 		DBE062F45B36BEB21BF35F20 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A2F56FE27D4AA634729FFC7 /* WasmKit */; };
 		DCA319D330E5DE8CBC05145A /* WirePrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6409EA0CB7736A9EA50CB324 /* WirePrimitives.swift */; };
@@ -352,6 +355,7 @@
 		F805FD21E2BBAB7469704A09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */; };
 		F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */; };
 		F96B0C5F596F1D64DE3D07D7 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7E580D67B2F342466E4D82 /* KeychainStore.swift */; };
+		FA89EF48733094C6DDF1AE3B /* SentryCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41DAEF25DD519EA966E58700 /* SentryCapture.swift */; };
 		FB9AD21B14B907E645699796 /* IrohProtocolCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5A77AB25CA8D2BEBC52E4E /* IrohProtocolCompatibilityTests.swift */; };
 		FBD473DA55540F447D37A410 /* LaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A06BAAC59FEFFB625D50DE7 /* LaunchView.swift */; };
 		FC4DB73A04C8590670C13694 /* HistoryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C3454A72650907D5ABE4854 /* HistoryRow.swift */; };
@@ -465,6 +469,7 @@
 		2647022289DC63027ACC0CCD /* CanonicalRecordCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanonicalRecordCodec.swift; sourceTree = "<group>"; };
 		27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinIrohRoomView.swift; sourceTree = "<group>"; };
 		29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCore.swift; sourceTree = "<group>"; };
+		2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryCaptureTests.swift; sourceTree = "<group>"; };
 		2BA65CB22541A1FAD6009384 /* TaskBoardEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardEmptyState.swift; sourceTree = "<group>"; };
 		2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationPositiveTests.swift; sourceTree = "<group>"; };
 		2E603B243D29FD1320E6153B /* LegacyMigrationSourceRaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyMigrationSourceRaceTests.swift; sourceTree = "<group>"; };
@@ -486,6 +491,7 @@
 		3D641D6CAC2F40A338AAC120 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationTests.swift; sourceTree = "<group>"; };
 		3EE47740E78A20825AAD507B /* AccountSynchronization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSynchronization.swift; sourceTree = "<group>"; };
+		41DAEF25DD519EA966E58700 /* SentryCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryCapture.swift; sourceTree = "<group>"; };
 		43EA519036AFB88FDBC5322E /* RetainedRoomRejoinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetainedRoomRejoinTests.swift; sourceTree = "<group>"; };
 		448CD0D656DE714580FA048E /* TimerLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerLayout.swift; sourceTree = "<group>"; };
 		44A83DA9997313441E2088EC /* TimerAlertPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerAlertPresentation.swift; sourceTree = "<group>"; };
@@ -682,6 +688,7 @@
 				F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */,
 				363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */,
 				E07295C5A8844F45C157C394 /* RoomReplicationTransitions.swift */,
+				41DAEF25DD519EA966E58700 /* SentryCapture.swift */,
 				77503581F23F5EA85ECC4D0C /* SentrySetup.swift */,
 				20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */,
 				29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */,
@@ -756,6 +763,7 @@
 				897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */,
 				43EA519036AFB88FDBC5322E /* RetainedRoomRejoinTests.swift */,
 				AAB884EB9E8593E740893441 /* RoomReplicationControllerTests.swift */,
+				2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */,
 				39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */,
 				95459C448D13FAA06E6007CD /* SnapshotReplacementRecoveryTests.swift */,
 				645DF6461B89E328FD8FDD43 /* SSERevisionStreamLimitsTests.swift */,
@@ -1295,6 +1303,7 @@
 				8F167EF6736553C362FC10DF /* RetainedRoomRejoinTests.swift in Sources */,
 				F55FE30F7BB363948E39896C /* RoomReplicationControllerTests.swift in Sources */,
 				465741A0371919D20FC630B8 /* SSERevisionStreamLimitsTests.swift in Sources */,
+				B589F5C71C40CD7ACEFA1240 /* SentryCaptureTests.swift in Sources */,
 				D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */,
 				3EE87C877D0FA149A2EE210E /* SnapshotReplacementRecoveryTests.swift in Sources */,
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
@@ -1356,6 +1365,7 @@
 				666D26C401566CBE207B5573 /* RetainedRoomRejoinTests.swift in Sources */,
 				F0B39A4D97D4DA6D7C2E4D23 /* RoomReplicationControllerTests.swift in Sources */,
 				5501ED3615BEE0850B88FCA0 /* SSERevisionStreamLimitsTests.swift in Sources */,
+				109A5F0593DACAA600FEB78E /* SentryCaptureTests.swift in Sources */,
 				99EFFE32E536E90D52596E0D /* SharedCoreWASMTests.swift in Sources */,
 				C4619B3E2C2FF52F2A6D85DF /* SnapshotReplacementRecoveryTests.swift in Sources */,
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
@@ -1461,6 +1471,7 @@
 				58962D0E6040C10A030364BB /* RootView.swift in Sources */,
 				409ACBCFB90A9510366B2111 /* RouteClockMark.swift in Sources */,
 				F7538DA7270901F11D96D9F8 /* SectionHeading.swift in Sources */,
+				DA4A39504FF57E9ACB4251CC /* SentryCapture.swift in Sources */,
 				D78ED3D504C0542605BB9A61 /* SentrySetup.swift in Sources */,
 				AFA72B55F24D175A803F93BF /* ServicePatternCard.swift in Sources */,
 				388A95C362B47A5F9C63E734 /* ServicePatternScreen.swift in Sources */,
@@ -1593,6 +1604,7 @@
 				8D183381FCF4A56733917E9F /* RootView.swift in Sources */,
 				DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */,
 				64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */,
+				FA89EF48733094C6DDF1AE3B /* SentryCapture.swift in Sources */,
 				D89474D724A1904C8240127C /* SentrySetup.swift in Sources */,
 				CBD6A118EB50CD13A585FD53 /* ServicePatternCard.swift in Sources */,
 				BE2AFABAAE1ADE3CC7C78A1B /* ServicePatternScreen.swift in Sources */,

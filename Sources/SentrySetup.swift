@@ -1,15 +1,27 @@
 import Foundation
+import OSLog
 import Sentry
 
 // Reads the DSN from the built Info.plist so the
 // secret stays a build-time value and never lands in committed source.
 enum SentrySetup {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "SentrySetup"
+    )
+
     static func startIfConfigured() {
         var dsn = (Bundle.main.infoDictionary?["SENTRY_DSN"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if dsn.isEmpty,
-           let url = Bundle.main.url(forResource: "SentryDSN", withExtension: "local"),
-           let file = try? String(contentsOf: url, encoding: .utf8) {
-            dsn = file.trimmingCharacters(in: .whitespacesAndNewlines)
+           let url = Bundle.main.url(forResource: "SentryDSN", withExtension: "local") {
+            do {
+                let file = try String(contentsOf: url, encoding: .utf8)
+                dsn = file.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                // Local DSN read is best-effort (file is optional); log once
+                // for dev. No Sentry capture here: Sentry is not started yet.
+                logger.error("SentryDSN.local unreadable: \(error.localizedDescription, privacy: .public)")
+            }
         }
         guard !dsn.isEmpty else { return }
         SentrySDK.start { options in

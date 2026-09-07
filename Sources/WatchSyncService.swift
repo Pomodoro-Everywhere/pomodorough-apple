@@ -51,9 +51,22 @@ final class WatchSyncService: NSObject, ObservableObject {
         // Best-effort live report (wire-compat; snapshot remains source of truth).
         if session.isReachable {
             let text = report
-            session.sendMessage([WatchSyncKeys.report: text], replyHandler: nil, errorHandler: nil)
+            session.sendMessage(
+                [WatchSyncKeys.report: text],
+                replyHandler: nil,
+                errorHandler: { error in
+                    // Silent delivery preserved: no retry, no user surface.
+                    // Log-only Sentry capture, deduped to avoid spam on flaky links.
+                    Self.logStatic("report send failed: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.captureOnce(key: "watch-report-send", error: error)
+                }
+            )
         }
         return report
+    }
+
+    private nonisolated static func logStatic(_ message: String) {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("\(message, privacy: .public)")
     }
 }
 
@@ -104,9 +117,16 @@ extension WatchSyncService: WCSessionDelegate {
             Task { @MainActor [weak self] in self?.push() }
             return
         }
-        guard let data = dictionary[WatchSyncKeys.command] as? Data,
-              let command = try? JSONDecoder().decode(WatchTimerCommand.self, from: data)
-        else { return }
+        guard let data = dictionary[WatchSyncKeys.command] as? Data else { return }
+        let command: WatchTimerCommand
+        do {
+            command = try JSONDecoder().decode(WatchTimerCommand.self, from: data)
+        } catch {
+            // Malformed watch command: drop silently (no retry), capture once.
+            Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "watch-command-decode", error: error)
+            return
+        }
         Task { @MainActor [weak self] in
             self?.model?.applyWatchCommand(command)
         }

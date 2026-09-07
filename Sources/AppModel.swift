@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 private enum AccountDeletionPurgeState: String {
     case prepared
@@ -38,6 +39,10 @@ final class AppModel {
     typealias SessionState = AccountSessionState
     typealias HistoryResolutionState = AccountHistoryResolutionState
 
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "AppModel"
+    )
     private let api: APIClient
     private let defaults: UserDefaults
     private let persistence: AppStatePersistenceCoordinator
@@ -663,6 +668,8 @@ final class AppModel {
                 throw SharedCoreError.invalidResponse("task identity is inconsistent")
             }
         } catch {
+            Self.logger.error("addTask failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             errorMessage = error.localizedDescription
             return false
         }
@@ -1059,6 +1066,8 @@ final class AppModel {
             try journal.save(record)
             completedWithoutError = true
         } catch {
+            Self.logger.error("reconcileJournalSave failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             completedWithoutError = false
         }
         guard let current = try? journal.load() else {
@@ -1107,6 +1116,8 @@ final class AppModel {
                 accountDeletionPurgeState = nil
                 return true
             } catch {
+                Self.logger.error("clearAccountDeletionState failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 return false
             }
         }
