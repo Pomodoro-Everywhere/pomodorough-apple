@@ -100,7 +100,7 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
         let content = UNMutableNotificationContent()
         content.title = TimerAlarmScheduler.title(for: phase)
         content.body = String(localized: "Your next Pomodorough interval is ready.")
-        content.sound = .default
+        content.sound = Self.notificationSound()
 #if os(macOS)
         content.categoryIdentifier = MacTimerNotificationCoordinator.categoryIdentifier
         let coordinator = MacTimerNotificationCoordinator.shared
@@ -135,6 +135,15 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
 #endif
 #endif
     }
+
+#if os(iOS) || os(macOS)
+    nonisolated static func notificationSound() -> UNNotificationSound {
+        if Bundle.main.url(forResource: "CompletionChime", withExtension: "wav") != nil {
+            return UNNotificationSound(named: UNNotificationSoundName("CompletionChime.wav"))
+        }
+        return .default
+    }
+#endif
 }
 
 #if os(macOS)
@@ -212,7 +221,9 @@ private final class MacTimerNotificationCoordinator: NSObject, UNUserNotificatio
 
     private func playSound(identifier: String) {
         stopSound()
-        let sound = NSSound(
+        let bundledChime = Bundle.main.url(forResource: "CompletionChime", withExtension: "wav")
+            .flatMap { NSSound(contentsOf: $0, byReference: true) }
+        let sound = bundledChime ?? NSSound(
             contentsOfFile: "/System/Library/Sounds/Glass.aiff",
             byReference: true
         ) ?? NSSound(named: NSSound.Name("Glass"))
