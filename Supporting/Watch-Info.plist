@@ -22,10 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>WKApplication</key>
 	<true/>
-	<key>WKWatchOnly</key>
-	<false/>
 	<key>WKRunsIndependentlyOfCompanionApp</key>
-	<false/>
+	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>me.egigoka.pomodorough</string>
 </dict>

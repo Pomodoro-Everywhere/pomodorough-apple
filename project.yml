@@ -202,6 +202,8 @@ targets:
     sources:
       - path: Watch
       - path: Sources/WatchSyncPayload.swift
+    resources:
+      - path: Resources/WatchAssets.xcassets
     info:
       path: Supporting/Watch-Info.plist
       properties:
@@ -209,13 +211,13 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
-        WKWatchOnly: false
-        WKRunsIndependentlyOfCompanionApp: false
+        WKRunsIndependentlyOfCompanionApp: true
         WKCompanionAppBundleIdentifier: me.egigoka.pomodorough
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.watch
         PRODUCT_NAME: Pomodorough
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "4"
