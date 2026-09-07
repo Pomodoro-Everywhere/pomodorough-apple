@@ -69,3 +69,24 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
         Self(name: "setDuration", phase: rawValue, minutes: minutes, sentAt: .now)
     }
 }
+
+// Log dedupe shared by iOS/watchOS sync: first failure per key logs,
+// repeats stay silent. No Sentry here; keeps flaky-link failures from
+// spamming dev logs. Lives in this shared payload file so the macOS/iOS
+// unit-test bundle can cover the decision without a watchOS test host.
+enum WatchSyncLogDedupe {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var seen = Set<String>()
+    }
+
+    private static let state = State()
+
+    static func shouldLog(key: String) -> Bool {
+        state.lock.withLock {
+            guard !state.seen.contains(key) else { return false }
+            state.seen.insert(key)
+            return true
+        }
+    }
+}

@@ -152,16 +152,19 @@ struct AccountDeletionJournal: Sendable {
 
     private let store: AtomicDurableFileStore
     private let beforeSave: @Sendable (Record) throws -> Void
+    private let beforeClear: @Sendable () throws -> Void
 
     init(
         fileURL: URL,
         afterReplacement: @escaping @Sendable () throws -> Void = {},
-        beforeSave: @escaping @Sendable (Record) throws -> Void = { _ in }
+        beforeSave: @escaping @Sendable (Record) throws -> Void = { _ in },
+        beforeClear: @escaping @Sendable () throws -> Void = {}
     ) {
         store = AtomicDurableFileStore(
             fileURL: fileURL, afterReplacement: afterReplacement
         )
         self.beforeSave = beforeSave
+        self.beforeClear = beforeClear
     }
 
     func load() throws -> LoadResult {
@@ -176,6 +179,7 @@ struct AccountDeletionJournal: Sendable {
     }
 
     func clear() throws {
+        try beforeClear()
         try store.remove()
     }
 }

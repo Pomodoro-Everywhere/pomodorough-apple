@@ -170,21 +170,8 @@ extension WatchSyncService: WCSessionDelegate {
     }
 }
 
-// WatchOS log dedupe: first failure per key logs, repeats stay silent.
-// No Sentry on watchOS; keeps flaky-link failures from spamming dev logs.
-private enum WatchSyncLogDedupe {
-    private final class State: @unchecked Sendable {
-        let lock = NSLock()
-        var seen = Set<String>()
-    }
-
-    private static let state = State()
-
-    static func shouldLog(key: String) -> Bool {
-        state.lock.withLock {
-            guard !state.seen.contains(key) else { return false }
-            state.seen.insert(key)
-            return true
-        }
-    }
-}
+// Watch-side silent-delivery note: no Sentry on watchOS, so the
+// sendMessage errorHandlers above are thin logOnce wrappers around the
+// shared WatchSyncLogDedupe (covered in the macOS/iOS unit-test bundle).
+// WCSession itself cannot be driven without a watchOS test host, which this
+// project does not have (Pomodorough-watchOS has no test bundle).

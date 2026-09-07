@@ -1,7 +1,7 @@
 import Foundation
 import Combine
-#if os(iOS)
 import OSLog
+#if os(iOS)
 import WatchConnectivity
 
 /// iOS side of the watch sync. iOS is the source of truth: every workspace
@@ -54,19 +54,10 @@ final class WatchSyncService: NSObject, ObservableObject {
             session.sendMessage(
                 [WatchSyncKeys.report: text],
                 replyHandler: nil,
-                errorHandler: { error in
-                    // Silent delivery preserved: no retry, no user surface.
-                    // Log-only Sentry capture, deduped to avoid spam on flaky links.
-                    Self.logStatic("report send failed: \(error.localizedDescription, privacy: .public)")
-                    SentryCapture.captureOnce(key: "watch-report-send", error: error)
-                }
+                errorHandler: { error in Self.reportSendFailed(error) }
             )
         }
         return report
-    }
-
-    private nonisolated static func logStatic(_ message: String) {
-        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("\(message, privacy: .public)")
     }
 }
 
@@ -122,9 +113,7 @@ extension WatchSyncService: WCSessionDelegate {
         do {
             command = try JSONDecoder().decode(WatchTimerCommand.self, from: data)
         } catch {
-            // Malformed watch command: drop silently (no retry), capture once.
-            Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(error.localizedDescription, privacy: .public)")
-            SentryCapture.captureOnce(key: "watch-command-decode", error: error)
+            Self.commandDecodeFailed(error)
             return
         }
         Task { @MainActor [weak self] in
@@ -141,3 +130,18 @@ final class WatchSyncService: NSObject, ObservableObject {
     func push() -> String { "Watch sync unavailable" }
 }
 #endif
+
+// Test seams: real failure-handler bodies shared by iOS and macOS builds
+// so the unit-test bundle drives the same key + capture logic on macOS.
+// Silent delivery kept: no retry, no user surface; log-only, deduped.
+extension WatchSyncService {
+    nonisolated static func reportSendFailed(_ error: Error) {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("report send failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.captureOnce(key: "watch-report-send", error: error)
+    }
+
+    nonisolated static func commandDecodeFailed(_ error: Error) {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.captureOnce(key: "watch-command-decode", error: error)
+    }
+}

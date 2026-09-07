@@ -1107,7 +1107,9 @@ final class AppModel {
         return true
     }
 
-    private func clearAccountDeletionState() -> Bool {
+    // Internal (not private) so SentryCaptureTests drives the real
+    // clear path instead of calling SentryCapture directly.
+    func clearAccountDeletionState() -> Bool {
         if let accountDeletionJournal {
             do {
                 try accountDeletionJournal.clear()

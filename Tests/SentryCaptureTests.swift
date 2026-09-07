@@ -208,7 +208,7 @@ struct SentryCaptureTests {
         #expect(recorded.value.count == 1)
     }
 
-    @Test
+    @Test @MainActor
     func journalClearFailureThrowsAndCapturesWithoutRoomIDs() throws {
         let recorded = LockedTestValue<[String]>([])
         SentryCapture.setTestBackend { error in
@@ -221,27 +221,22 @@ struct SentryCaptureTests {
             .appendingPathComponent("SentryJournalClear-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journalURL = directory.appendingPathComponent("deletion.json")
-        let journal = AccountDeletionJournal(fileURL: journalURL)
-        try journal.save(.init(phase: .prepared, roomIDs: ["secret-room"]))
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o555],
-            ofItemAtPath: directory.path
+        let journal = AccountDeletionJournal(
+            fileURL: directory.appendingPathComponent("deletion.json"),
+            beforeClear: { throw CocoaError(.fileWriteUnknown) }
         )
-        defer {
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: directory.path
-            )
-        }
-        var didThrow = false
-        do {
-            try journal.clear()
-        } catch {
-            didThrow = true
-            SentryCapture.capture(error)
-        }
-        #expect(didThrow)
+        try journal.save(.init(phase: .prepared, roomIDs: ["secret-room"]))
+        let suiteName = "PomodoroughTests.SentryJournalClear.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()),
+            defaults: defaults,
+            accountDeletionJournal: journal,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        #expect(model.clearAccountDeletionState() == false)
         #expect(recorded.value.count == 1)
         #expect(!recorded.value[0].contains("secret-room"))
     }
@@ -255,15 +250,13 @@ struct SentryCaptureTests {
             recorded.value = current
         }
         defer { SentryCapture.resetForTesting() }
-        let corrupt = Data("not-json".utf8)
-        var decoded: WatchTimerCommand?
-        do {
-            decoded = try JSONDecoder().decode(WatchTimerCommand.self, from: corrupt)
-        } catch {
-            SentryCapture.captureOnce(key: "watch-command-decode-test", error: error)
-            SentryCapture.captureOnce(key: "watch-command-decode-test", error: error)
+        for payload in [Data("not-json".utf8), Data("{bad".utf8)] {
+            do {
+                _ = try JSONDecoder().decode(WatchTimerCommand.self, from: payload)
+            } catch {
+                WatchSyncService.commandDecodeFailed(error)
+            }
         }
-        #expect(decoded == nil)
         #expect(recorded.value.count == 1)
     }
 
@@ -276,9 +269,17 @@ struct SentryCaptureTests {
             recorded.value = current
         }
         defer { SentryCapture.resetForTesting() }
-        SentryCapture.captureOnce(key: "watch-report-send-test", error: URLError(.notConnectedToInternet))
-        SentryCapture.captureOnce(key: "watch-report-send-test", error: URLError(.timedOut))
+        WatchSyncService.reportSendFailed(URLError(.notConnectedToInternet))
+        WatchSyncService.reportSendFailed(URLError(.timedOut))
         #expect(recorded.value.count == 1)
+    }
+
+    @Test
+    func watchLogDedupeKeepsRepeatsSilent() {
+        let key = "watch-dedupe-\(UUID().uuidString)"
+        #expect(WatchSyncLogDedupe.shouldLog(key: key) == true)
+        #expect(WatchSyncLogDedupe.shouldLog(key: key) == false)
+        #expect(WatchSyncLogDedupe.shouldLog(key: key + "-other") == true)
     }
 
     @Test
