@@ -43,6 +43,8 @@
 	<string>Pomodorough uses your local network to connect directly to trusted Iroh room peers.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>SENTRY_DSN</key>
+	<string>$(SENTRY_DSN)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

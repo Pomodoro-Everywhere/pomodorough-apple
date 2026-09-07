@@ -31,5 +31,7 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>GIDClientID</key>
 	<string>$(GOOGLE_CLIENT_ID)</string>
+	<key>SENTRY_DSN</key>
+	<string>$(SENTRY_DSN)</string>
 </dict>
 </plist>

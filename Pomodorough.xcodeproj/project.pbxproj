@@ -77,7 +77,6 @@
 		32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */; };
 		32CD7FD4021BF0DF052D4CF7 /* IrohRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */; };
 		32E6F4F113879D715D9BE1E3 /* SynchronizationWireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */; };
-		32E8DA10B016E10F76887681 /* SentryDSN.local in Resources */ = {isa = PBXBuildFile; fileRef = 1C8FD9CB84130C1224B6A09B /* SentryDSN.local */; };
 		32E94256D732CB58A1BDBB25 /* AppVersionInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */; };
 		3304111FE49CB985AC2504F5 /* CentralizedAccountSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98F3DC0FF23AE7DA1D3BA0B /* CentralizedAccountSessionCoordinator.swift */; };
 		3546DB83BA987246ED2FB6AF /* EndpointIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5131154CE2452672A3A4F700 /* EndpointIdentity.swift */; };
@@ -156,7 +155,6 @@
 		676287219F6B9615143E7180 /* View+Pomodorough.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */; };
 		6899487C295654FF83F562B3 /* InviteCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7363E2F7FD511798C672E19 /* InviteCodec.swift */; };
 		6C22FC68AA539A2A4F4238AA /* TasksScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3338212C1D24087870295D /* TasksScreen.swift */; };
-		6C2A94BC1A700F3C2D4E755F /* SentryDSN.local in Resources */ = {isa = PBXBuildFile; fileRef = 1C8FD9CB84130C1224B6A09B /* SentryDSN.local */; };
 		6E824AA46876EB397AE0E2FD /* TimerOperationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACA753B0F16F753B7DA1644 /* TimerOperationModels.swift */; };
 		6EB33A2C61F08293B9680E07 /* DurationRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE96CC08C9D010F5D2E128E /* DurationRow.swift */; };
 		6F4055FF9BAC596CE2729F38 /* RPCMessageValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99AC746729ADB1BBFF8FEE6C /* RPCMessageValidation.swift */; };
@@ -456,7 +454,6 @@
 		17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationServiceCoverageTests.swift; sourceTree = "<group>"; };
 		17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Pomodorough.swift"; sourceTree = "<group>"; };
 		18D8C0E6D0DD7DDCDCD71F08 /* CompletionChime.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = CompletionChime.wav; sourceTree = "<group>"; };
-		1C8FD9CB84130C1224B6A09B /* SentryDSN.local */ = {isa = PBXFileReference; path = SentryDSN.local; sourceTree = "<group>"; };
 		1E7473097A54FEEC975EC408 /* IrohLegacyTaskMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohLegacyTaskMigration.swift; sourceTree = "<group>"; };
 		20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRevocationController.swift; sourceTree = "<group>"; };
 		21209644D253E40E15EC9998 /* RPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RPCMessage.swift; sourceTree = "<group>"; };
@@ -926,7 +923,6 @@
 				168F3F69E8EA0FFB97AB7EA4 /* Shared */,
 				D4D637DAB9614A0500DD3B4F /* SharedCore */,
 				0B5585A033F128E98794CA04 /* Sources */,
-				C3A2C84E11F09526DAA345B4 /* Supporting */,
 				2161B27974D486AF4BE739FF /* Tests */,
 				2C491A7EBDD54BCCE5842DC1 /* UITests */,
 				553D4C7995C4542912AD225D /* Watch */,
@@ -944,14 +940,6 @@
 				CEE7E02424070389988E5403 /* WatchAssets.xcassets */,
 			);
 			path = Resources;
-			sourceTree = "<group>";
-		};
-		C3A2C84E11F09526DAA345B4 /* Supporting */ = {
-			isa = PBXGroup;
-			children = (
-				1C8FD9CB84130C1224B6A09B /* SentryDSN.local */,
-			);
-			path = Supporting;
 			sourceTree = "<group>";
 		};
 		D4D637DAB9614A0500DD3B4F /* SharedCore */ = {
@@ -1236,7 +1224,6 @@
 				9E343952B37B5462F7504236 /* CompletionChime.wav in Resources */,
 				10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 				E575B00BC377E0AE8C9AEA4F /* Localizable.xcstrings in Resources */,
-				6C2A94BC1A700F3C2D4E755F /* SentryDSN.local in Resources */,
 				AC60BEEA2D4A4F589ECADD9F /* WatchAssets.xcassets in Resources */,
 				4FAA27BF7055B29C21B03200 /* pomodorough_core.wasm in Resources */,
 			);
@@ -1261,7 +1248,6 @@
 				427B924EF1752187CFFADE57 /* CompletionChime.wav in Resources */,
 				2EC15A7B22650818465F13BE /* IROH_THIRD_PARTY_LICENSES.md in Resources */,
 				A57B33DD61AE790852ADDADD /* Localizable.xcstrings in Resources */,
-				32E8DA10B016E10F76887681 /* SentryDSN.local in Resources */,
 				309C3F5682C241ECDE0F2B18 /* WatchAssets.xcassets in Resources */,
 				E07F159A47806F5FD2494D5A /* pomodorough_core.wasm in Resources */,
 			);
@@ -1701,7 +1687,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/iOS-Info.plist";
-				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1772,7 +1757,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/iOS-Info.plist";
-				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1969,7 +1953,6 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/macOS-Info.plist";
-				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -2023,7 +2006,6 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = PTT6GCQ699;
 				INFOPLIST_FILE = "Supporting/macOS-Info.plist";
-				INFOPLIST_KEY_SENTRY_DSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

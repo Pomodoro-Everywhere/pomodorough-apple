@@ -1,28 +1,16 @@
 import Foundation
-import OSLog
 import Sentry
 
-// Reads the DSN from the built Info.plist so the
-// secret stays a build-time value and never lands in committed source.
+// DSN is a build-time Info.plist value: Supporting/*-Info.plist declares
+// SENTRY_DSN as $(SENTRY_DSN), expanded by xcodebuild from the environment.
+// Supporting/SentryDSN.local is never bundled: local install scripts and the
+// release workflow read that file (when present) and export SENTRY_DSN for
+// xcodebuild, so clean checkouts with no file build with an empty DSN and
+// Sentry stays disabled. This keeps the secret out of committed source and
+// decouples the build from the file's presence.
 enum SentrySetup {
-    private static let logger = Logger(
-        subsystem: "me.egigoka.pomodorough",
-        category: "SentrySetup"
-    )
-
     static func startIfConfigured() {
-        var dsn = (Bundle.main.infoDictionary?["SENTRY_DSN"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if dsn.isEmpty,
-           let url = Bundle.main.url(forResource: "SentryDSN", withExtension: "local") {
-            do {
-                let file = try String(contentsOf: url, encoding: .utf8)
-                dsn = file.trimmingCharacters(in: .whitespacesAndNewlines)
-            } catch {
-                // Local DSN read is best-effort (file is optional); log once
-                // for dev. No Sentry capture here: Sentry is not started yet.
-                logger.error("SentryDSN.local unreadable: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        let dsn = (Bundle.main.infoDictionary?["SENTRY_DSN"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !dsn.isEmpty else { return }
         SentrySDK.start { options in
             options.dsn = dsn

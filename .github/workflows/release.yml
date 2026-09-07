@@ -50,6 +50,11 @@ jobs:
           set -euo pipefail
           if [[ -n "${SENTRY_DSN:-}" ]]; then
             printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
+            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
+            # so export it for the xcodebuild steps below. Absent secret still
+            # builds with Sentry disabled.
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
           fi
 
       - name: Check out pinned shared core
