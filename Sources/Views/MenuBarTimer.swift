@@ -101,7 +101,7 @@ struct MenuBarTimerMenu: View {
     var body: some View {
         Text(model.activeTimer?.phase.title ?? model.selectedPhase.title)
         if let timer = model.activeTimer,
-           let task = model.task(forTimerID: timer.id) {
+           let task = model.displayTask(for: timer) {
             Text(verbatim: task.title)
         }
         Group {

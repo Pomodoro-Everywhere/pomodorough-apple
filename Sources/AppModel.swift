@@ -687,6 +687,10 @@ final class AppModel {
         statePublisher.task(forTimerID: timerID, snapshot: publicationSnapshot)
     }
 
+    func displayTask(for timer: CanonicalTimer) -> FocusTask? {
+        statePublisher.displayTask(for: timer, snapshot: publicationSnapshot)
+    }
+
     func taskSummaries(for date: Date = .now, calendar: Calendar = .current) -> [TaskDailySummary] {
         statePublisher.taskSummaries(
             for: date,

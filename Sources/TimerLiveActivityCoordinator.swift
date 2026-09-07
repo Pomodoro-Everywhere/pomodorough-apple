@@ -133,7 +133,9 @@ struct TimerLiveActivityModifier: ViewModifier {
     @State private var coordinator = TimerLiveActivityCoordinator()
 
     private var taskTitle: String? {
-        model.canonicalTimer.flatMap { model.task(forTimerID: $0.id)?.title }
+        model.canonicalTimer.flatMap { timer in
+            model.displayTask(for: timer)?.title
+        }
     }
 
     func body(content: Content) -> some View {

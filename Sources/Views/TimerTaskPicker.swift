@@ -29,23 +29,25 @@ struct TimerTaskPicker: View {
                 .labelStyle(.titleAndIcon)
                 .accessibilityHidden(true)
             if model.isTimerActive, let timer = model.canonicalTimer {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Active timer task")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(PomodoroughTheme.steel)
-                    Text(model.task(forTimerID: timer.id)?.title ?? "Unassigned")
+                if !timer.phase.isBreak {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Active timer task")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(PomodoroughTheme.steel)
+                        Text(model.displayTask(for: timer)?.title ?? "Unassigned")
+                            .font(.callout.weight(.semibold))
+                    }
                         .font(.callout.weight(.semibold))
+                        .lineLimit(wrappingLineLimit)
+                        .minimumScaleFactor(0.75)
+                        .allowsTightening(true)
+                        .fixedSize(horizontal: false, vertical: wrapsTaskText)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .foregroundStyle(PomodoroughTheme.ticket)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Active timer task")
+                        .accessibilityValue(model.displayTask(for: timer)?.title ?? "Unassigned")
                 }
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(wrappingLineLimit)
-                    .minimumScaleFactor(0.75)
-                    .allowsTightening(true)
-                    .fixedSize(horizontal: false, vertical: wrapsTaskText)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .foregroundStyle(PomodoroughTheme.ticket)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Active timer task")
-                    .accessibilityValue(model.task(forTimerID: timer.id)?.title ?? "Unassigned")
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Next focus task")
                         .font(.caption2.weight(.semibold))

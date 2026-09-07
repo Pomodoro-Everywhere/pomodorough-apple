@@ -108,6 +108,11 @@ struct AppStatePublisher: Sendable {
             ?? snapshot.state.knownTasks.first(where: { $0.id == uuid })
     }
 
+    func displayTask(for timer: CanonicalTimer, snapshot: Snapshot) -> FocusTask? {
+        guard !timer.phase.isBreak else { return nil }
+        return task(forTimerID: timer.id, snapshot: snapshot)
+    }
+
     func taskSummaries(
         for date: Date,
         calendar: Calendar,

@@ -277,6 +277,7 @@
 		C71685A085B7B597A55EDA9B /* AppModelDecompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99FD08EB834A612834A4FC51 /* AppModelDecompositionTests.swift */; };
 		C75D18BDC7A0C65CE7BCA116 /* RailwayBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 935A2C059B1EFF1A26152B0A /* RailwayBackdrop.swift */; };
 		C82A580024F003B3D10E96D9 /* AccountLifecycleTransitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3325B223134EBC2103C1C3F /* AccountLifecycleTransitions.swift */; };
+		C847E12C64F14316362C242C /* BreakTaskDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */; };
 		C92783BAD90EFB471FACC321 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 339967D3D78893FBEB4565F6 /* HistoryScreen.swift */; };
 		CAFAF05CF473357E46BBCE21 /* JoinIrohRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */; };
 		CBBA8D8D66F1934FA96B0502 /* LegacyTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFAFD32702932CC335D6F13D /* LegacyTabs.swift */; };
@@ -284,6 +285,7 @@
 		CC223DE9D55BEA683FAC6CBB /* RPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21209644D253E40E15EC9998 /* RPCMessage.swift */; };
 		CC8A04E89886DFA189F17026 /* TimerCompletionSchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */; };
 		CCC109267B0A5DD7201A043C /* IrohLegacyTaskMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7473097A54FEEC975EC408 /* IrohLegacyTaskMigration.swift */; };
+		CCF0BCD78107159601AD9B4A /* BreakTaskDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */; };
 		CD96FFBA3BF9914403BFE044 /* AppVersionInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */; };
 		CEB90DB97C70133BC2011DE6 /* AccountLifecycleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7153AF2C965F64F578C6007 /* AccountLifecycleController.swift */; };
 		CF7B4F61AE398CE7EEDCB5FE /* IrohRoomModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE50A4937E18D925FD8F8CCC /* IrohRoomModels.swift */; };
@@ -527,6 +529,7 @@
 		724244F638BCEA9648A23B9A /* RailwayNetworkLines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RailwayNetworkLines.swift; sourceTree = "<group>"; };
 		72BF1D497AF443928BE729AE /* TimerBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerBackdrop.swift; sourceTree = "<group>"; };
 		7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerCompletionSchedulingTests.swift; sourceTree = "<group>"; };
+		75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakTaskDisplayTests.swift; sourceTree = "<group>"; };
 		756912FE081EC76B3B459175 /* SynchronizationLifecycleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationLifecycleModels.swift; sourceTree = "<group>"; };
 		75D48B773F39678A5656B048 /* PersistedStateCompatibilityTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PersistedStateCompatibilityTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		77503581F23F5EA85ECC4D0C /* SentrySetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentrySetup.swift; sourceTree = "<group>"; };
@@ -741,6 +744,7 @@
 				99FD08EB834A612834A4FC51 /* AppModelDecompositionTests.swift */,
 				8BE293E4CC407E944F414FC0 /* AppStateEffectCoordinatorTests.swift */,
 				ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */,
+				75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */,
 				5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */,
 				7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */,
 				2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */,
@@ -1266,6 +1270,7 @@
 				6FC998ECBF9E243A266F62FD /* AppModelDecompositionTests.swift in Sources */,
 				A93F7A68B6662404E0E5AF71 /* AppStateEffectCoordinatorTests.swift in Sources */,
 				CD96FFBA3BF9914403BFE044 /* AppVersionInfoTests.swift in Sources */,
+				CCF0BCD78107159601AD9B4A /* BreakTaskDisplayTests.swift in Sources */,
 				08B842AA74B8633316A97C7A /* CoverageGapBehaviorTests.swift in Sources */,
 				C3A869CE2835EC339576D607 /* IntegrationNegativeTests.swift in Sources */,
 				F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */,
@@ -1328,6 +1333,7 @@
 				C71685A085B7B597A55EDA9B /* AppModelDecompositionTests.swift in Sources */,
 				D18F9A7146ED5CDF13954780 /* AppStateEffectCoordinatorTests.swift in Sources */,
 				32E94256D732CB58A1BDBB25 /* AppVersionInfoTests.swift in Sources */,
+				C847E12C64F14316362C242C /* BreakTaskDisplayTests.swift in Sources */,
 				24F82419C7483BD364F2E187 /* CoverageGapBehaviorTests.swift in Sources */,
 				98B4B39B908271919830386D /* IntegrationNegativeTests.swift in Sources */,
 				3FFA600ACA6A8AA43B56AF17 /* IntegrationPositiveTests.swift in Sources */,

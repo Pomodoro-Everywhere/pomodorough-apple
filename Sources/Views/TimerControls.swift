@@ -62,7 +62,7 @@ struct TimerControls: View {
     }
 
     private var activeTaskAccessibilityValue: String {
-        guard let timer = model.canonicalTimer else { return "" }
+        guard let timer = model.canonicalTimer, !timer.phase.isBreak else { return "" }
         return String(localized: "Focus task: \(model.task(forTimerID: timer.id)?.title ?? String(localized: "No task"))")
     }
 

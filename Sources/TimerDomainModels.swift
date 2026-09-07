@@ -31,6 +31,8 @@ enum TimerPhase: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    var isBreak: Bool { self != .focus }
+
     var defaultMinutes: Int {
         switch self {
         case .focus: 25
