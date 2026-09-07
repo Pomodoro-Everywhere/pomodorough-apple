@@ -73,6 +73,10 @@ targets:
         buildPhase: resources
       - path: Resources/SharedCore/pomodorough_core.wasm
         buildPhase: resources
+      - path: Supporting/SentryDSN.local
+        type: file
+        buildPhase: resources
+        optional: true
     info:
       path: Supporting/iOS-Info.plist
       properties:
@@ -156,6 +160,10 @@ targets:
         buildPhase: resources
       - path: Resources/SharedCore/pomodorough_core.wasm
         buildPhase: resources
+      - path: Supporting/SentryDSN.local
+        type: file
+        buildPhase: resources
+        optional: true
     info:
       path: Supporting/macOS-Info.plist
       properties:

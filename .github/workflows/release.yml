@@ -42,6 +42,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Write Sentry DSN for release telemetry
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_DSN:-}" ]]; then
+            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+          fi
+
       - name: Check out pinned shared core
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

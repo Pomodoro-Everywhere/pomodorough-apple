@@ -5,9 +5,13 @@ import Sentry
 // secret stays a build-time value and never lands in committed source.
 enum SentrySetup {
     static func startIfConfigured() {
-        guard let dsn = Bundle.main.infoDictionary?["SENTRY_DSN"] as? String,
-              !dsn.isEmpty
-        else { return }
+        var dsn = (Bundle.main.infoDictionary?["SENTRY_DSN"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if dsn.isEmpty,
+           let url = Bundle.main.url(forResource: "SentryDSN", withExtension: "local"),
+           let file = try? String(contentsOf: url, encoding: .utf8) {
+            dsn = file.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !dsn.isEmpty else { return }
         SentrySDK.start { options in
             options.dsn = dsn
             options.environment = sentryEnvironment()
