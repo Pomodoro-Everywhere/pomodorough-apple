@@ -69,6 +69,20 @@ CONTAINMENT_HANDSHAKE_SECONDS = 4.0
 # Local handshake is 0.07-0.09s; hosted needs >8s (>100x) under CPU/libproc
 # starvation. 30s keeps hostile bounded while giving slow hosts 375x margin.
 DIRECT_WRAPPER_HANDSHAKE_SECONDS = 30.0
+# Hosted run 34212707278 (commit fb3191b): python 479-ok green, preflight
+# fails `direct process identity deadline expired; direct process cleanup
+# incomplete` (exit 127). Peer-identity READ itself (proc_pidinfo /
+# LOCAL_PEERTOKEN / task_info via stable_darwin_process_identity /
+# marked_darwin_process_identity / accept_direct_peer) starves under
+# CPU/libproc load after suite+build. Local reads are ms; hosted needs
+# >1.5-4s. 30s aligns identity reads with handshake slow-host reality
+# (same 375x margin, hostile still bounded); all pid/version/euid
+# comparisons and forgery codes unchanged. Retry already via drain outer
+# loop + await_* inner loops with progress (bounded_wait/sleep), not one
+# long block for transient None; outer deadline_call still bounds a
+# single blocking syscall. DIRECT_MARKER_CENSUS (0.5s) deliberately kept:
+# monitor path swallows census timeout and must not delay target start.
+DIRECT_IDENTITY_READ_SECONDS = 30.0
 LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 2.0
 LAUNCHCTL_AUTHENTICATION_SECONDS = DIRECT_WRAPPER_HANDSHAKE_SECONDS
 LAUNCHCTL_RETRY_SECONDS = 1.0
@@ -4432,7 +4446,7 @@ def await_direct_wrapper_peer_identity(
 
 
 def direct_message_deadline(deadline: float | None) -> float:
-    handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+    handshake_by = time.monotonic() + DIRECT_IDENTITY_READ_SECONDS
     return min(handshake_by, deadline) if deadline is not None else handshake_by
 
 
@@ -5403,7 +5417,7 @@ def cleanup_direct_job(
     deadline: float | None,
     signal_root: bool,
 ) -> None:
-    cleanup_by = cleanup_deadline(deadline)
+    cleanup_by = cleanup_deadline(deadline, DIRECT_IDENTITY_READ_SECONDS)
     observation_by = cleanup_by - job.wrapper_reap_seconds
     errors: list[str] = []
     try:

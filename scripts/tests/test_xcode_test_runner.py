@@ -2386,7 +2386,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         job = direct_job(Path("/tmp/unused-direct-job"))
         with mock.patch.object(
             run_xcode_tests, "cleanup_deadline", return_value=10.0
-        ), mock.patch.object(
+        ) as cap, mock.patch.object(
             run_xcode_tests, "drain_direct_job"
         ) as drain, mock.patch.object(
             run_xcode_tests, "force_direct_wrapper_exit"
@@ -2394,6 +2394,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests, "reap_direct_wrapper"
         ) as reap, mock.patch.object(run_xcode_tests, "close_direct_channel"):
             run_xcode_tests.cleanup_direct_job(job, None, False)
+        cap.assert_called_once_with(None, run_xcode_tests.DIRECT_IDENTITY_READ_SECONDS)
         observation_by = 10.0 - run_xcode_tests.DIRECT_WRAPPER_REAP_SECONDS
         self.assertEqual(drain.call_args.args[:2], (job, observation_by))
         force.assert_called_once_with(job, 10.0)
@@ -6290,6 +6291,41 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 "direct wrapper handshake timeout",
             ):
                 run_xcode_tests.await_direct_identity(silent, process, None)
+
+    def test_slow_host_identity_read_succeeds_and_forged_rejected(self) -> None:
+        current = darwin_direct_identity(2222, 10, 20)
+        forged = darwin_direct_identity(3333, 11, 21)
+        self.assertEqual(run_xcode_tests.DIRECT_IDENTITY_READ_SECONDS, 30.0)
+        with mock.patch.object(run_xcode_tests.time, "monotonic", return_value=1000.0):
+            peer_by = run_xcode_tests.direct_message_deadline(None)
+        self.assertAlmostEqual(peer_by, 1000.0 + 30.0)
+        self.assertGreater(peer_by, 1000.0 + run_xcode_tests.CONTAINMENT_HANDSHAKE_SECONDS)
+        self.assertGreater(10.0, run_xcode_tests.CONTAINMENT_HANDSHAKE_SECONDS)
+        self.assertLess(10.0, run_xcode_tests.DIRECT_IDENTITY_READ_SECONDS)
+
+        def slow_valid(_pid: int):
+            time.sleep(2.0)
+            return current
+
+        with mock.patch.object(
+            run_xcode_tests, "direct_process_identity", side_effect=slow_valid
+        ):
+            observed = run_xcode_tests.bounded_process_identity(
+                2222, time.monotonic() + 30.0
+            )
+        self.assertEqual(observed, current)
+        with mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", return_value=92
+        ), mock.patch.object(
+            run_xcode_tests, "stable_darwin_peer_identity", return_value=forged
+        ), mock.patch.object(run_xcode_tests.os, "close"):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "forged direct peer identity",
+            ):
+                run_xcode_tests.bind_direct_peer_identity(
+                    91, Path("target.sock"), current, time.monotonic() + 30.0
+                )
 
     def test_wrapper_binding_rejects_process_substitution(self) -> None:
         replacement = darwin_direct_identity(3333, 11, 21)
