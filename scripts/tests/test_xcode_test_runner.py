@@ -1454,13 +1454,17 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 "start_new_session=True); "
                 "print(f'CHILD_PID={child.pid}',flush=True); time.sleep(30)"
             )
+            # Direct-job startup is ~0.3s locally and slower on hosted
+            # runners; 0.2s raced cleanup SIGINT against the target print
+            # and flaked with missing CHILD_PID. 5s still forces a timeout
+            # (sleep is 30s) while giving slow hosts margin to print.
             with self.assertRaises(run_xcode_tests.SimulatorLifecycleError):
                 run_xcode_tests.lifecycle_command(
-                    args, "leaking-command", [sys.executable, "-c", source], timeout=0.2
+                    args, "leaking-command", [sys.executable, "-c", source], timeout=5.0
                 )
             evidence = (args.diagnostics_dir / "simulator-lifecycle.log").read_text()
         match = re.search(r"CHILD_PID=(\d+)", evidence)
-        self.assertIsNotNone(match)
+        self.assertIsNotNone(match, f"missing CHILD_PID in evidence:\n{evidence[-2000:]}")
         assert match is not None
         child_pid = int(match.group(1))
         try:
