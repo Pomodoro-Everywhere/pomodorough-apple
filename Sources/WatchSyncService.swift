@@ -29,22 +29,31 @@ final class WatchSyncService: NSObject, ObservableObject {
 
     @discardableResult
     func push() -> String {
-        let report: String
         guard let session,
               session.activationState == .activated,
               session.isPaired,
-              let model,
-              let data = try? JSONEncoder().encode(model.makeWatchSnapshot())
+              let model
         else {
-            report = "skip st=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchApp=\(session?.isWatchAppInstalled ?? false)"
+            let report = "skip st=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchApp=\(session?.isWatchAppInstalled ?? false)"
             log("push: \(report)")
             return report
         }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(model.makeWatchSnapshot())
+        } catch {
+            Self.snapshotEncodeFailed(error)
+            let report = "skip encode st=\(session.activationState.rawValue) paired=\(session.isPaired) watchApp=\(session.isWatchAppInstalled)"
+            log("push: \(report)")
+            return report
+        }
+        let report: String
         do {
             try session.updateApplicationContext([WatchSyncKeys.snapshot: data])
             report = "ok \(data.count)B watchApp=\(session.isWatchAppInstalled)"
             log("push: \(report)")
         } catch {
+            Self.contextUpdateFailed(error)
             report = "FAIL \(error)"
             log("push: \(report)")
         }
@@ -133,8 +142,19 @@ final class WatchSyncService: NSObject, ObservableObject {
 
 // Test seams: real failure-handler bodies shared by iOS and macOS builds
 // so the unit-test bundle drives the same key + capture logic on macOS.
-// Silent delivery kept: no retry, no user surface; log-only, deduped.
+// Delivery stays best-effort: no retry, no user surface change; failures are
+// log + SentryCapture.captureOnce (Error-only, no snapshot payload), deduped.
 extension WatchSyncService {
+    nonisolated static func snapshotEncodeFailed(_ error: Error) {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot encode failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.captureOnce(key: "watch-snapshot-encode", error: error)
+    }
+
+    nonisolated static func contextUpdateFailed(_ error: Error) {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("context update failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.captureOnce(key: "watch-context-update", error: error)
+    }
+
     nonisolated static func reportSendFailed(_ error: Error) {
         Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("report send failed: \(error.localizedDescription, privacy: .public)")
         SentryCapture.captureOnce(key: "watch-report-send", error: error)

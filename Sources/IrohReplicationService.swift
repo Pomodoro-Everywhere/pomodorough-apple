@@ -19,6 +19,11 @@ actor IrohReplicationService {
     typealias StatusHandler = @MainActor @Sendable (IrohConnectionStatus) -> Void
     typealias ProjectionHandler = @MainActor @Sendable (String, PersistedTimerState) -> Void
 
+    // AP33 triage: endpoint close failures capture (resource leak affects the
+    // user-visible listening state). Per-connection close / ignore / stop /
+    // reset try? sites below stay silent by design: best-effort teardown of a
+    // single peer stream where the peer is often already gone, retry covers
+    // the sync, and no user surface changes.
     private let store: IrohRoomStore
     private let keyStore: any IrohEndpointKeyStoring
     private let statusHandler: StatusHandler
@@ -91,7 +96,11 @@ actor IrohReplicationService {
             alpns: [IrohProtocolV1.alpn]
         ))
         guard owner == generation else {
-            try? await endpoint.close()
+            do {
+                try await endpoint.close()
+            } catch {
+                Self.endpointCloseFailed(error)
+            }
             throw IrohProtocolError.unavailable("Iroh endpoint start was superseded.")
         }
         let ticket = try EndpointTicket.fromAddr(addr: endpoint.addr()).description
@@ -126,7 +135,13 @@ actor IrohReplicationService {
         endpoint = nil
         endpointTicket = nil
         context = nil
-        if let closing, !closing.isClosed() { try? await closing.close() }
+        if let closing, !closing.isClosed() {
+            do {
+                try await closing.close()
+            } catch {
+                Self.endpointCloseFailed(error)
+            }
+        }
         await statusHandler(.stopped)
     }
 
@@ -471,6 +486,14 @@ actor IrohReplicationService {
         min(60, max(0, base) * (1 + min(1, max(0, jitterUnit)) * 0.2))
     }
 
+    // Test seam: endpoint-close failure body shared so the unit-test bundle
+    // drives the same log + capture logic. Error-only (Iroh close error,
+    // never tickets, IDs, or secrets); outcome at call sites is unchanged.
+    nonisolated static func endpointCloseFailed(_ error: Error) {
+        logger.error("endpoint close failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.capture(error)
+    }
+
     private func syncKnownPeers(context: IrohServiceContext, generation owner: Int) async -> Bool {
         guard owns(owner, roomID: context.roomID), syncOwner == nil, let endpoint else { return false }
         let syncID = UUID()
@@ -776,7 +799,13 @@ actor IrohReplicationService {
         endpoint = nil
         endpointTicket = nil
         context = nil
-        if let closing, !closing.isClosed() { try? await closing.close() }
+        if let closing, !closing.isClosed() {
+            do {
+                try await closing.close()
+            } catch {
+                Self.endpointCloseFailed(error)
+            }
+        }
         guard stoppedGeneration == generation else { return }
         await statusHandler(.conflict)
     }

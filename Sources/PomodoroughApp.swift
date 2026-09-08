@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 
 @main
 struct PomodoroughApp: App {
@@ -16,8 +17,16 @@ struct PomodoroughApp: App {
             if let bundleIdentifier = Bundle.main.bundleIdentifier {
                 UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
             }
-            try? KeychainStore().delete()
-            try? IrohRoomStore.resetDefaultStorage()
+            do {
+                try KeychainStore().delete()
+            } catch {
+                Self.uiTestResetFailed(error, step: "keychain-delete")
+            }
+            do {
+                try IrohRoomStore.resetDefaultStorage()
+            } catch {
+                Self.uiTestResetFailed(error, step: "room-store-reset")
+            }
             AppModel.resetDefaultDurableStorage()
         }
 #endif
@@ -62,5 +71,13 @@ struct PomodoroughApp: App {
     @discardableResult
     static func handleGoogleSignInURL(_ url: URL, model: AppModel) -> Bool {
         model.handleGoogleSignInURL(url)
+    }
+
+    // Test seam: DEBUG UI-test reset keeps its outcome (reset continues) and
+    // captures Error-only (Keychain/file error, never tokens or room data).
+    static func uiTestResetFailed(_ error: Error, step: String) {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "PomodoroughApp")
+            .error("ui-test reset \(step, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.capture(error)
     }
 }

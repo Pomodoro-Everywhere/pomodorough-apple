@@ -78,16 +78,30 @@ final class WatchSyncService: NSObject, ObservableObject {
                 }
             )
         } else {
-            try? session.updateApplicationContext(payload)
+            do {
+                try session.updateApplicationContext(payload)
+            } catch {
+                // Log-only (no Sentry on watchOS by design); next
+                // appear/activation/reachability retries the pull.
+                Self.logOnce(key: "watch-request-queue", error: error)
+            }
         }
     }
 
     func send(_ command: WatchTimerCommand) {
         let session = WCSession.default
         guard WCSession.isSupported(),
-              session.activationState == .activated,
-              let data = try? JSONEncoder().encode(command)
+              session.activationState == .activated
         else { return }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(command)
+        } catch {
+            // Log-only (no Sentry on watchOS by design); command is dropped,
+            // the phone remains the source of truth.
+            Self.logOnce(key: "watch-command-encode", error: error)
+            return
+        }
         if session.isReachable {
             session.sendMessage(
                 [WatchSyncKeys.command: data],
@@ -100,7 +114,13 @@ final class WatchSyncService: NSObject, ObservableObject {
             )
         } else {
             // Queued: delivered as soon as the phone is reachable again.
-            try? session.updateApplicationContext([WatchSyncKeys.command: data])
+            do {
+                try session.updateApplicationContext([WatchSyncKeys.command: data])
+            } catch {
+                // Log-only (no Sentry on watchOS by design); the next send
+                // re-queues via application context.
+                Self.logOnce(key: "watch-command-queue", error: error)
+            }
         }
     }
 }
@@ -164,14 +184,24 @@ extension WatchSyncService: WCSessionDelegate {
 
     private func ingest(_ snapshot: WatchTimerSnapshot) {
         self.snapshot = snapshot
-        if let data = try? JSONEncoder().encode(snapshot) {
+        do {
+            let data = try JSONEncoder().encode(snapshot)
             UserDefaults.standard.set(data, forKey: "watch-timer-snapshot")
+        } catch {
+            // Log-only (no Sentry on watchOS by design); in-memory snapshot
+            // is already set, only the disk cache for offline launch is lost.
+            Self.logOnce(key: "watch-cache-encode", error: error)
         }
     }
 }
 
-// Watch-side silent-delivery note: no Sentry on watchOS, so the
-// sendMessage errorHandlers above are thin logOnce wrappers around the
+// Watch-side silent-delivery note (AP33): no Sentry on watchOS by design —
+// the Pomodorough-watchOS target does not link the Sentry package
+// (see project.yml: Sentry is a dependency of iOS/macOS targets only), so the
+// sendMessage errorHandlers above stay thin logOnce wrappers around the
 // shared WatchSyncLogDedupe (covered in the macOS/iOS unit-test bundle).
+// Delivery stays silent (no retry, no user surface); the iPhone remains the
+// source of truth and re-pushes on reachability change. The iOS-side
+// WatchSyncService captures its own encode/send failures via SentryCapture.
 // WCSession itself cannot be driven without a watchOS test host, which this
 // project does not have (Pomodorough-watchOS has no test bundle).

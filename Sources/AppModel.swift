@@ -211,14 +211,32 @@ final class AppModel {
         defaults: UserDefaults,
         roomStore: IrohRoomStore
     ) -> AccountDeletionRecovery {
-        let journalLoad = journal.map { (try? $0.load()) ?? .corrupt }
+        let journalLoad: AccountDeletionJournal.LoadResult?
+        if let journal {
+            do {
+                journalLoad = try journal.load()
+            } catch {
+                logger.error("loadAccountDeletionRecovery journal load failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+                journalLoad = .corrupt
+            }
+        } else {
+            journalLoad = nil
+        }
         switch journalLoad {
         case .record(let record):
             let purgeState: AccountDeletionPurgeState = record.phase == .prepared
                 ? .prepared : .remoteCommitted
             return AccountDeletionRecovery(record: record, purgeState: purgeState)
         case .corrupt:
-            let topology = try? roomStore.accountDeletionTopology()
+            let topology: AccountDeletionRoomTopology?
+            do {
+                topology = try roomStore.accountDeletionTopology()
+            } catch {
+                logger.error("loadAccountDeletionRecovery topology failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+                topology = nil
+            }
             let record = AccountDeletionJournal.Record(
                 phase: .prepared,
                 roomIDs: topology?.roomIDs ?? [],
@@ -242,12 +260,16 @@ final class AppModel {
     }
 
     static func resetDefaultDurableStorage() {
-        try? AtomicDurableFileStore(
-            fileURL: productionStorageURL("account-deletion-v1.json")
-        ).remove()
-        try? AtomicDurableFileStore(
-            fileURL: productionStorageURL("timer-state-v2.json")
-        ).remove()
+        for name in ["account-deletion-v1.json", "timer-state-v2.json"] {
+            do {
+                try AtomicDurableFileStore(fileURL: productionStorageURL(name)).remove()
+            } catch {
+                // DEBUG UI-test reset only: outcome kept (reset continues),
+                // Error-only capture (file error, never workspace content).
+                logger.error("resetDefaultDurableStorage \(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+            }
+        }
     }
 
     private static func loadInitialState(
@@ -745,7 +767,12 @@ final class AppModel {
     }
 
     func allowTimerAlerts() async {
-        try? await alarmScheduler.requestAuthorization()
+        do {
+            try await alarmScheduler.requestAuthorization()
+        } catch {
+            Self.logger.error("allowTimerAlerts failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+        }
         completePermissionIntroduction()
     }
 
@@ -878,7 +905,12 @@ final class AppModel {
         )
         timerState = transition.state
         if let returnState = transition.irohReturnState {
-            try? roomStore.replaceActiveReturnState(returnState)
+            do {
+                try roomStore.replaceActiveReturnState(returnState)
+            } catch {
+                Self.logger.error("clearSignedOutState return-state failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+            }
         }
         if transition.rebuildsProjection { rebuildOptimisticState() }
         persist()
@@ -889,7 +921,15 @@ final class AppModel {
         isWorking = true
         errorMessage = nil
         defer { isWorking = false }
-        guard let topology = try? roomStore.accountDeletionTopology(),
+        let topology: AccountDeletionRoomTopology?
+        do {
+            topology = try roomStore.accountDeletionTopology()
+        } catch {
+            Self.logger.error("deleteAccount topology failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+            topology = nil
+        }
+        guard let topology,
               persistPreparedAccountDeletion(topology: topology) else {
             errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
             return
@@ -928,7 +968,12 @@ final class AppModel {
         await roomReplicationController.quiesceForAccountDeletion()
         await quiesceCentralizedSyncForAccountDeletion()
         if accountDeletionPurgeState == .prepared {
-            guard let discovered = try? roomStore.accountDeletionTopology() else {
+            let discovered: AccountDeletionRoomTopology
+            do {
+                discovered = try roomStore.accountDeletionTopology()
+            } catch {
+                Self.logger.error("resumeAccountDeletion topology failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
                 return
             }
@@ -1063,7 +1108,14 @@ final class AppModel {
         _ record: AccountDeletionJournal.Record,
         journal: AccountDeletionJournal
     ) -> (outcome: JournalSaveOutcome, completedWithoutError: Bool) {
-        guard let prior = try? journal.load() else { return (.unknown, false) }
+        let prior: AccountDeletionJournal.LoadResult
+        do {
+            prior = try journal.load()
+        } catch {
+            Self.logger.error("reconcileJournalSave load failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+            return (.unknown, false)
+        }
         if case .record(let priorRecord) = prior,
            priorRecord.phase == .remoteCommitted,
            record.phase == .prepared {
@@ -1078,7 +1130,12 @@ final class AppModel {
             SentryCapture.capture(error)
             completedWithoutError = false
         }
-        guard let current = try? journal.load() else {
+        let current: AccountDeletionJournal.LoadResult
+        do {
+            current = try journal.load()
+        } catch {
+            Self.logger.error("reconcileJournalSave verify-load failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return (.unknown, completedWithoutError)
         }
         if case .record(let observed) = current,
@@ -1138,7 +1195,14 @@ final class AppModel {
     }
 
     private func persistAccountDeletionRoomIDs(_ roomIDs: [String]) -> Bool {
-        guard let data = try? JSONEncoder().encode(roomIDs.sorted()) else { return false }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(roomIDs.sorted())
+        } catch {
+            Self.logger.error("persistAccountDeletionRoomIDs encode failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+            return false
+        }
         defaults.set(data, forKey: Self.accountDeletionRoomIDsKey)
         return defaults.data(forKey: Self.accountDeletionRoomIDsKey) == data
     }
@@ -1146,7 +1210,13 @@ final class AppModel {
     private func accountDeletionRoomIDs() -> [String]? {
         if accountDeletionJournal != nil { return accountDeletionRecord?.roomIDs }
         guard let data = defaults.data(forKey: Self.accountDeletionRoomIDsKey) else { return nil }
-        return try? JSONDecoder().decode([String].self, from: data)
+        do {
+            return try JSONDecoder().decode([String].self, from: data)
+        } catch {
+            Self.logger.error("accountDeletionRoomIDs decode failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+            return nil
+        }
     }
 
     private func accountDeletionRoomSecretAccounts() -> [String]? {

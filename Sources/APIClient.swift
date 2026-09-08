@@ -188,7 +188,12 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
         let obligation = LogoutRevocationObligation(tokens: tokens)
         try store.append(obligation)
         clearInMemoryTokens()
-        try? keychain.delete()
+        do {
+            try keychain.delete()
+        } catch {
+            Self.logger.error("detachLogoutObligation keychain delete failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+        }
         return obligation
     }
 

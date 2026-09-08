@@ -871,6 +871,166 @@ struct SentryCaptureTests {
         }
     }
 
+    // AP33: remaining silent try?/log-only sites keep their user-visible
+    // outcome and capture Error-only with no PII. watchOS stays log-only by
+    // design (no Sentry dependency); the iOS seams below are the captured side.
+    @Test
+    func watchSnapshotEncodeFailureCapturesOnce() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        WatchSyncService.snapshotEncodeFailed(URLError(.cannotParseResponse))
+        WatchSyncService.snapshotEncodeFailed(URLError(.cannotDecodeContentData))
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test
+    func watchContextUpdateFailureCapturesOnce() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        WatchSyncService.contextUpdateFailed(URLError(.notConnectedToInternet))
+        WatchSyncService.contextUpdateFailed(URLError(.timedOut))
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test
+    func irohEndpointCloseFailureCapturesWithoutTickets() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        IrohReplicationService.endpointCloseFailed(URLError(.cannotCloseFile))
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test
+    func uiTestResetFailureCapturesWithoutTokens() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        PomodoroughApp.uiTestResetFailed(
+            KeychainError(operation: "delete", status: -25293, message: "test-reset"),
+            step: "keychain-delete"
+        )
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("sentry-access"))
+    }
+
+    @Test @MainActor
+    func allowTimerAlertsAuthFailureCompletesIntroAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryAllowAlerts.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryAllowAlerts-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scheduler = RecordingAlarmScheduler()
+        scheduler.authorizationError = URLError(.notConnectedToInternet)
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: scheduler
+        )
+        #expect(model.needsPermissionIntroduction == true)
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        await model.allowTimerAlerts()
+        #expect(model.needsPermissionIntroduction == false)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func corruptRoomIDsDecodeQuarantinesAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryRoomIDsDecode.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryRoomIDsDecode-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defaults.set(Data("secret-room-corrupt".utf8), forKey: "account-deletion-room-ids-v1")
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        await model.finishConfirmedAccountDeletion()
+        #expect(model.errorMessage?.contains("room cleanup") == true)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("secret-room-corrupt"))
+    }
+
+    @Test
+    func detachLogoutKeychainDeleteFailureReturnsObligationAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let tokens = TokenPair(
+            accessToken: "detach-access", accessTokenExpiresAt: .distantFuture,
+            refreshToken: "detach-refresh", refreshTokenExpiresAt: .distantFuture
+        )
+        let store = RecordingTokenStore(tokens: tokens, failures: [.delete])
+        let client = APIClient(keychain: store)
+        #expect(try await client.restoreTokens() == true)
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let obligation = try await client.detachLogoutObligation(into: TestLogoutRevocationStore())
+        #expect(obligation?.tokens.refreshToken == "detach-refresh")
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("detach-access"))
+        #expect(!recorded.value[0].contains("detach-refresh"))
+    }
+
+    @Test @MainActor
+    func restoreClearTokensFailureStaysLocalOnlyAndCaptures() async {
+        let recorded = LockedTestValue<[String]>([])
+        let store = RecordingTokenStore(
+            tokens: TokenPair(
+                accessToken: "restore-clear-access", accessTokenExpiresAt: .distantFuture,
+                refreshToken: "restore-clear-refresh", refreshTokenExpiresAt: .distantFuture
+            ),
+            failures: [.delete]
+        )
+        let controller = AccountLifecycleController(
+            api: APIClient(keychain: store),
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: TestLogoutRevocationStore()
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let transition = await controller.restore(cachedUser: nil)
+        #expect(transition == .localOnly(invalidatesSynchronization: true))
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("restore-clear-access"))
+        #expect(!recorded.value[0].contains("restore-clear-refresh"))
+    }
+
     private func sentryStrippedTimerJSON(removing keys: [String]) throws -> Data {
         let data = try JSONEncoder.api.encode(PersistedTimerState.fresh())
         let object = try JSONSerialization.jsonObject(with: data)

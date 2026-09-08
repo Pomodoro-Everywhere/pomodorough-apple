@@ -174,7 +174,12 @@ final class AccountLifecycleController {
             guard owns(operation) else { return .stale }
             guard let cachedUser else {
                 _ = advanceGeneration()
-                try? await api.clearTokens()
+                do {
+                    try await api.clearTokens()
+                } catch {
+                    Self.logger.error("restore clearTokens failed: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.capture(error)
+                }
                 return .localOnly(invalidatesSynchronization: true)
             }
             return .signedIn(cachedUser)
