@@ -2395,7 +2395,7 @@ def await_direct_process_identity(pid: int, deadline: float) -> ProcessIdentity:
         inspect, deadline, "direct wrapper identity deadline expired"
     )
     if identity is None:
-        raise SimulatorLifecycleError("direct wrapper identity unavailable")
+        raise SimulatorLifecycleError("direct wrapper process identity unavailable")
     return identity
 
 
@@ -4433,7 +4433,7 @@ def bind_direct_wrapper_peer(
     try:
         listener_descriptor = direct_descriptor(listener_owner)
         if listener_descriptor < 0 or socket_path is None:
-            raise SimulatorLifecycleError("direct wrapper identity unavailable")
+            raise SimulatorLifecycleError("direct wrapper listener unavailable")
         peer = owned_direct_peer(accept_direct_peer(listener_descriptor, deadline))
         identity = await_direct_wrapper_peer_identity(
             direct_descriptor(peer), pid, deadline
@@ -4532,7 +4532,7 @@ def await_direct_identity(
         if channel.closed or process.poll() is not None:
             raise SimulatorLifecycleError("direct wrapper exited before identity handshake")
         time.sleep(bounded_wait(handshake_by, DESCENDANT_POLL_SECONDS))
-    raise SimulatorLifecycleError("direct wrapper identity unavailable")
+    raise SimulatorLifecycleError("direct wrapper handshake timeout")
 
 
 def darwin_direct_ancestry_maps(

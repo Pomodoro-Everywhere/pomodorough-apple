@@ -4921,7 +4921,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 run_xcode_tests.SimulatorLifecycleError,
-                "direct wrapper identity unavailable",
+                "direct wrapper process identity unavailable",
             ):
                 run_xcode_tests.await_direct_process_identity(2222, 1.0)
 
@@ -5891,13 +5891,23 @@ class XcodeTestRunnerTests(unittest.TestCase):
     def test_darwin_peer_binding_rejects_stable_wrong_process(self) -> None:
         reported = darwin_direct_identity(2222, 30, 40)
         replacement = darwin_direct_identity(2222, 31, 40)
+        test_thread = threading.get_ident()
+        real_sleep = time.sleep
+        current_thread_sleeps: list[float] = []
+
+        def thread_filtered_sleep(seconds: float) -> None:
+            if threading.get_ident() == test_thread:
+                current_thread_sleeps.append(seconds)
+            else:
+                real_sleep(seconds)
+
         with mock.patch.object(
             run_xcode_tests, "accept_direct_peer", return_value=92
         ), mock.patch.object(
             run_xcode_tests, "stable_darwin_peer_identity", return_value=replacement
         ) as inspect, mock.patch.object(
-            run_xcode_tests.time, "sleep"
-        ) as sleep, mock.patch.object(run_xcode_tests.os, "close") as close:
+            run_xcode_tests.time, "sleep", side_effect=thread_filtered_sleep
+        ), mock.patch.object(run_xcode_tests.os, "close") as close:
             with self.assertRaisesRegex(
                 run_xcode_tests.SimulatorLifecycleError,
                 "forged direct peer identity",
@@ -5906,7 +5916,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     91, Path("target.sock"), reported, time.monotonic() + 1
                 )
         inspect.assert_called_once_with(92, reported.pid)
-        sleep.assert_not_called()
+        self.assertEqual(current_thread_sleeps, [])
         self.assertEqual(close.call_args_list, [mock.call(92)])
 
     def test_darwin_peer_binding_closes_real_peer_after_identity_timeout(self) -> None:
