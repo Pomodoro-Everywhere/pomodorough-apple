@@ -266,6 +266,8 @@ final class RoomReplicationController {
             let invite = try dependencies.encodeInvite(room.roomID, room.roomName, ticket, secret)
             return .inviteRefreshed(invite)
         } catch {
+            Self.logger.error("refreshInvite failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return .failed(error.localizedDescription)
         }
     }

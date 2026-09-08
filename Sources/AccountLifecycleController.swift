@@ -158,6 +158,8 @@ final class AccountLifecycleController {
             return .authenticated(response.user)
         } catch {
             guard owns(operation) else { return .stale }
+            Self.logger.error("authenticate failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return .failed(error.localizedDescription)
         }
     }
@@ -221,7 +223,10 @@ final class AccountLifecycleController {
         } catch AppError.unauthorized {
             return owns(operation) ? .unauthorized : .ignored
         } catch {
-            return owns(operation) && verificationOwner == owner ? .retry : .ignored
+            guard owns(operation), verificationOwner == owner else { return .ignored }
+            Self.logger.error("verifyRestoredSession failed, retrying: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
+            return .retry
         }
     }
 
@@ -329,6 +334,8 @@ final class AccountLifecycleController {
             try await api.clearTokens()
             return true
         } catch {
+            Self.logger.error("clearTokens failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return false
         }
     }

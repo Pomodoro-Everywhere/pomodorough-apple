@@ -1031,6 +1031,142 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains("restore-clear-refresh"))
     }
 
+    // AP36: remaining auth, phase, and invite boundaries keep their
+    // user-visible outcome and capture Error-only with no PII.
+    @Test @MainActor
+    func authenticateTransportFailureStaysFailedAndCaptures() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let scenario = "apple-api-coverage-account-delete-transport"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let controller = AccountLifecycleController(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: TestLogoutRevocationStore()
+        )
+        let operation = controller.currentOperation
+        let secretDevice = "secret-device-auth-0001"
+        let transition = await controller.authenticate(
+            operation, deviceID: secretDevice, platform: "macos"
+        )
+        guard case .failed = transition else {
+            Issue.record("Expected failed, got \(transition)")
+            return
+        }
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains(secretDevice))
+    }
+
+    @Test @MainActor
+    func verifyRetryFailureStaysRetryAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let scenario = "apple-api-coverage-account-delete-transport"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let client = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await client.restoreTokens())
+        let controller = AccountLifecycleController(
+            api: client,
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: TestLogoutRevocationStore()
+        )
+        let operation = controller.currentOperation
+        let transition = await controller.verifyRestoredSession(
+            operation, isSignedIn: true, hasAccountState: true
+        )
+        #expect(transition == .retry)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func clearTokensFailureStaysFalseAndCaptures() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let store = RecordingTokenStore(
+            tokens: TokenPair(
+                accessToken: "clear-access", accessTokenExpiresAt: .distantFuture,
+                refreshToken: "clear-refresh", refreshTokenExpiresAt: .distantFuture
+            ),
+            failures: [.delete]
+        )
+        let controller = AccountLifecycleController(
+            api: APIClient(keychain: store),
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: TestLogoutRevocationStore()
+        )
+        #expect(await controller.clearTokens() == false)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("clear-access"))
+        #expect(!recorded.value[0].contains("clear-refresh"))
+    }
+
+    @Test @MainActor
+    func nextBreakPhaseFallbackKeepsSelectionAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryNextBreak.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryNextBreak-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir),
+            alarmScheduler: RecordingAlarmScheduler(),
+            sharedCoreProvider: { throw SharedCoreError.resourceMissing }
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        #expect(model.nextBreakPhase() == .focus)
+        #expect(recorded.value.count == 1)
+    }
+
+    @Test @MainActor
+    func refreshInviteTicketFailureStaysFailedAndCaptures() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .iroh)
+        let secret = Data(repeating: 11, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        var local = PersistedTimerState.fresh()
+        local.deviceId = "device-sentry-invite"
+        _ = try fixture.store.createRoom(
+            roomID: roomID, roomSecret: secret, name: "Secret Invite Room",
+            returnState: local, genesis: sentryRoomGenesis(from: local)
+        )
+        let roomState = try #require(fixture.store.activeRoomState)
+        fixture.workspace.value = sentryRoomWorkspace(from: roomState)
+        fixture.controller.setSceneActive(true, environment: sentryRoomEnvironment(for: roomState))
+        await fixture.service.setTicketError(.endpointUnavailable)
+        let transition = await fixture.controller.refreshInvite(
+            environment: sentryRoomEnvironment(for: roomState)
+        )
+        guard case .failed = transition else {
+            Issue.record("Expected failed, got \(transition)")
+            return
+        }
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("Secret Invite Room"))
+        #expect(!recorded.value[0].contains(roomID))
+    }
+
     private func sentryStrippedTimerJSON(removing keys: [String]) throws -> Data {
         let data = try JSONEncoder.api.encode(PersistedTimerState.fresh())
         let object = try JSONSerialization.jsonObject(with: data)
@@ -1125,9 +1261,14 @@ private enum SentryRoomServiceError: Error {
 private actor SentryRoomServiceStub: RoomReplicationServing {
     private(set) var startedContexts: [IrohServiceContext] = []
     private var startError: SentryRoomServiceError?
+    private var ticketError: SentryRoomServiceError?
 
     func setStartError(_ error: SentryRoomServiceError?) {
         startError = error
+    }
+
+    func setTicketError(_ error: SentryRoomServiceError?) {
+        ticketError = error
     }
 
     func start(_ context: IrohServiceContext) async throws -> String {
@@ -1137,7 +1278,10 @@ private actor SentryRoomServiceStub: RoomReplicationServing {
     }
 
     func stop() async {}
-    func currentEndpointTicket() async throws -> String { "endpoint-ticket" }
+    func currentEndpointTicket() async throws -> String {
+        if let ticketError { throw ticketError }
+        return "endpoint-ticket"
+    }
     func syncNow() async {}
     func markConflict(roomID: String?) async {}
     func join(invite: IrohRoomInvite) async throws {}

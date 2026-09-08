@@ -1992,6 +1992,8 @@ final class AppModel {
                 core: core
             )
         } catch {
+            Self.logger.error("nextBreakPhase fallback: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return timerState.settings.selectedPhase
         }
     }
