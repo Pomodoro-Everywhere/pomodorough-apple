@@ -63,7 +63,12 @@ PEER_IDENTITY_COMPLETION_RESERVE_SECONDS = 0.05
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 4.0
-DIRECT_WRAPPER_HANDSHAKE_SECONDS = 8.0
+# Hosted run 34200493931: 4 consecutive handshake timeouts over ~115s wall
+# (07:49:53 preflight bootout+absence, 07:50:18 diagnostic, 07:51:04 marker
+# census, 07:51:17 infra) after 474-test suite in 213s + ~4.5min build.
+# Local handshake is 0.07-0.09s; hosted needs >8s (>100x) under CPU/libproc
+# starvation. 30s keeps hostile bounded while giving slow hosts 375x margin.
+DIRECT_WRAPPER_HANDSHAKE_SECONDS = 30.0
 LAUNCHCTL_PROCESS_CLEANUP_SECONDS = 2.0
 LAUNCHCTL_AUTHENTICATION_SECONDS = DIRECT_WRAPPER_HANDSHAKE_SECONDS
 LAUNCHCTL_RETRY_SECONDS = 1.0
@@ -1005,6 +1010,15 @@ def bounded_wait(deadline: float | None, maximum: float) -> float:
 
 def reserved_deadline(deadline: float | None, reserve: float) -> float | None:
     return None if deadline is None else deadline - reserve
+
+
+def direct_handshake_progress_deadline(
+    setup_deadline: float | None,
+) -> float:
+    progress_by = time.monotonic() + DIRECT_WRAPPER_HANDSHAKE_SECONDS
+    if setup_deadline is None:
+        return progress_by
+    return min(progress_by, setup_deadline)
 
 
 def peer_identity_poll_deadline(deadline: float) -> float:
@@ -4511,7 +4525,7 @@ def await_direct_identity(
                 listener,
                 channel.wrapper_socket_path,
                 process.pid,
-                handshake_by,
+                direct_handshake_progress_deadline(setup_deadline),
             )
             channel.wrapper_pending_peer = owned_direct_peer(peer)
             channel.wrapper_peer = channel.wrapper_pending_peer
@@ -4520,7 +4534,9 @@ def await_direct_identity(
             return identity
         identity = channel.wrapper
         if identity is not None:
-            current = bounded_process_identity(process.pid, handshake_by)
+            current = bounded_process_identity(
+                process.pid, direct_handshake_progress_deadline(setup_deadline)
+            )
             if (
                 identity.pid != process.pid
                 or current is None

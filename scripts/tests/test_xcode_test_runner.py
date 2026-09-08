@@ -6079,6 +6079,87 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertEqual(channel.wrapper_listener, -1)
         bind.assert_called_once_with(91, Path("wrapper.sock"), current.pid, mock.ANY)
 
+    def test_slow_host_delayed_wrapper_ready_still_succeeds(self) -> None:
+        current = darwin_direct_identity(2222, 10, 20)
+        channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper_listener=91,
+            wrapper_socket_path=Path("wrapper.sock"),
+            peer_identity_required=True,
+        )
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid, process.poll.return_value = current.pid, None
+        clock, bind_deadlines = [100.0], []
+
+        def delayed_pump(target: object, _deadline: float) -> None:
+            assert isinstance(target, run_xcode_tests.DirectChannel)
+            if not target.wrapper_ready:
+                clock[0] += 15.0
+                target.wrapper_ready = True
+
+        def record_bind(_l: object, _p: object, _pid: int, by: float) -> object:
+            bind_deadlines.append(by)
+            return 92, current
+
+        with mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(
+            run_xcode_tests.time, "sleep", side_effect=lambda s: clock.__setitem__(0, clock[0] + s)
+        ), mock.patch.object(
+            run_xcode_tests, "pump_direct_channel", side_effect=delayed_pump
+        ), mock.patch.object(
+            run_xcode_tests, "bind_direct_wrapper_peer", side_effect=record_bind
+        ):
+            observed = run_xcode_tests.await_direct_identity(channel, process, None)
+        self.assertEqual(observed, current)
+        self.assertEqual(channel.wrapper, current)
+        self.assertEqual(len(bind_deadlines), 1)
+        self.assertGreater(bind_deadlines[0], 100.0 + 8.0)
+        self.assertAlmostEqual(bind_deadlines[0], 115.0 + 30.0, delta=0.001)
+
+    def test_slow_host_forged_and_silent_still_fail_closed(self) -> None:
+        current = darwin_direct_identity(2222, 10, 20)
+        forged = run_xcode_tests.SimulatorLifecycleError(
+            "forged direct wrapper identity"
+        )
+        ready_channel = run_xcode_tests.DirectChannel(
+            -1,
+            b"key",
+            wrapper_listener=91,
+            wrapper_socket_path=Path("wrapper.sock"),
+            peer_identity_required=True,
+            wrapper_ready=True,
+        )
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid, process.poll.return_value = current.pid, None
+        with mock.patch.object(
+            run_xcode_tests, "pump_direct_channel"
+        ), mock.patch.object(
+            run_xcode_tests, "bind_direct_wrapper_peer", side_effect=forged
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "forged direct wrapper identity",
+            ):
+                run_xcode_tests.await_direct_identity(ready_channel, process, None)
+        silent = run_xcode_tests.DirectChannel(
+            -1, b"key", peer_identity_required=True
+        )
+        clock = [50.0]
+        with mock.patch.object(
+            run_xcode_tests.time, "monotonic", side_effect=lambda: clock[0]
+        ), mock.patch.object(
+            run_xcode_tests.time, "sleep", side_effect=lambda _s: clock.__setitem__(0, clock[0] + 5.0)
+        ), mock.patch.object(
+            run_xcode_tests, "pump_direct_channel"
+        ):
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "direct wrapper handshake timeout",
+            ):
+                run_xcode_tests.await_direct_identity(silent, process, None)
+
     def test_wrapper_binding_rejects_process_substitution(self) -> None:
         replacement = darwin_direct_identity(3333, 11, 21)
         with mock.patch.object(
@@ -10341,9 +10422,9 @@ class XcodeTestRunnerTests(unittest.TestCase):
         result, _, evidence = self.run_fake_xcode(
             """
             import time
-            time.sleep(30)
+            time.sleep(60)
             """,
-            idle_timeout=30,
+            idle_timeout=60,
             wall_timeout=wall_timeout,
         )
         elapsed = time.monotonic() - started
