@@ -7098,6 +7098,34 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 )
         self.assertFalse(job.acknowledgement_path.exists())
 
+    def test_expired_deadline_sidecar_wait_returns_promptly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory))
+            expired = time.monotonic() - 1.0
+            started = time.monotonic()
+            with self.assertRaisesRegex(
+                run_xcode_tests.SimulatorLifecycleError,
+                "contained coalition identity unavailable",
+            ):
+                run_xcode_tests.wait_for_containment_sidecar(job, expired)
+            self.assertLess(time.monotonic() - started, 1.0)
+            deadline = 1000.0
+            sleeps: list[float] = []
+            with mock.patch.object(
+                run_xcode_tests.time, "monotonic", side_effect=[999.0, 1000.5, 1000.5]
+            ), mock.patch.object(
+                run_xcode_tests.time, "sleep", side_effect=sleeps.append
+            ), mock.patch.object(
+                run_xcode_tests, "read_json", return_value=None
+            ):
+                with self.assertRaisesRegex(
+                    run_xcode_tests.SimulatorLifecycleError,
+                    "contained coalition identity unavailable",
+                ):
+                    run_xcode_tests.wait_for_containment_sidecar(job, deadline)
+            self.assertEqual(len(sleeps), 1)
+            self.assertGreaterEqual(sleeps[0], 0.0)
+
     def test_corrupt_coalition_sidecar_fails_before_acknowledgement(self) -> None:
         wrapper = run_xcode_tests.ProcessIdentity(2222, (10, 20), None)
         with tempfile.TemporaryDirectory() as directory:

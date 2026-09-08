@@ -4825,7 +4825,7 @@ def wait_for_containment_sidecar(job: LaunchdJob, deadline: float) -> object:
         status = read_json(job.status_path)
         if status is not None:
             raise SimulatorLifecycleError("contained wrapper exited before acknowledgement")
-        time.sleep(min(DESCENDANT_POLL_SECONDS, deadline - time.monotonic()))
+        time.sleep(max(0.0, min(DESCENDANT_POLL_SECONDS, deadline - time.monotonic())))
     raise SimulatorLifecycleError("contained coalition identity unavailable")
 
 
