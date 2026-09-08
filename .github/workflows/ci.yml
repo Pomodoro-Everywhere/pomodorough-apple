@@ -241,8 +241,11 @@ jobs:
               verify_project()
           PY
 
-      - name: Resolve Swift packages
+      - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
           xcodebuild
           -project Pomodorough.xcodeproj
           -scheme Pomodorough-iOS
@@ -256,6 +259,7 @@ jobs:
           -scheme Pomodorough-iOS
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build-for-testing
@@ -275,6 +279,7 @@ jobs:
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
           -resultBundlePath "$IOS_RESULT_BUNDLE"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test-without-building
@@ -302,6 +307,7 @@ jobs:
           -scheme Pomodorough-iOS
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build
@@ -313,6 +319,7 @@ jobs:
           -scheme Pomodorough-macOS
           -configuration Debug
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build
@@ -337,6 +344,7 @@ jobs:
           -destination "platform=macOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
           -resultBundlePath /tmp/PomodoroughTestResults/Pomodorough-macOS.xcresult
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
@@ -349,6 +357,7 @@ jobs:
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
           -resultBundlePath /tmp/PomodoroughTestResults/PersistedStateCompatibility-iOS.xcresult
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
@@ -361,6 +370,7 @@ jobs:
           -destination "platform=macOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
           -resultBundlePath /tmp/PomodoroughTestResults/PersistedStateCompatibility-macOS.xcresult
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test

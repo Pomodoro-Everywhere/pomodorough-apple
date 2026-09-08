@@ -223,8 +223,11 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Resolve Swift packages
+      - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
           xcodebuild
           -project Pomodorough.xcodeproj
           -scheme Pomodorough-iOS
@@ -238,6 +241,7 @@ jobs:
           -scheme Pomodorough-iOS
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
@@ -249,6 +253,7 @@ jobs:
           -scheme Pomodorough-macOS
           -destination "platform=macOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
@@ -261,6 +266,7 @@ jobs:
           -configuration Release
           -destination "$IOS_DESTINATION"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build
@@ -273,6 +279,7 @@ jobs:
           -configuration Release
           -destination "generic/platform=iOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build
@@ -286,6 +293,7 @@ jobs:
           -destination "generic/platform=macOS"
           -derivedDataPath "$DERIVED_DATA_PATH"
           ARCHS=arm64
+          -disableAutomaticPackageResolution
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build
