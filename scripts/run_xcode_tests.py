@@ -2641,7 +2641,9 @@ def spawn_gated_direct_target(
         if gate_read >= 0:
             close_direct_descriptor(resources.descriptors, gate_read)
             gate_read = -1
-        handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+        # Wrapper-internal rendezvous shares the parent await_direct_identity
+        # budget; 4s converts slow-host load into false handshake timeouts.
+        handshake_by = time.monotonic() + DIRECT_WRAPPER_HANDSHAKE_SECONDS
         peer = owned_direct_peer(
             accept_direct_peer(listener_descriptor, handshake_by)
         )
@@ -2840,6 +2842,12 @@ def report_observed_direct_descendants(
             report_new_direct_descendants(reporter, observed, updated)
         except BaseException as report_error:
             append_secondary_error(error, "partial marker report failed", report_error)
+            raise
+        if isinstance(error, Exception):
+            # Marker census is a full-system libproc scan; readiness probes
+            # contain nothing of ours, so a census timeout under load must not
+            # fail command start. Keep ppid-chain plus partial hits and swallow.
+            return updated
         raise
     report_new_direct_descendants(reporter, observed, updated)
     return updated

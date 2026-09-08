@@ -2582,12 +2582,17 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertGreater(inspect.call_args.args[1], 0)
 
     def test_darwin_monitor_reports_partial_marker_census_before_timeout(self) -> None:
+        # Round-52: marker census timeout must not fail command start. The
+        # full-system libproc scan can stall under load while readiness probes
+        # contain nothing of ours; keep ppid-chain plus partial hits and still
+        # send status instead of converting load into false 127.
         wrapper = darwin_direct_identity(800, 8, 7000000)
         target = darwin_direct_identity(900, 10, 7100840)
         descendant = darwin_direct_identity(901, 11, 7100841)
         process = mock.Mock(spec=subprocess.Popen)
         process.pid = target.pid
         trace: list[str] = []
+        process.poll.side_effect = lambda: trace.append("poll") or 0
 
         def partial_census(
             _marker: str,
@@ -2610,15 +2615,129 @@ class XcodeTestRunnerTests(unittest.TestCase):
             run_xcode_tests,
             "report_direct_event",
             side_effect=lambda _reporter, payload: trace.append(str(payload["event"])),
+        ), mock.patch.object(
+            run_xcode_tests, "reap_direct_orphans"
+        ), mock.patch.object(
+            run_xcode_tests.time, "sleep", side_effect=RuntimeError("stop monitor")
         ):
-            with self.assertRaisesRegex(
-                run_xcode_tests.OperationDeadlineExpired, "marker census expired"
-            ):
+            with self.assertRaisesRegex(RuntimeError, "stop monitor"):
                 run_xcode_tests.monitor_direct_command(
                     process, wrapper, reporter, target, "marker", 92
                 )
-        self.assertEqual(trace, ["descendant"])
-        process.poll.assert_not_called()
+        self.assertEqual(trace, ["descendant", "poll", "status"])
+        process.poll.assert_called()
+
+    def test_marker_census_timeout_returns_partial_then_sweeps(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        chained = darwin_direct_identity(901, 11, 7100841)
+        swept = darwin_direct_identity(902, 12, 7100842)
+        events: list[int] = []
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+
+        def record(_reporter: object, payload: dict[str, object]) -> None:
+            identity = payload["identity"]
+            assert isinstance(identity, dict)
+            events.append(int(identity["pid"]))
+
+        def timeout_census(
+            _marker: str, _deadline: float,
+            marked: set[run_xcode_tests.ProcessIdentity],
+        ) -> set[run_xcode_tests.ProcessIdentity]:
+            marked.add(chained)
+            raise run_xcode_tests.OperationDeadlineExpired("marker census expired")
+
+        with mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", side_effect=set
+        ), mock.patch.object(
+            run_xcode_tests, "inspect_marked_darwin_processes", side_effect=timeout_census
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event", side_effect=record
+        ):
+            updated = run_xcode_tests.report_observed_direct_descendants(
+                {wrapper}, True, "marker", reporter
+            )
+        self.assertEqual(updated, {wrapper, chained})
+        self.assertEqual(events, [chained.pid])
+        events.clear()
+        with mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", side_effect=set
+        ), mock.patch.object(
+            run_xcode_tests, "inspect_marked_darwin_processes", return_value={swept}
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event", side_effect=record
+        ):
+            swept_updated = run_xcode_tests.report_observed_direct_descendants(
+                updated, True, "marker", reporter
+            )
+        self.assertEqual(swept_updated, {wrapper, chained, swept})
+        self.assertEqual(events, [swept.pid])
+
+    def test_marker_census_interrupt_still_fails_closed(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        chained = darwin_direct_identity(901, 11, 7100841)
+        reporter = run_xcode_tests.DirectReporter(91, b"key")
+        with mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", return_value={wrapper, chained}
+        ), mock.patch.object(
+            run_xcode_tests,
+            "inspect_marked_darwin_processes",
+            side_effect=KeyboardInterrupt("census interrupted"),
+        ), mock.patch.object(run_xcode_tests, "report_direct_event") as report:
+            with self.assertRaises(KeyboardInterrupt):
+                run_xcode_tests.report_observed_direct_descendants(
+                    {wrapper}, True, "marker", reporter
+                )
+        report.assert_called_once_with(mock.ANY, mock.ANY)
+
+    def test_spawn_gated_target_uses_wrapper_handshake_budget(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 7000000)
+        target = darwin_direct_identity(900, 10, 7100840)
+        deadlines: list[float] = []
+        process = mock.Mock(spec=subprocess.Popen)
+        peer = mock.Mock()
+        peer.fileno.return_value = 93
+
+        def fake_accept(_listener: int, deadline: float) -> object:
+            deadlines.append(deadline)
+            return peer
+
+        def fake_listener(
+            resources: run_xcode_tests.DirectSpawnResources, _path: object
+        ) -> int:
+            resources.descriptors.add(92)
+            return 92
+
+        def fake_identity(
+            _process: object, _wrapper: object, _descriptor: int, deadline: float
+        ) -> run_xcode_tests.ProcessIdentity:
+            deadlines.append(deadline)
+            return target
+
+        with mock.patch.object(run_xcode_tests, "LIBPROC", object()), mock.patch.object(
+            run_xcode_tests.time, "monotonic", return_value=1000.0
+        ), mock.patch.object(
+            run_xcode_tests, "acquire_direct_listener", side_effect=fake_listener
+        ), mock.patch.object(
+            run_xcode_tests.subprocess, "Popen", return_value=process
+        ), mock.patch.object(
+            run_xcode_tests, "accept_direct_peer", side_effect=fake_accept
+        ), mock.patch.object(
+            run_xcode_tests, "direct_target_identity", side_effect=fake_identity
+        ), mock.patch.object(
+            run_xcode_tests, "report_direct_event"
+        ), mock.patch.object(run_xcode_tests.os, "close"):
+            observed_process, observed_identity, _peer = (
+                run_xcode_tests.spawn_gated_direct_target(
+                    ["target"], wrapper, mock.Mock(), "parent", "wrapper"
+                )
+            )
+        self.assertIs(observed_process, process)
+        self.assertEqual(observed_identity, target)
+        expected = 1000.0 + run_xcode_tests.DIRECT_WRAPPER_HANDSHAKE_SECONDS
+        self.assertEqual(deadlines, [expected, expected])
+        slow_host_rendezvous = 10.0
+        self.assertGreater(slow_host_rendezvous, run_xcode_tests.CONTAINMENT_HANDSHAKE_SECONDS)
+        self.assertLess(slow_host_rendezvous, run_xcode_tests.DIRECT_WRAPPER_HANDSHAKE_SECONDS)
 
     def test_darwin_monitor_rejects_exited_target_when_identity_disappears(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
