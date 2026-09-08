@@ -289,6 +289,54 @@ class OperationDeadlineExpired(SimulatorLifecycleError):
 
 DeadlineResult = TypeVar("DeadlineResult")
 DESCRIPTOR_CLOSE_LOCK = threading.RLock()
+# Hosted run 34204502227: preflight dies because EVERY launchd operation
+# starves under load (marker census, process identity, child census,
+# launchctl timeout cleanup, handshake absence-confirmation). Preflight
+# readiness (simctl list/boot/bootstatus/listapps) contains nothing of ours
+# yet, so it must not pay for launchd containment. This table proves
+# absence from our own spawns (Popen poll + active launchd labels), never
+# via launchctl, so a starved launchd cannot block the proof.
+_TRACKED_CHILDREN_LOCK = threading.Lock()
+_TRACKED_DIRECT_CHILDREN: dict[int, subprocess.Popen[bytes]] = {}
+_TRACKED_CONTAINED_JOBS: dict[str, LaunchdJob] = {}
+
+
+def track_direct_child(process: subprocess.Popen[bytes]) -> None:
+    with _TRACKED_CHILDREN_LOCK:
+        _TRACKED_DIRECT_CHILDREN[id(process)] = process
+
+
+def untrack_direct_child(process: subprocess.Popen[bytes]) -> None:
+    with _TRACKED_CHILDREN_LOCK:
+        _TRACKED_DIRECT_CHILDREN.pop(id(process), None)
+
+
+def track_contained_job(job: LaunchdJob) -> None:
+    with _TRACKED_CHILDREN_LOCK:
+        _TRACKED_CONTAINED_JOBS[job.label] = job
+
+
+def untrack_contained_job(job: LaunchdJob) -> None:
+    with _TRACKED_CHILDREN_LOCK:
+        _TRACKED_CONTAINED_JOBS.pop(job.label, None)
+
+
+def tracked_children_live() -> bool:
+    with _TRACKED_CHILDREN_LOCK:
+        if _TRACKED_CONTAINED_JOBS:
+            return True
+        processes = list(_TRACKED_DIRECT_CHILDREN.values())
+    live = False
+    for process in processes:
+        try:
+            exited = process.poll() is not None
+        except BaseException:
+            exited = False
+        if exited:
+            untrack_direct_child(process)
+        else:
+            live = True
+    return live
 
 
 @dataclass
@@ -3164,6 +3212,7 @@ def cleanup_direct_spawn(
             lambda descriptor=descriptor: os.close(descriptor),
         )
     if process is not None:
+        untrack_direct_child(process)
         record_cleanup_failure(
             errors,
             "",
@@ -3582,8 +3631,11 @@ def spawn_direct_job(
 ) -> DirectJob:
     resources = DirectSpawnResources()
     channel: DirectChannel | None = None
+    tracked_process: subprocess.Popen[bytes] | None = None
     try:
         pending = prepare_direct_job(resources, command)
+        tracked_process = pending.process
+        track_direct_child(tracked_process)
         channel = pending.channel
         marker = direct_job_marker(channel.key) if LIBPROC is not None else None
         identity = await_direct_identity(
@@ -3618,6 +3670,8 @@ def spawn_direct_job(
         if channel is not None:
             record_cleanup_failure(errors, "channel close failed", lambda: close_direct_channel(channel))
         errors.extend(cleanup_direct_spawn(resources, deadline))
+        if tracked_process is not None:
+            untrack_direct_child(tracked_process)
         append_direct_spawn_cleanup(error, errors)
         raise
 
@@ -3900,6 +3954,7 @@ def spawn_contained_job(
         )
         if setup_deadline is not None and time.monotonic() >= setup_deadline:
             raise SimulatorLifecycleError("containment setup deadline expired")
+        track_contained_job(bound_job)
         return bound_job
     except BaseException as error:
         cleanup_errors = containment_setup_cleanup_errors(
@@ -5048,7 +5103,10 @@ def abort_containment_handshake(
     cleanup_by = cleanup_deadline(deadline, cleanup_maximum)
     deadlines = containment_cleanup_deadlines(cleanup_by)
     errors: list[str] = []
-    record_containment_finalization(errors, job, coalition_id, deadlines)
+    try:
+        record_containment_finalization(errors, job, coalition_id, deadlines)
+    finally:
+        untrack_contained_job(job)
     detail = cleanup_error_text(errors)
     if detail is not None:
         raise SimulatorLifecycleError(detail)
@@ -5069,6 +5127,7 @@ def cleanup_coalition_id(
 def cleanup_contained_job(
     job: LaunchdJob, deadline: float | None, _signal_root: bool
 ) -> None:
+    untrack_contained_job(job)
     cleanup_by = cleanup_deadline(deadline, CONTAINED_JOB_CLEANUP_SECONDS)
     deadlines = containment_cleanup_deadlines(cleanup_by)
     coalition_id = cleanup_coalition_id(job, deadlines)
@@ -5083,15 +5142,18 @@ def cleanup_contained_job(
 def lifecycle_cleanup_error(
     job: LaunchdJob, deadline: float | None, _signal_root: bool
 ) -> str | None:
-    cleanup_by = cleanup_deadline(deadline, LIFECYCLE_CLEANUP_SECONDS)
-    teardown_by = reserved_deadline(cleanup_by, CLEANUP_RESERVE_SECONDS)
-    assert teardown_by is not None
-    deadlines = containment_cleanup_deadlines(cleanup_by, teardown_by)
-    coalition_id = cleanup_coalition_id(job, deadlines)
-    errors: list[str] = []
-    record_containment_signals(errors, coalition_id, deadlines.signal_by)
-    record_containment_finalization(errors, job, coalition_id, deadlines)
-    return cleanup_error_text(errors)
+    try:
+        cleanup_by = cleanup_deadline(deadline, LIFECYCLE_CLEANUP_SECONDS)
+        teardown_by = reserved_deadline(cleanup_by, CLEANUP_RESERVE_SECONDS)
+        assert teardown_by is not None
+        deadlines = containment_cleanup_deadlines(cleanup_by, teardown_by)
+        coalition_id = cleanup_coalition_id(job, deadlines)
+        errors: list[str] = []
+        record_containment_signals(errors, coalition_id, deadlines.signal_by)
+        record_containment_finalization(errors, job, coalition_id, deadlines)
+        return cleanup_error_text(errors)
+    finally:
+        untrack_contained_job(job)
 
 
 def record_lifecycle_cleanup(
@@ -5363,6 +5425,7 @@ def cleanup_direct_job(
                 time.sleep(bounded_wait(observation_by, pause))
         drain_direct_job(job, observation_by, errors)
     finally:
+        untrack_direct_child(job.process)
         record_direct_cleanup(
             errors, lambda: force_direct_wrapper_exit(job, cleanup_by)
         )
@@ -5858,7 +5921,15 @@ def lifecycle_process(
     command: list[str], timeout: float, deadline: float | None
 ) -> LifecycleOutcome:
     if sys.platform == "darwin":
-        return contained_lifecycle_process(command, timeout, deadline)
+        # Hosted run 34204502227: preflight launchd containment starves
+        # before any simulator work starts. Readiness probes contain
+        # nothing of ours, so run them direct; xcodebuild teardown keeps
+        # full containment because real children exist there. Fail-closed:
+        # any live tracked child forces the contained path, and the
+        # forgery/identity checks below are untouched.
+        if tracked_children_live():
+            return contained_lifecycle_process(command, timeout, deadline)
+        return direct_lifecycle_process(command, timeout, deadline)
     return direct_lifecycle_process(command, timeout, deadline)
 
 

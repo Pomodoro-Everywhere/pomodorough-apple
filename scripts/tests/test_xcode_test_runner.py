@@ -604,6 +604,14 @@ def direct_job(root: Path, marker: str | None = None) -> run_xcode_tests.DirectJ
     )
 
 
+def live_tracked_child(test: unittest.TestCase) -> mock.Mock:
+    process = mock.Mock(spec=subprocess.Popen)
+    process.poll.return_value = None
+    run_xcode_tests.track_direct_child(process)
+    test.addCleanup(run_xcode_tests.untrack_direct_child, process)
+    return process
+
+
 def authenticated_direct_spawn(
     job: run_xcode_tests.DirectJob,
 ) -> Callable[..., run_xcode_tests.DirectJob]:
@@ -8319,6 +8327,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
                 "coalition cleanup incomplete"
             )
+            live_tracked_child(self)
             with mock.patch.object(
                 run_xcode_tests.sys, "platform", "darwin"
             ), mock.patch.object(
@@ -8352,6 +8361,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             cleanup_error = run_xcode_tests.SimulatorLifecycleError(
                 "coalition cleanup incomplete"
             )
+            live_tracked_child(self)
             with mock.patch.object(
                 run_xcode_tests.sys, "platform", "darwin"
             ), mock.patch.object(
@@ -8443,6 +8453,10 @@ class XcodeTestRunnerTests(unittest.TestCase):
         self.assertFalse(job.root.exists())
 
     def test_darwin_lifecycle_selects_launchd_coalition(self) -> None:
+        # Round-51: darwin keeps launchd containment only while our own
+        # tracked children are live; preflight with an empty table goes
+        # direct (see test_darwin_preflight_without_tracked_children).
+        live_tracked_child(self)
         expected = run_xcode_tests.LifecycleOutcome(["target"], 0, "contained\n", "")
         with mock.patch.object(
             run_xcode_tests.sys, "platform", "darwin"
@@ -8484,6 +8498,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
 
     def test_darwin_prelaunch_containment_failure_has_no_direct_fallback(self) -> None:
         failure = run_xcode_tests.SimulatorLifecycleError("bootstrap failed")
+        live_tracked_child(self)
         with mock.patch.object(run_xcode_tests.sys, "platform", "darwin"), mock.patch.object(
             run_xcode_tests, "contained_lifecycle_process", side_effect=failure
         ) as contained, mock.patch.object(
@@ -8508,6 +8523,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 args = simulator_args(Path(directory))
                 args.diagnostics_dir.mkdir()
                 failure = run_xcode_tests.SimulatorLifecycleError(detail)
+                live_tracked_child(self)
                 with mock.patch.object(
                     run_xcode_tests.sys, "platform", "darwin"
                 ), mock.patch.object(
@@ -8525,6 +8541,104 @@ class XcodeTestRunnerTests(unittest.TestCase):
             launchd.assert_called_once_with(["target"], 120, None)
             direct.assert_not_called()
             self.assertFalse((args.diagnostics_dir / "simulator-lifecycle.log").exists())
+
+    def test_darwin_preflight_without_tracked_children_avoids_launchd(self) -> None:
+        self.assertFalse(run_xcode_tests.tracked_children_live())
+        expected = run_xcode_tests.LifecycleOutcome(["target"], 0, "direct\n", "")
+        with mock.patch.object(
+            run_xcode_tests.sys, "platform", "darwin"
+        ), mock.patch.object(
+            run_xcode_tests, "direct_lifecycle_process", return_value=expected
+        ) as direct, mock.patch.object(
+            run_xcode_tests, "contained_lifecycle_process"
+        ) as contained, mock.patch.object(
+            run_xcode_tests, "launchctl_run", side_effect=AssertionError("launchctl")
+        ) as launchctl, mock.patch.object(
+            run_xcode_tests, "spawn_contained_job", side_effect=AssertionError("contained")
+        ) as spawn:
+            result = run_xcode_tests.lifecycle_process(["target"], 1, None)
+        self.assertIs(result, expected)
+        direct.assert_called_once_with(["target"], 1, None)
+        contained.assert_not_called()
+        launchctl.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_darwin_preflight_with_tracked_children_still_contains(self) -> None:
+        live_tracked_child(self)
+        expected = run_xcode_tests.LifecycleOutcome(["target"], 0, "contained\n", "")
+        with mock.patch.object(
+            run_xcode_tests.sys, "platform", "darwin"
+        ), mock.patch.object(
+            run_xcode_tests, "contained_lifecycle_process", return_value=expected
+        ) as contained, mock.patch.object(
+            run_xcode_tests, "direct_lifecycle_process"
+        ) as direct:
+            result = run_xcode_tests.lifecycle_process(["target"], 1, None)
+        self.assertIs(result, expected)
+        contained.assert_called_once_with(["target"], 1, None)
+        direct.assert_not_called()
+
+    def test_tracked_children_proof_of_absence_needs_no_launchctl(self) -> None:
+        exited = mock.Mock(spec=subprocess.Popen)
+        exited.poll.return_value = 0
+        run_xcode_tests.track_direct_child(exited)
+        self.addCleanup(run_xcode_tests.untrack_direct_child, exited)
+        with mock.patch.object(
+            run_xcode_tests, "launchctl_run", side_effect=AssertionError("launchctl")
+        ):
+            self.assertFalse(run_xcode_tests.tracked_children_live())
+            self.assertFalse(run_xcode_tests.tracked_children_live())
+
+    def test_tracked_children_poll_failure_fails_closed(self) -> None:
+        broken = mock.Mock(spec=subprocess.Popen)
+        broken.poll.side_effect = OSError("poll unavailable")
+        run_xcode_tests.track_direct_child(broken)
+        self.addCleanup(run_xcode_tests.untrack_direct_child, broken)
+        with mock.patch.object(
+            run_xcode_tests, "launchctl_run", side_effect=AssertionError("launchctl")
+        ):
+            self.assertTrue(run_xcode_tests.tracked_children_live())
+
+    def test_contained_teardown_releases_tracked_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            job = launchd_job(Path(directory) / "job")
+            run_xcode_tests.track_contained_job(job)
+            self.assertTrue(run_xcode_tests.tracked_children_live())
+            with mock.patch.object(
+                run_xcode_tests, "record_containment_finalization"
+            ):
+                run_xcode_tests.abort_containment_handshake(job, None, None)
+            self.assertFalse(run_xcode_tests.tracked_children_live())
+
+    def test_direct_spawn_failure_leaves_no_tracked_child(self) -> None:
+        failure = run_xcode_tests.SimulatorLifecycleError("wrapper stalled")
+        with mock.patch.object(
+            run_xcode_tests, "prepare_direct_job", side_effect=failure
+        ):
+            with self.assertRaises(run_xcode_tests.SimulatorLifecycleError):
+                run_xcode_tests.spawn_direct_job(["target"], None)
+        self.assertFalse(run_xcode_tests.tracked_children_live())
+
+    def test_direct_handshake_failure_releases_tracked_child(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        process.poll.return_value = None
+        pending = run_xcode_tests.PendingDirectJob(
+            Path("/nonexistent-root"),
+            Path("/nonexistent-root/stdout.log"),
+            Path("/nonexistent-root/stderr.log"),
+            process,
+            run_xcode_tests.DirectChannel(-1, b"0123456789abcdef0123456789abcdef"),
+            -1,
+        )
+        failure = run_xcode_tests.SimulatorLifecycleError("wrapper stalled")
+        with mock.patch.object(
+            run_xcode_tests, "prepare_direct_job", return_value=pending
+        ), mock.patch.object(
+            run_xcode_tests, "await_direct_identity", side_effect=failure
+        ):
+            with self.assertRaises(run_xcode_tests.SimulatorLifecycleError):
+                run_xcode_tests.spawn_direct_job(["target"], None)
+        self.assertFalse(run_xcode_tests.tracked_children_live())
 
     def test_successful_lifecycle_requires_launchd_absence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
