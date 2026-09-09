@@ -622,6 +622,15 @@ final class AppModel {
                 phase: timer.phase.rawValue,
                 status: status,
                 timerId: timer.id,
+                timerRevision: WatchTimerRevision(
+                    timerId: timer.id,
+                    intentId: timer.lastIntent?.commandId,
+                    phase: timer.phase.rawValue,
+                    status: timer.status.rawValue,
+                    plannedDurationMs: timer.plannedDurationMs,
+                    elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
+                    anchorAt: timer.anchorAt
+                ),
                 plannedDurationMs: timer.plannedDurationMs,
                 elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
                 anchorAt: timer.anchorAt,
@@ -648,22 +657,20 @@ final class AppModel {
         )
     }
 
-    /// Applies a watch command. Returns false when a timer-targeted command
-    /// (pause/resume/finish) names a stale timer so the caller can push a
-    /// fresh snapshot; true otherwise. Legacy commands without a timerId are
-    /// accepted and validated by the domain controller as before.
+    /// Rejects stale timer controls so the caller can push a fresh snapshot.
     @discardableResult
-    func applyWatchCommand(_ command: WatchTimerCommand) -> Bool {
+    func applyWatchCommand(_ command: WatchTimerCommand, isDeferred: Bool = false) -> Bool {
+        guard !isDeferred || command.allowsDeferredDelivery else { return false }
         switch command.name {
         case "start":
             start()
             return true
         case "pause":
-            guard isWatchCommandTargetCurrent(command) else { return false }
+            guard isWatchCommandTargetCurrent(command), activeTimer?.status == .running else { return false }
             pause()
             return true
         case "resume":
-            guard isWatchCommandTargetCurrent(command) else { return false }
+            guard isWatchCommandTargetCurrent(command), activeTimer?.status == .paused else { return false }
             resume()
             return true
         case "finish":
@@ -685,12 +692,13 @@ final class AppModel {
         }
     }
 
-    /// Timer-targeted watch commands must name the current timer. A nil
-    /// timerId means a legacy watch app that cannot name it: accept and let
-    /// the domain controller validate state as before.
+    /// Revision comparison also rejects replays after a successful mutation,
+    /// including after relaunch, without relying on the Watch's clock.
     private func isWatchCommandTargetCurrent(_ command: WatchTimerCommand) -> Bool {
-        guard let target = command.timerId else { return true }
-        return activeTimer?.id == target
+        guard let target = command.timerId,
+              let expected = command.expectedTimerRevision,
+              activeTimer?.id == target else { return false }
+        return makeWatchSnapshot().timerRevision == expected
     }
 
     func selectPhase(_ phase: TimerPhase) {

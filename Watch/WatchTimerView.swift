@@ -47,6 +47,14 @@ struct WatchTimerView: View {
                 .accessibilityLabel(sync.isReachable ? "iPhone connected" : "iPhone unreachable, showing last synced timer")
         }
         .onAppear { sync.requestSync() }
+        .alert("Timer control", isPresented: Binding(
+            get: { sync.commandError != nil },
+            set: { if !$0 { sync.commandError = nil } }
+        )) {
+            Button("OK") { sync.commandError = nil }
+        } message: {
+            Text(sync.commandError ?? "")
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { sync.requestSync() }
         }

@@ -10,6 +10,7 @@ import WatchConnectivity
 final class WatchSyncService: NSObject, ObservableObject {
     @Published private(set) var snapshot: WatchTimerSnapshot?
     @Published private(set) var isReachable = false
+    @Published var commandError: String?
 
     private let storeKey = "watch-timer-snapshot"
 
@@ -74,31 +75,68 @@ final class WatchSyncService: NSObject, ObservableObject {
         let session = WCSession.default
         guard WCSession.isSupported(),
               session.activationState == .activated
-        else { return }
+        else {
+            commandError = "iPhone connection is not ready. Try again shortly."
+            return
+        }
+        guard session.isReachable || command.allowsDeferredDelivery else {
+            commandError = "Connect to your iPhone to start a timer. Start was not queued."
+            return
+        }
+        guard let stamped = stampedTimerControl(command) else {
+            requestSync()
+            return
+        }
         let data: Data
         do {
-            data = try JSONEncoder().encode(command)
+            data = try JSONEncoder().encode(stamped)
         } catch {
             // Log-only (no Sentry on watchOS by design); command is dropped,
             // the phone remains the source of truth.
             Self.logOnce(key: "watch-command-encode", error: error)
             return
         }
+        deliver(data, command: stamped)
+    }
+
+    /// Attaches the snapshot's compare-and-set revision to timer controls.
+    /// Returns nil when the snapshot cannot ground the control.
+    private func stampedTimerControl(_ command: WatchTimerCommand) -> WatchTimerCommand? {
+        guard ["pause", "resume", "finish"].contains(command.name) else { return command }
+        guard let revision = snapshot?.timerRevision,
+              revision.timerId == command.timerId else { return nil }
+        var stamped = command
+        stamped.expectedTimerRevision = revision
+        return stamped
+    }
+
+    /// Live send with revision-checked fallback, else ordered offline queue.
+    private func deliver(_ data: Data, command: WatchTimerCommand) {
+        let session = WCSession.default
+        let allowsDeferredDelivery = command.allowsDeferredDelivery
         if session.isReachable {
             session.sendMessage(
                 [WatchSyncKeys.command: data],
                 replyHandler: nil,
-                errorHandler: { @Sendable error in
-                    // Reachable send failed (e.g. link dropped mid-send):
-                    // fall back to the ordered user-info queue so the
-                    // command is still delivered exactly once in order.
+                errorHandler: { @Sendable [weak self] error in
+                    // A fallback can arrive after newer live commands.
+                    // The phone checks the original revision before applying it.
                     Self.logOnce(key: "watch-command-send", error: error)
                     Task { @MainActor in
+                        guard allowsDeferredDelivery else {
+                            self?.commandError = "Could not confirm Start. Check your iPhone before trying again. Start was not queued."
+                            self?.requestSync()
+                            return
+                        }
                         _ = WCSession.default.transferUserInfo([WatchSyncKeys.command: data])
                     }
                 }
             )
         } else {
+            guard allowsDeferredDelivery else {
+                commandError = "Connect to your iPhone to start a timer. Start was not queued."
+                return
+            }
             // Queued offline, one transfer per command: the system holds
             // them ordered until the phone is reachable again. Application
             // context is NOT used here — it keeps only the last dictionary,
@@ -188,7 +226,8 @@ extension WatchSyncService: WCSessionDelegate {
 // (see project.yml: Sentry is a dependency of iOS/macOS targets only), so the
 // sendMessage errorHandler above stays a thin logOnce wrapper around the
 // shared WatchSyncLogDedupe (covered in the macOS/iOS unit-test bundle).
-// Queued commands need no retry UI: the phone is the source of truth and
+// Start is live-only and reports failures; other commands can be queued.
+// The phone is the source of truth and
 // re-pushes its snapshot on reachability change. The iOS-side
 // WatchSyncService captures its own encode/send failures via SentryCapture
 // and handles didReceiveUserInfo for queued commands.

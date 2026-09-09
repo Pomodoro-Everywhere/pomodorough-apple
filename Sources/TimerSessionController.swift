@@ -425,7 +425,8 @@ extension TimerSessionController {
         at date: Date,
         ownsCurrentTimer: Bool
     ) -> AlarmPlan {
-        guard let previousTimer else {
+        guard let previousTimer,
+              previousTimer.status == .running || previousTimer.status == .paused else {
             guard let currentTimer,
                   currentTimer.status == .running,
                   ownsCurrentTimer else { return .none }
@@ -434,9 +435,6 @@ extension TimerSessionController {
                 phase: currentTimer.phase,
                 duration: max(1, currentTimer.remaining(at: date))
             )])
-        }
-        guard previousTimer.status == .running || previousTimer.status == .paused else {
-            return .none
         }
         guard let currentTimer,
               currentTimer.id == previousTimer.id,

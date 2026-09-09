@@ -10,6 +10,16 @@ enum WatchSyncKeys {
     static let report = "report"
 }
 
+struct WatchTimerRevision: Codable, Equatable, Sendable {
+    var timerId: String
+    var intentId: String?
+    var phase: String
+    var status: String
+    var plannedDurationMs: Int64
+    var elapsedAtAnchorMs: Int64
+    var anchorAt: Date
+}
+
 struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     /// TimerPhase rawValue ("focus" | "short_break" | "long_break"); active timer's phase.
     var phase: String
@@ -19,6 +29,7 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     /// phone reject delayed watch commands aimed at a previous timer.
     /// Defaults nil so snapshots from older iOS apps still decode.
     var timerId: String? = nil
+    var timerRevision: WatchTimerRevision? = nil
     var plannedDurationMs: Int64
     var elapsedAtAnchorMs: Int64
     var anchorAt: Date
@@ -60,6 +71,8 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     /// Target canonical timer id for pause/resume/finish; nil for start,
     /// selectPhase, setDuration and for payloads from older watch apps.
     var timerId: String? = nil
+    /// Compare-and-set precondition from the phone's last snapshot.
+    var expectedTimerRevision: WatchTimerRevision? = nil
     /// "start" | "pause" | "resume" | "finish" | "selectPhase" | "setDuration".
     var name: String
     /// TimerPhase rawValue, for selectPhase / setDuration.
@@ -68,11 +81,15 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     var minutes: Int?
     var sentAt: Date
 
+    /// Starting later changes the meaning of a tap; only live delivery is allowed.
+    var allowsDeferredDelivery: Bool { name != "start" }
+
     // Explicit memberwise init (a custom init(from:) below suppresses the
     // synthesized one).
     init(
         id: UUID = UUID(),
         timerId: String? = nil,
+        expectedTimerRevision: WatchTimerRevision? = nil,
         name: String,
         phase: String? = nil,
         minutes: Int? = nil,
@@ -80,6 +97,7 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     ) {
         self.id = id
         self.timerId = timerId
+        self.expectedTimerRevision = expectedTimerRevision
         self.name = name
         self.phase = phase
         self.minutes = minutes
@@ -91,6 +109,7 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {        let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         timerId = try container.decodeIfPresent(String.self, forKey: .timerId)
+        expectedTimerRevision = try container.decodeIfPresent(WatchTimerRevision.self, forKey: .expectedTimerRevision)
         name = try container.decode(String.self, forKey: .name)
         phase = try container.decodeIfPresent(String.self, forKey: .phase)
         minutes = try container.decodeIfPresent(Int.self, forKey: .minutes)

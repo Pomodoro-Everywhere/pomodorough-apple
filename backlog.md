@@ -1,5 +1,46 @@
 # App review backlog
 
+## Incorporate watch command revision work - 2026-09-09
+
+- WIP implements `WatchTimerRevision` compare-and-set, Start live-only deferred rules, reply-snapshot cache, `commandError` UI. New fields defaulted so legacy payloads decode; legacy controls without revision fail closed (covered by `legacyPauseWithoutRevisionRejected`).
+- Incorporation fix: split `Watch/WatchSyncService.send` (63 lines) into `send` + `stampedTimerControl` + `deliver`; `audit_code_size.py` now 0 violations.
+- Evidence: macOS full suite 739 tests pass (`/tmp/watch-full-mac.xcresult`); iOS `WatchCommandIdentityTests` 16 pass (`/tmp/watch-identity-ios.xcresult`); related macOS `ResponsibilitySplit`+`IrohReplication` 67 pass; watchOS + iOS Simulator builds succeed.
+
+## Fixed - follow-up review 2026-09-09
+
+- [x] **P2 - Delayed or replayed Watch Start can create an unwanted timer after newer phone activity.** Previously Start used the offline/fallback queue without a precondition, so delivery after a newer phone timer ended could create an unsolicited timer. Fixed by making Start live-only: the Watch never queues it, including a reachability race or live-send failure, and shows explicit failure guidance. The iPhone rejects Start received through either deferred transport, including transfers queued by older Watch builds. Pause/Resume/Finish retain revision-checked queued delivery. Regression covers rejected deferred Start and queued replay after a completed timer. Live Start is not a durable exactly-once protocol; this fix removes automatic deferred delivery/retry. Physical transport reproduction remains pending.
+
+- [x] **P2 - Reachable Watch refresh receives an acknowledgement instead of the snapshot it expects.** Previously the Watch expected `reply[WatchSyncKeys.snapshot]`, but the iPhone returned only `report: "ack"`, leaving refresh dependent on background context delivery. Fixed: attachment and each publication encode the latest snapshot on the main actor into a mutex-protected cache, even before connectivity activation. The refresh delegate returns that snapshot directly without transferring WatchConnectivity's non-Sendable callback between actors. iOS Simulator regression invokes the actual delegate and verifies running and then paused snapshots, including current revisions. Paired-device latency remains unverified.
+
+### Follow-up fix verification
+
+- iOS Simulator: all 16 `WatchCommandIdentityTests` passed, zero failures/skips. Result: `~/Library/Developer/XcodeBuildMCP/workspaces/apple-ae1980e0bbd6/result-bundles/test_sim_2026-09-09T06-03-27-685Z_pid37497_9fd37dd3.xcresult`. The initial macOS targeted run passed 15 tests; final reply-cache/delegate validation ran on iOS.
+- iOS Debug and watchOS Simulator builds passed. Existing `SentryCaptureTests.swift:927` actor-isolation warning remains unrelated. Full suites were not rerun. No physical device installation or paired-radio testing in this fix pass; Watch error-alert rendering remains device/simulator-UI pending.
+
+### Pre-fix follow-up coverage
+
+- Reviewed current Watch controls, cached snapshots, live/queued transport, receiver command acceptance, and timer Start planning. Existing fixes and historical entries remain unchanged. This pass changes only this backlog; no application fixes or commits.
+- Findings above are source-confirmed, not new runtime reproductions. No builds or tests rerun in this follow-up. Earlier successful test/build results remain historical evidence, not coverage of these cases. Paired Watch delivery, live accessibility, real alarms, and broader app flows still need validation. Delegated review was unavailable because its usage limit was reached; this pass used direct source inspection.
+
+## Fixed - 1.0 readiness check 2026-09-09
+
+- [x] **P2 - Restoring a running local timer after a terminal room timer skips its alarm.** The old terminal-timer early return skipped scheduling when leaving a completed/cancelled room timer for a still-running local timer. Fixed in `Sources/TimerSessionController.swift`: nil and terminal predecessors now schedule an incoming owned running timer. Regression tests cover ownership, terminal statuses, inactive destinations, remaining duration, and actual room workspace restoration through AppModel. End-to-end OS alarm delivery remains device-pending.
+
+- [x] **P2 - Delayed Watch commands can override newer actions on the same timer.** Fixed with `WatchTimerRevision` in the shared payload. Snapshots carry timer identity, last intent identity, and anchored timer state; Watch controls echo that revision through live and queued delivery. AppModel accepts Pause/Resume/Finish only against the current revision and valid status. Successful mutations invalidate replays, including after relaunch, without comparing clocks or storing an unbounded command-ID set. Regression tests cover stale same-timer controls, live/queued reordering at the receiver, replay, relaunch, payload round-trip, fresh controls, and previous-timer rejection. Legacy payloads still decode, but controls without revision data fail closed; both phone and Watch must be updated for these controls. Physical WatchConnectivity delivery remains device-pending.
+
+### Fix verification - 2026-09-09
+
+- Full `Pomodorough-macOS` suite passed: 737 tests, zero failures or skips, 1,011 executions including parameters. Result bundle: `/var/folders/r_/_mr22dqn24d31b7460cz8z5m0000gn/T/opencode/readiness-fixes-full.xcresult`. After strengthening two previous-timer assertions, the Watch-command suite passed again in `readiness-fixes-watch-tests.xcresult` in the same directory.
+- iOS and watchOS Release simulator builds passed with these source fixes. Device-level release checks below remain pending; these fixes do not constitute a device release sign-off.
+
+### Validation - 1.0 readiness
+
+- Latest `Pomodorough-macOS` test run passed: 731 tests, zero failures, zero skips; 994 executions including parameterized cases. Result bundle: `/var/folders/r_/_mr22dqn24d31b7460cz8z5m0000gn/T/opencode/release-readiness-mac-20260909.xcresult`.
+- Latest iOS Debug build/install/launch passed on iPhone SE 2nd generation / iOS 27 Simulator. iOS Release simulator build and watchOS Release simulator build also passed. These are simulator builds, not signed device archives.
+- Rechecked the small-phone picker with an unassigned idle and running focus timer at default text size. The active layout now stacks, and text stays inside its panel. Starting with alerts disabled still shows an explicit warning; cancelling returns to idle. No review timer remains running.
+- Dark Mode room-name retest reached the field, but text injection failed; the fallback mobile automation agent download timed out. Entered-text contrast remains unverified in this pass. Long task names, break layouts, live VoiceOver, largest Watch text, paired Watch delivery, real-device alarms, authenticated multi-device sync, and fresh-install/upgrade Release smoke tests remain pending. A connected iPhone was discovered but was not modified.
+- Pre-fix review recommendation was to hold 1.0 for the two correctness cases above and device-level validation. Both code cases now have fixes and regression coverage as recorded above; device validation remains outstanding.
+
 ## Open - review 2026-09-09
 
 - [x] **P1 - Joining a room can discard local timer actions accepted during connection.** `Sources/RoomReplicationController.swift:286-295` captures the return workspace before awaiting endpoint startup and handshake, then activates the room with that old snapshot. While joining, automatic completion is suspended but timer mutations remain enabled, including macOS menu-bar Start/Pause (`Sources/AppModel.swift:562-567,1933-1938`; `Sources/Views/MenuBarTimer.swift:107-119`). Start or pause during a slow join, complete the join, then leave: the pre-join snapshot is restored and persisted (`Sources/IrohRoomStore.swift:418,477-482`; `Sources/AppModel.swift:1981-1986`), losing the accepted action. Capture the current workspace immediately before activation or block mutations throughout the transition. Add a gated-handshake test with an intervening mutation and leave/relaunch verification. Source-confirmed; runtime race reproduction pending. Fixed — working tree (this session): `joinRoom` re-reads `dependencies.workspaceSnapshot().state` immediately before activation and passes the fresh snapshot to `activateJoinedRoom` (`Sources/RoomReplicationController.swift`); covered by `controllerCapturesReturnAfterTransportAndLeavesCorrectWorkspace`, full `PomodoroughMacTests` green.

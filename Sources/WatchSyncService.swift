@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import OSLog
+import Synchronization
 #if os(iOS)
 import WatchConnectivity
 
@@ -11,6 +12,7 @@ import WatchConnectivity
 @MainActor
 final class WatchSyncService: NSObject, ObservableObject {
     private weak var model: AppModel?
+    private nonisolated let replySnapshot = Mutex<Data?>(nil)
 
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
@@ -18,6 +20,7 @@ final class WatchSyncService: NSObject, ObservableObject {
 
     func attach(_ model: AppModel) {
         self.model = model
+        _ = push()
         guard let session else { return }
         // Always (re)claim the delegate: a previous AppModel instance may have
         // activated the session and been deallocated, leaving a dangling delegate.
@@ -29,21 +32,21 @@ final class WatchSyncService: NSObject, ObservableObject {
 
     @discardableResult
     func push() -> String {
-        guard let session,
-              session.activationState == .activated,
-              session.isPaired,
-              let model
-        else {
-            let report = "skip st=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchApp=\(session?.isWatchAppInstalled ?? false)"
-            log("push: \(report)")
-            return report
-        }
+        guard let model else { return "skip no model" }
         let data: Data
         do {
             data = try JSONEncoder().encode(model.makeWatchSnapshot())
+            replySnapshot.withLock { $0 = data }
         } catch {
+            replySnapshot.withLock { $0 = nil }
             Self.snapshotEncodeFailed(error)
-            let report = "skip encode st=\(session.activationState.rawValue) paired=\(session.isPaired) watchApp=\(session.isWatchAppInstalled)"
+            return "skip encode"
+        }
+        guard let session,
+               session.activationState == .activated,
+               session.isPaired
+        else {
+            let report = "skip st=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) watchApp=\(session?.isWatchAppInstalled ?? false)"
             log("push: \(report)")
             return report
         }
@@ -88,7 +91,7 @@ extension WatchSyncService: WCSessionDelegate {
         _ session: WCSession,
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
-        handleIncoming(applicationContext)
+        handleIncoming(applicationContext, isDeferred: true)
     }
 
     nonisolated func session(
@@ -96,6 +99,16 @@ extension WatchSyncService: WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
+        if message[WatchSyncKeys.requestSync] != nil {
+            // WC's callback is not Sendable. Reply here using the snapshot
+            // encoded on the main actor at attach and every publication.
+            if let data = replySnapshot.withLock({ $0 }) {
+                replyHandler(Self.snapshotReply(data))
+            } else {
+                replyHandler([WatchSyncKeys.report: "unavailable"])
+            }
+            return
+        }
         handleIncoming(message)
         // Instant ack proves the iOS delegate is alive; the push result
         // follows via sendMessage report (see push()).
@@ -118,7 +131,7 @@ extension WatchSyncService: WCSessionDelegate {
         _ session: WCSession,
         didReceiveUserInfo userInfo: [String: Any]
     ) {
-        handleIncoming(userInfo)
+        handleIncoming(userInfo, isDeferred: true)
     }
 
 #if os(iOS)
@@ -136,7 +149,7 @@ extension WatchSyncService: WCSessionDelegate {
     }
 #endif
 
-    private nonisolated func handleIncoming(_ dictionary: [String: Any]) {
+    private nonisolated func handleIncoming(_ dictionary: [String: Any], isDeferred: Bool = false) {
         if dictionary[WatchSyncKeys.requestSync] != nil {
             Task { @MainActor [weak self] in self?.push() }
             return
@@ -153,7 +166,7 @@ extension WatchSyncService: WCSessionDelegate {
             // Stale timer-targeted commands are rejected without mutation;
             // push the current snapshot so the watch converges at once
             // instead of waiting for the next local mutation.
-            if self?.model?.applyWatchCommand(command) == false {
+            if self?.model?.applyWatchCommand(command, isDeferred: isDeferred) == false {
                 self?.push()
             }
         }
@@ -174,6 +187,10 @@ final class WatchSyncService: NSObject, ObservableObject {
 // Delivery stays best-effort: no retry, no user surface change; failures are
 // log + SentryCapture.captureOnce (Error-only, no snapshot payload), deduped.
 extension WatchSyncService {
+    nonisolated static func snapshotReply(_ data: Data) -> [String: Data] {
+        [WatchSyncKeys.snapshot: data]
+    }
+
     nonisolated static func snapshotEncodeFailed(_ error: Error) {
         Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot encode failed: \(error.localizedDescription, privacy: .public)")
         SentryCapture.captureOnce(key: "watch-snapshot-encode", error: error)

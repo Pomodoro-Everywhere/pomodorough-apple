@@ -81,6 +81,59 @@ struct ResponsibilitySplitCompatibilityTests {
         #expect(plan.actions.count == (ownsCurrentTimer ? 2 : 1))
     }
 
+    @Test(arguments: [nil, .completed, .cancelled] as [CanonicalTimer.Status?], [true, false])
+    @MainActor
+    func inactivePreviousTimerSchedulesIncomingRunningTimerOnlyWhenOwned(
+        previousStatus: CanonicalTimer.Status?,
+        ownsCurrentTimer: Bool
+    ) {
+        let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })
+        let previous = previousStatus.map {
+            TestFixtures.timer(status: $0, elapsed: 60_000, timerID: "timer-previous")
+        }
+        let current = TestFixtures.timer(
+            status: .running,
+            elapsed: 10_000,
+            phase: .shortBreak,
+            timerID: "timer-incoming"
+        )
+
+        for (elapsedSinceAnchor, remaining) in [(15.0, 35.0), (60.0, 1.0)] {
+            let plan = controller.alarmPlan(
+                from: previous,
+                to: current,
+                at: current.anchorAt.addingTimeInterval(elapsedSinceAnchor),
+                ownsCurrentTimer: ownsCurrentTimer
+            )
+            let expected: [TimerSessionController.AlarmAction] = ownsCurrentTimer
+                ? [.schedule(timerID: current.id, phase: .shortBreak, duration: remaining)]
+                : []
+            #expect(plan.actions == expected)
+        }
+    }
+
+    @Test(arguments: [CanonicalTimer.Status.completed, .cancelled], [true, false])
+    @MainActor
+    func terminalPreviousTimerDoesNotScheduleOrCancelForInactiveIncomingTimer(
+        previousStatus: CanonicalTimer.Status,
+        ownsCurrentTimer: Bool
+    ) {
+        let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })
+        let previous = TestFixtures.timer(status: previousStatus, elapsed: 60_000)
+
+        for currentStatus in [nil, .paused, .completed, .cancelled] as [CanonicalTimer.Status?] {
+            let current = currentStatus.map {
+                TestFixtures.timer(status: $0, elapsed: 10_000, timerID: "timer-incoming")
+            }
+            #expect(controller.alarmPlan(
+                from: previous,
+                to: current,
+                at: TestFixtures.anchor,
+                ownsCurrentTimer: ownsCurrentTimer
+            ) == .none)
+        }
+    }
+
     @Test @MainActor
     func synchronizationPlanStopsAtProvisionalBreakWithoutReordering() throws {
         let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })

@@ -1087,6 +1087,85 @@ struct IrohReplicationTests {
         #expect(scheduler.operations.contains(.cancel(timerID: roomTimer.id)))
     }
 
+    @Test(arguments: [CanonicalTimer.Status.completed, .cancelled], [true, false])
+    @MainActor
+    func leavingTerminalRoomSchedulesRestoredRunningTimerOnlyWhenOwned(
+        roomStatus: CanonicalTimer.Status,
+        ownsRestoredTimer: Bool
+    ) async throws {
+        let suiteName = "PomodoroughTests.IrohTerminalLeaveAlarm.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let date = TestFixtures.anchor.addingTimeInterval(15)
+        let store = temporaryStore(now: { date })
+        var returnState = PersistedTimerState.fresh()
+        let localTimer = TestFixtures.timer(
+            status: .running,
+            elapsed: 10_000,
+            phase: .shortBreak,
+            timerID: "timer-local-return"
+        )
+        returnState.canonicalTimer = localTimer
+        returnState.localTimerOwners[localTimer.id] = ownsRestoredTimer
+            ? returnState.deviceId : "device-other"
+        let roomTimer = TestFixtures.timer(
+            status: roomStatus,
+            elapsed: 60_000,
+            timerID: "timer-terminal-room"
+        )
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: returnState,
+            genesis: IrohGenesis(
+                canonicalTimer: roomTimer,
+                history: [TestFixtures.history(
+                    id: roomTimer.id,
+                    status: roomStatus.rawValue,
+                    durationMs: 60_000,
+                    date: TestFixtures.anchor
+                )],
+                tasks: [],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let scheduler = RecordingAlarmScheduler()
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: scheduler,
+            now: { date },
+            uptime: { 100 }
+        )
+        #expect(model.canonicalTimer?.id == roomTimer.id)
+        #expect(model.canonicalTimer?.status == roomStatus)
+        await model.waitForAlarmOperations()
+        let previousOperationCount = scheduler.operations.count
+
+        model.requestIrohRoomLeave()
+        await model.confirmIrohRoomLeave()
+        await model.waitForAlarmOperations()
+
+        #expect(model.replicationMode == .offline)
+        #expect(model.canonicalTimer?.id == localTimer.id)
+        #expect(model.canonicalTimer?.status == .running)
+        let operations = Array(scheduler.operations.dropFirst(previousOperationCount))
+        if ownsRestoredTimer {
+            #expect(operations == [
+                .schedule(timerID: localTimer.id, phase: .shortBreak, duration: 35)
+            ])
+        } else {
+            #expect(operations.isEmpty)
+        }
+    }
+
     @Test @MainActor
     func irohSignOutClearsAccountWithoutDiscardingRoomOrLocalReturnSelection() throws {
         let suiteName = "PomodoroughTests.IrohAccountClear.\(UUID().uuidString)"
