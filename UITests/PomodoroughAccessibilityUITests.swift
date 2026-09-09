@@ -247,7 +247,10 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
     private func assertPhaseControls(label: String, value: String, in app: XCUIApplication) {
         // Phase select, duration readout, and both steppers stay
         // independently reachable so Voice Control can target each one.
-        let matches = elements(labelled: label, in: app)
+        // Query buttons (not any-descendant): the button's own label text
+        // is exposed as a child StaticText, so an any-type query counts one
+        // control twice.
+        let matches = app.buttons.matching(NSPredicate(format: "label == %@", label))
         XCTAssertEqual(matches.count, 1, "Expected one phase button for \(label)")
         let duration = elements(labelled: "\(label) duration", in: app)
         XCTAssertEqual(duration.count, 1, "Expected one duration readout for \(label)")
