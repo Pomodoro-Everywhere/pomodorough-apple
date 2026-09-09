@@ -960,9 +960,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          ios_simulator_app="$RUNNER_TEMP/build-ios-simulator-app/Pomodorough.app"
-          ios_device_app="$RUNNER_TEMP/build-ios-device-app/Pomodorough.app"
-          macos_app="$RUNNER_TEMP/build-macos-app/Pomodorough.app"
+          ios_simulator_app="$RUNNER_TEMP/build-ios-simulator-app"
+          ios_device_app="$RUNNER_TEMP/build-ios-device-app"
+          macos_app="$RUNNER_TEMP/build-macos-app"
           ios_simulator_staged_app="$RUNNER_TEMP/Pomodorough-iOS-Simulator/Pomodorough.app"
           ios_device_staging="$RUNNER_TEMP/Pomodorough-iOS-Device"
           ios_device_staged_app="$ios_device_staging/Payload/Pomodorough.app"
