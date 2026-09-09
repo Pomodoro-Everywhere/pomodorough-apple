@@ -860,6 +860,12 @@
         "value": "‏⟦Confirms %@ and starts history resolution⟧"
       }
     },
+    "Connect to your iPhone to start a timer. Start was not queued.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Connect to your iPhone to start a timer. Start was not queued.⟧"
+      }
+    },
     "Continues without timer alerts. The timer still works while Pomodorough is open.": {
       "stringUnit": {
         "state": "translated",
@@ -870,6 +876,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Controls the break after the current focus. Short after focus. Long every fourth completed focus.⟧"
+      }
+    },
+    "Could not confirm Start. Check your iPhone before trying again. Start was not queued.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Could not confirm Start. Check your iPhone before trying again. Start was not queued.⟧"
       }
     },
     "Create Iroh room": {
@@ -2174,6 +2186,12 @@
         "value": "‏⟦This permanently deletes your account and cloud data, revokes every session, and removes account data stored by this app on this device. This cannot be undone.⟧"
       }
     },
+    "This timer changed on your iPhone. Refreshing status.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This timer changed on your iPhone. Refreshing status.⟧"
+      }
+    },
     "This will discard %lld changes still waiting to sync.": {
       "variations": {
         "plural": {
@@ -2436,6 +2454,12 @@
             }
           }
         }
+      }
+    },
+    "iPhone connection is not ready. Try again shortly.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦iPhone connection is not ready. Try again shortly.⟧"
       }
     },
     "pomodorough1.…": {

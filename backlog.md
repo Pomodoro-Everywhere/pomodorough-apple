@@ -1,5 +1,36 @@
 # App review backlog
 
+## Fixed - watch-sync review 2026-09-09 (AP42-AP50)
+
+- [x] **AP42 High - reachable refresh served stale replySnapshot.** `push()` ran only on local mutations, so room swaps, completions, bootstrap resolutions, and sign-outs left the reply cache stale. Fixed: every projection refreshes the cache (`installProjection` observation hook + `installUnreducedBaseSnapshot`), with explicit `push()` in `adoptRoomWorkspace`, iroh completion, bootstrap submission, and sign-out/quarantine paths; the refresh delegate schedules a converging `push()` after serving. Covered by `roomSwapRefreshReplyConvergesWithoutLocalMutation` (iOS): room swap with no local mutation, refresh reply matches `makeWatchSnapshot()` identity/revision/status. Negative control (pushes disabled) fails as expected.
+- [x] **AP43 Medium - concurrent handleIncoming Tasks unordered.** Fixed: phone-side application chained behind `WatchCommandSerialQueue` (shared, Sendable, tail-chained MainActor Tasks), so pause-then-resume applies in arrival order even across suspension. Covered by `serialQueueAppliesPauseThenResumeInOrder` (AppModel pause/resume with a hop, asserts running) and `serialQueuePreservesArrivalOrderAcrossSuspension` (order log across `Task.yield`).
+- [x] **AP44 Medium - ungrounded tap dropped silently.** Fixed: nil stamp now sets localized `commandError` ("This timer changed on your iPhone. Refreshing status."), `logOnce(key:"watch-command-ungrounded")`, and `requestSync()`. Covered by `ungroundedControlFails` plan test + alert contract test hitting the new key.
+- [x] **AP45 Medium - mixed-version interop.** Documented in the release-gate section below; no compat code beyond defaulted decoders + fail-closed (guessing intent cross-version risks wrong-timer mutation, not trivially safe).
+- [x] **AP46 Low - commandError never cleared.** Fixed: cleared on live-send attempt, queued delivery (including send-error fallback), and in `ingest`. Covered by `successfulPlansClearCommandError` + contract assertion that the watch source clears in all three places.
+- [x] **AP47 Low - unknown command fail-open.** `applyWatchCommand` default now returns false with `Logger.error` (name only) + `SentryCapture.captureOnce(key:"watch-command-unknown")`. Covered by `unknownWatchCommandRejectedAndCaptured` (state unchanged, capture holds the bare name).
+- [x] **AP48 Low - alert strings unlocalized.** All four watch alert strings (plus the new ungrounded one) use `String(localized:)`; entries added to `Resources/Localizable.xcstrings` (338 keys, byte-identical to generator output) and the ar-XB pseudo fixture. Covered by `WatchAlertContractTests` (localized API, shipping + pseudo parity with RTL decoration).
+- [x] **AP49 Low - silent sync failures.** iOS logs + `captureOnce(key:"watch-snapshot-unavailable")` when the reply cache is nil; watch `logOnce(key:"watch-reply-missing-snapshot")` on a missing reply key.
+- [x] **AP50 Low - watch decision logic untested.** Stamping + send + send-error decisions extracted to pure functions in shared `Sources/WatchSyncPayload.swift`, covered by 9 `WatchSendDecisionTests` in the macOS/iOS bundle (nil snapshot, id mismatch, Start live-only x reachable/unreachable, error fallback, error-clear semantics).
+
+### Fix verification - 2026-09-09
+
+- Full `PomodoroughMacTests` suite passed: 754 tests, zero failures/skips (`/tmp/watchfix-mac3.xcresult`). Includes 14 new tests (9 decision, 3 contract, 2 identity). Note: two earlier full runs each showed one failure in pre-existing `deletingTaskUsesProjectedSelectionOverStoredSelection` (uncommitted prior-session work in `SynchronizedWorkspaceMutationController.swift`/`CoverageGapBehaviorTests.swift`, untouched by this fix); it passes in isolation (5/5) and in the final full run, so it is a parallel-load flake, not a regression.
+- iOS Simulator (Pomo-iPhone): `WatchCommandIdentityTests` 19/19 pass, plus decision (9) and contract (3) suites green — 31/31 total (`/tmp/watchfix-ios-final.xcresult`). AP42 negative control verified red with pushes disabled.
+- Builds: `Pomodorough-watchOS` device/simulator build succeeds; `Pomodorough-iOS` and `Pomodorough-macOS` build-for-testing succeed. `check_interface_contract.py` ok (338 keys); `audit_code_size.py` 0 violations.
+- Device-pending (no watchOS test host, no paired hardware): real-radio ordering/latency, multi-Watch reactivation, live VoiceOver, and on-watch alert rendering.
+
+## Fixed - task-selection re-review 2026-09-09
+
+- Validation: iOS Simulator synchronized-mutation suite passed all 7 tests after the fix. Full `Pomodorough-macOS` test command passed. Existing `SentryCaptureTests.swift:927` actor-isolation warning remains. `git diff --check` passed. This pass inspected synchronized task mutations, logout revocation, alarm planning, Watch payloads, and task/history-resolution views; it did not repeat whole-app GUI, physical paired-Watch, or multi-peer network testing. Concurrent edits elsewhere were preserved.
+
+- [x] **P2 - Deleting a stale base selection clears the newer visible task selection.** During sync, stored selection A can coexist with pending visible selection B. `SynchronizedWorkspaceMutationController.planTask` compared deletion against stored A, so deleting A appended a newer Unassigned operation and erased B; deleting visible B omitted the explicit selection-clear operation. Changed the comparison to `snapshot.projectedSelectedTaskID`. Regression constructs a real pending selection operation over a stale base and tests both deletion branches. Before the fix, three assertions failed; afterward all seven synchronized-mutation tests passed on iOS Simulator.
+
+## Release gate - watch/phone same-train shipment (AP45) - 2026-09-09
+
+- Mixed-version interop is fail-closed, not deadlocked. New phone + old Watch: timer controls without revision fail closed (`legacyPauseWithoutRevisionRejected`); settings commands still apply; deferred Start stays rejected live-only. Old phone + new Watch: unknown JSON keys decode past, pre-revision apply behavior. Either direction converges on the next snapshot push; no retry loop exists on either side.
+- No further compat code: auto-applying revision-stamped commands on an old phone, or guessing intent for unrevisioned controls on a new phone, risks wrong-timer mutation and is not trivially safe. Documented instead of implemented.
+- Same-train gate for 0.22.0: ship iOS and watchOS together; do not release one side alone. Both sides must carry the revision work before timer controls are trusted cross-device.
+
 ## Incorporate watch command revision work - 2026-09-09
 
 - WIP implements `WatchTimerRevision` compare-and-set, Start live-only deferred rules, reply-snapshot cache, `commandError` UI. New fields defaulted so legacy payloads decode; legacy controls without revision fail closed (covered by `legacyPauseWithoutRevisionRejected`).

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// WatchConnectivity wire payload shared by the iOS app and the watch app.
 /// Primitives only, so the watch target compiles this file without the heavy iOS deps.
@@ -133,6 +134,94 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     }
     static func setDuration(minutes: Int, forPhaseRawValue rawValue: String) -> Self {
         Self(id: UUID(), timerId: nil, name: "setDuration", phase: rawValue, minutes: minutes, sentAt: .now)
+    }
+}
+
+/// Snapshot cache missed on a refresh: no payload, never user content.
+struct WatchSnapshotUnavailableError: Error, Sendable {}
+
+/// Unknown command name only: never timer ids, revisions, or snapshots.
+struct WatchUnknownCommandError: Error, Sendable {
+    let name: String
+}
+
+extension WatchUnknownCommandError: LocalizedError {
+    // Bare name: Sentry groups one issue per unknown command vocabulary word.
+    var errorDescription: String? { name }
+}
+
+/// Attaches the snapshot's compare-and-set revision to timer controls.
+/// Returns nil when no snapshot can ground the control. Pure so the
+/// macOS/iOS unit-test bundle covers the watch decision without a host.
+func stampWatchTimerControl(
+    _ command: WatchTimerCommand,
+    snapshot: WatchTimerSnapshot?
+) -> WatchTimerCommand? {
+    guard ["pause", "resume", "finish"].contains(command.name) else { return command }
+    guard let revision = snapshot?.timerRevision,
+          revision.timerId == command.timerId else { return nil }
+    var stamped = command
+    stamped.expectedTimerRevision = revision
+    return stamped
+}
+
+/// Watch send outcome. Live/queued plans imply clearing commandError;
+/// fail plans carry the user-facing failure.
+enum WatchCommandSendFailure: String, Equatable, Sendable {
+    case notActivated
+    case startRequiresConnection
+    case ungrounded
+    case liveStartUnconfirmed
+}
+
+enum WatchCommandSendPlan: Equatable, Sendable {
+    case live(WatchTimerCommand)
+    case queued(WatchTimerCommand)
+    case fail(WatchCommandSendFailure)
+}
+
+/// Pure send decision shared by the watch app and unit tests.
+func planWatchCommandSend(
+    _ command: WatchTimerCommand,
+    snapshot: WatchTimerSnapshot?,
+    isActivated: Bool,
+    isReachable: Bool
+) -> WatchCommandSendPlan {
+    guard isActivated else { return .fail(.notActivated) }
+    guard isReachable || command.allowsDeferredDelivery else {
+        return .fail(.startRequiresConnection)
+    }
+    guard let stamped = stampWatchTimerControl(command, snapshot: snapshot) else {
+        return .fail(.ungrounded)
+    }
+    if isReachable { return .live(stamped) }
+    return .queued(stamped)
+}
+
+/// Live-send failure decision: Start never queues, others fall back ordered.
+func planWatchCommandSendError(_ command: WatchTimerCommand) -> WatchCommandSendPlan {
+    guard command.allowsDeferredDelivery else { return .fail(.liveStartUnconfirmed) }
+    return .queued(command)
+}
+
+/// Phone-side FIFO for incoming watch commands. Each enqueue chains onto
+/// the previous tail, so pause-then-resume applies in arrival order even
+/// when the first work suspends. Sendable so nonisolated WC delegates share it.
+final class WatchCommandSerialQueue: Sendable {
+    private let tail = Mutex<Task<Void, Never>?>(nil)
+
+    func enqueue(_ work: @Sendable @escaping @MainActor () async -> Void) {
+        tail.withLock { current in
+            let previous = current
+            current = Task { @MainActor in
+                await previous?.value
+                await work()
+            }
+        }
+    }
+
+    func flush() async {
+        await tail.withLock { $0 }?.value
     }
 }
 

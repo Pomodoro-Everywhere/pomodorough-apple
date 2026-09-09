@@ -256,6 +256,62 @@ struct WatchCommandIdentityTests {
         #expect(model.durationMinutes(for: .focus) == 20)
     }
 
+    @Test @MainActor
+    func unknownWatchCommandRejectedAndCaptured() {
+        let (model, defaults, suite) = makeModel()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        var unknown = WatchTimerCommand.start()
+        unknown.name = "rewind"
+        #expect(model.applyWatchCommand(unknown) == false)
+        #expect(recorded.value == ["rewind"])
+    }
+
+    @Test @MainActor
+    func serialQueueAppliesPauseThenResumeInOrder() async {
+        let (model, defaults, suite) = makeModel()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.start()
+        let queue = WatchCommandSerialQueue()
+        queue.enqueue { @MainActor in
+            await Task.yield()
+            model.pause()
+        }
+        queue.enqueue { @MainActor in model.resume() }
+        await queue.flush()
+        #expect(model.canonicalTimer?.status == .running)
+    }
+
+#if os(iOS)
+    @Test @MainActor
+    func roomSwapRefreshReplyConvergesWithoutLocalMutation() throws {
+        let (model, defaults, suite) = makeModel()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.start()
+        // Room swap without any local mutation: the reply cache must follow.
+        model.adoptRoomWorkspace(PersistedTimerState.fresh())
+        var reply: [String: Any] = [:]
+        model.watchSync.session(WCSession.default, didReceiveMessage: [WatchSyncKeys.requestSync: true]) {
+            reply = $0
+        }
+        let data = try #require(reply[WatchSyncKeys.snapshot] as? Data)
+        let served = try JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
+        // updatedAt advances on every snapshot, so compare the converged
+        // content: identity, revision, and status (idle after the swap).
+        let expected = model.makeWatchSnapshot()
+        #expect(served.timerId == expected.timerId)
+        #expect(served.timerRevision == expected.timerRevision)
+        #expect(served.status == expected.status)
+        #expect(!served.isRunning)
+    }
+#endif
+
     // MARK: - Helpers
 
     @MainActor

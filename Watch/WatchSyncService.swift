@@ -42,7 +42,10 @@ final class WatchSyncService: NSObject, ObservableObject {
                 replyHandler: { @Sendable [weak self] reply in
                     // WC invokes callbacks off-main. Sendable prevents inherited
                     // MainActor isolation; only the decoded snapshot crosses actors.
-                    guard let data = reply[WatchSyncKeys.snapshot] as? Data else { return }
+                    guard let data = reply[WatchSyncKeys.snapshot] as? Data else {
+                        Self.logOnce(key: "watch-reply-missing-snapshot")
+                        return
+                    }
                     let snapshot: WatchTimerSnapshot
                     do {
                         snapshot = try JSONDecoder().decode(WatchTimerSnapshot.self, from: data)
@@ -73,77 +76,89 @@ final class WatchSyncService: NSObject, ObservableObject {
 
     func send(_ command: WatchTimerCommand) {
         let session = WCSession.default
-        guard WCSession.isSupported(),
-              session.activationState == .activated
-        else {
-            commandError = "iPhone connection is not ready. Try again shortly."
-            return
+        let plan = planWatchCommandSend(
+            command,
+            snapshot: snapshot,
+            isActivated: WCSession.isSupported() && session.activationState == .activated,
+            isReachable: session.isReachable
+        )
+        switch plan {
+        case .live(let stamped):
+            commandError = nil
+            sendLive(stamped)
+        case .queued(let stamped):
+            commandError = nil
+            queue(stamped)
+        case .fail(let reason):
+            presentSendFailure(reason)
         }
-        guard session.isReachable || command.allowsDeferredDelivery else {
-            commandError = "Connect to your iPhone to start a timer. Start was not queued."
-            return
-        }
-        guard let stamped = stampedTimerControl(command) else {
-            requestSync()
-            return
-        }
-        let data: Data
+    }
+
+    /// Live send with revision-checked fallback, else ordered offline queue.
+    private func sendLive(_ command: WatchTimerCommand) {
+        guard let data = encoded(command) else { return }
+        WCSession.default.sendMessage(
+            [WatchSyncKeys.command: data],
+            replyHandler: nil,
+            errorHandler: { @Sendable [weak self] error in
+                // A fallback can arrive after newer live commands.
+                // The phone checks the original revision before applying it.
+                Self.logOnce(key: "watch-command-send", error: error)
+                Task { @MainActor in
+                    self?.handleSendError(error, command: command, data: data)
+                }
+            }
+        )
+    }
+
+    private func queue(_ command: WatchTimerCommand) {
+        guard let data = encoded(command) else { return }
+        commandError = nil
+        // One transfer per command: the system holds them ordered until the
+        // phone is reachable again. Application context keeps only the last
+        // dictionary, so queued commands would overwrite each other (and a
+        // sync pull would overwrite a queued Pause). Context stays reserved
+        // for replaceable state; the phone re-pushes on reachability.
+        _ = WCSession.default.transferUserInfo([WatchSyncKeys.command: data])
+    }
+
+    private func encoded(_ command: WatchTimerCommand) -> Data? {
         do {
-            data = try JSONEncoder().encode(stamped)
+            return try JSONEncoder().encode(command)
         } catch {
             // Log-only (no Sentry on watchOS by design); command is dropped,
             // the phone remains the source of truth.
             Self.logOnce(key: "watch-command-encode", error: error)
-            return
+            return nil
         }
-        deliver(data, command: stamped)
     }
 
-    /// Attaches the snapshot's compare-and-set revision to timer controls.
-    /// Returns nil when the snapshot cannot ground the control.
-    private func stampedTimerControl(_ command: WatchTimerCommand) -> WatchTimerCommand? {
-        guard ["pause", "resume", "finish"].contains(command.name) else { return command }
-        guard let revision = snapshot?.timerRevision,
-              revision.timerId == command.timerId else { return nil }
-        var stamped = command
-        stamped.expectedTimerRevision = revision
-        return stamped
+    private func handleSendError(_ error: Error, command: WatchTimerCommand, data: Data) {
+        switch planWatchCommandSendError(command) {
+        case .queued:
+            commandError = nil
+            _ = WCSession.default.transferUserInfo([WatchSyncKeys.command: data])
+        case .fail:
+            commandError = String(localized: "Could not confirm Start. Check your iPhone before trying again. Start was not queued.")
+            requestSync()
+        case .live:
+            break
+        }
     }
 
-    /// Live send with revision-checked fallback, else ordered offline queue.
-    private func deliver(_ data: Data, command: WatchTimerCommand) {
-        let session = WCSession.default
-        let allowsDeferredDelivery = command.allowsDeferredDelivery
-        if session.isReachable {
-            session.sendMessage(
-                [WatchSyncKeys.command: data],
-                replyHandler: nil,
-                errorHandler: { @Sendable [weak self] error in
-                    // A fallback can arrive after newer live commands.
-                    // The phone checks the original revision before applying it.
-                    Self.logOnce(key: "watch-command-send", error: error)
-                    Task { @MainActor in
-                        guard allowsDeferredDelivery else {
-                            self?.commandError = "Could not confirm Start. Check your iPhone before trying again. Start was not queued."
-                            self?.requestSync()
-                            return
-                        }
-                        _ = WCSession.default.transferUserInfo([WatchSyncKeys.command: data])
-                    }
-                }
-            )
-        } else {
-            guard allowsDeferredDelivery else {
-                commandError = "Connect to your iPhone to start a timer. Start was not queued."
-                return
-            }
-            // Queued offline, one transfer per command: the system holds
-            // them ordered until the phone is reachable again. Application
-            // context is NOT used here — it keeps only the last dictionary,
-            // so queued commands would overwrite each other (and a sync
-            // pull would overwrite a queued Pause). Context stays reserved
-            // for replaceable state; the phone re-pushes on reachability.
-            _ = session.transferUserInfo([WatchSyncKeys.command: data])
+    private func presentSendFailure(_ reason: WatchCommandSendFailure) {
+        switch reason {
+        case .notActivated:
+            commandError = String(localized: "iPhone connection is not ready. Try again shortly.")
+        case .startRequiresConnection:
+            commandError = String(localized: "Connect to your iPhone to start a timer. Start was not queued.")
+        case .ungrounded:
+            commandError = String(localized: "This timer changed on your iPhone. Refreshing status.")
+            Self.logOnce(key: "watch-command-ungrounded")
+            requestSync()
+        case .liveStartUnconfirmed:
+            commandError = String(localized: "Could not confirm Start. Check your iPhone before trying again. Start was not queued.")
+            requestSync()
         }
     }
 }
@@ -205,8 +220,15 @@ extension WatchSyncService: WCSessionDelegate {
             .error("\(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
     }
 
+    private nonisolated static func logOnce(key: String) {
+        guard WatchSyncLogDedupe.shouldLog(key: key) else { return }
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync")
+            .error("\(key, privacy: .public)")
+    }
+
     private func ingest(_ snapshot: WatchTimerSnapshot) {
         self.snapshot = snapshot
+        commandError = nil
         do {
             let data = try JSONEncoder().encode(snapshot)
             UserDefaults.standard.set(data, forKey: "watch-timer-snapshot")

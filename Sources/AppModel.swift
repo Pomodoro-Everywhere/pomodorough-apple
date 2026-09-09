@@ -688,7 +688,10 @@ final class AppModel {
                 setDurationMinutes(minutes, for: phase)
             }
             return true
-        default: return true
+        default:
+            Self.logger.error("unknown watch command: \(command.name, privacy: .public)")
+            SentryCapture.captureOnce(key: "watch-command-unknown", error: WatchUnknownCommandError(name: command.name))
+            return false
         }
     }
 
@@ -949,6 +952,7 @@ final class AppModel {
         }
         if transition.rebuildsProjection { rebuildOptimisticState() }
         persist()
+        watchSync.push()
     }
 
     func deleteAccount(confirmation: String) async {
@@ -1097,6 +1101,7 @@ final class AppModel {
         history = []
         tasks = []
         completionAlertTimerID = nil
+        watchSync.push()
     }
 
     private func persistPreparedAccountDeletion(
@@ -1510,6 +1515,7 @@ final class AppModel {
         _ = persist()
         completionAlertTimerID = timerID
         stopCompletionAlertIfTimerStarted()
+        watchSync.push()
     }
 
     private func startAutomaticIrohBreak(
@@ -2164,7 +2170,9 @@ final class AppModel {
     /// across the swap so a departed running timer is cancelled and an
     /// adopted running timer is scheduled when this device owns it.
     /// Callers must set replicationMode before calling: projection reads it.
-    private func adoptRoomWorkspace(_ state: PersistedTimerState) {
+    /// Internal (not private) so WatchCommandIdentityTests drives the
+    /// room-swap path without a local mutation.
+    func adoptRoomWorkspace(_ state: PersistedTimerState) {
         let previousTimer = canonicalTimer
         timerState = state
         rebuildOptimisticState()
@@ -2173,6 +2181,8 @@ final class AppModel {
             to: canonicalTimer,
             at: effectivePhysicalNow() ?? now()
         )
+        // Non-mutation transition: no performWorkspaceMutation push runs.
+        watchSync.push()
     }
 
     private func reconcileAlarm(
@@ -2337,6 +2347,9 @@ final class AppModel {
             alarmEffectCoordinator.effects(for: publication.effects)
         )
         scheduleTimerCompletion()
+        // Observation hook: every projection refreshes the watch reply cache,
+        // covering room swaps, completions, sync, and bootstrap resolutions.
+        watchSync.push()
     }
 
     private func installUnreducedBaseSnapshot() {
@@ -2347,6 +2360,7 @@ final class AppModel {
         tasks = publication.tasks
         projectedAutoStartBreaks = publication.autoStartBreaks
         projectedSelectedTaskID = publication.selectedTaskID
+        watchSync.push()
     }
 
     @discardableResult
@@ -2587,6 +2601,7 @@ final class AppModel {
         )
         try installBootstrapResolution(transition.state)
         reconcileAlarm(from: previousTimer, to: activeTimer, at: receivedAt)
+        watchSync.push()
         await sync(force: true)
     }
 

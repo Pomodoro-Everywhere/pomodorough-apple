@@ -13,6 +13,7 @@ import WatchConnectivity
 final class WatchSyncService: NSObject, ObservableObject {
     private weak var model: AppModel?
     private nonisolated let replySnapshot = Mutex<Data?>(nil)
+    private nonisolated let incomingSerial = WatchCommandSerialQueue()
 
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
@@ -104,7 +105,11 @@ extension WatchSyncService: WCSessionDelegate {
             // encoded on the main actor at attach and every publication.
             if let data = replySnapshot.withLock({ $0 }) {
                 replyHandler(Self.snapshotReply(data))
+                // The cache may predate a non-mutation transition (room swap,
+                // completion, bootstrap, sign-out). Converge after serving.
+                Task { @MainActor [weak self] in self?.push() }
             } else {
+                Self.snapshotUnavailable()
                 replyHandler([WatchSyncKeys.report: "unavailable"])
             }
             return
@@ -162,13 +167,20 @@ extension WatchSyncService: WCSessionDelegate {
             Self.commandDecodeFailed(error)
             return
         }
-        Task { @MainActor [weak self] in
-            // Stale timer-targeted commands are rejected without mutation;
-            // push the current snapshot so the watch converges at once
-            // instead of waiting for the next local mutation.
-            if self?.model?.applyWatchCommand(command, isDeferred: isDeferred) == false {
-                self?.push()
-            }
+        // FIFO: chain onto the serial tail so concurrent delegate callbacks
+        // apply in arrival order even when one work suspends.
+        incomingSerial.enqueue { @MainActor [weak self] in
+            self?.applyIncoming(command, isDeferred: isDeferred)
+        }
+    }
+
+    @MainActor
+    private func applyIncoming(_ command: WatchTimerCommand, isDeferred: Bool) {
+        // Stale timer-targeted commands are rejected without mutation;
+        // push the current snapshot so the watch converges at once
+        // instead of waiting for the next local mutation.
+        if model?.applyWatchCommand(command, isDeferred: isDeferred) == false {
+            push()
         }
     }
 }
@@ -209,5 +221,11 @@ extension WatchSyncService {
     nonisolated static func commandDecodeFailed(_ error: Error) {
         Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(error.localizedDescription, privacy: .public)")
         SentryCapture.captureOnce(key: "watch-command-decode", error: error)
+    }
+
+    nonisolated static func snapshotUnavailable() {
+        let error = WatchSnapshotUnavailableError()
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot unavailable: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.captureOnce(key: "watch-snapshot-unavailable", error: error)
     }
 }
