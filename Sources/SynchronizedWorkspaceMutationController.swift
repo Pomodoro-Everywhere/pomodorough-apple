@@ -375,7 +375,7 @@ private extension SynchronizedWorkspaceMutationController {
             hlcCounter: state.hlcCounter
         ))
         var selectedOperationIDs = Set<String>()
-        if type == .delete, state.selectedTaskID == task.id {
+        if type == .delete, snapshot.projectedSelectedTaskID == task.id {
             selectedOperationIDs.insert(try appendSelectedTaskOperation(
                 nil,
                 at: occurredAt,

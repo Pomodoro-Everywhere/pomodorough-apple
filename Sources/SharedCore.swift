@@ -1,10 +1,11 @@
-import CryptoKit
 import Foundation
 import WasmKit
 
 final class SharedCore: @unchecked Sendable {
-    static let coreCommit = "fde2eaf42c39cd175e23796b9037999abadef732"
-    static let coreSHA256 = "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
+    // No pinned core version/commit/sha here. CI and Release resolve the
+    // latest pomodorough-core release at build time, attestation-verify it,
+    // and record provenance into Resources/SharedCore (see
+    // scripts/fetch_shared_core.sh).
     private static let maxTransferBytes = 16 * 1024 * 1024
 
     private struct Runtime {
@@ -270,15 +271,6 @@ final class SharedCore: @unchecked Sendable {
 
         do {
             let moduleData = try Data(contentsOf: moduleURL, options: [.mappedIfSafe])
-            let actualSHA256 = SHA256.hash(data: moduleData)
-                .map { String(format: "%02x", $0) }
-                .joined()
-            guard actualSHA256 == Self.coreSHA256 else {
-                throw SharedCoreError.checksumMismatch(
-                    expected: Self.coreSHA256,
-                    actual: actualSHA256
-                )
-            }
             let module = try parseWasm(bytes: Array(moduleData))
             let store = Store(engine: Engine(configuration: EngineConfiguration(threadingModel: .token)))
             let instance = try module.instantiate(store: store)

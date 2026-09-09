@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  attestations: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ inputs.candidate-request || github.ref }}
@@ -77,9 +78,6 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 90
     env:
-      CORE_COMMIT: "fde2eaf42c39cd175e23796b9037999abadef732"
-      CORE_RELEASE_TAG: "v0.11.0"
-      CORE_SHA256: "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughDerivedData
       IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
@@ -95,45 +93,10 @@ jobs:
       - name: Verify checked out source
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Check out pinned shared core
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: Pomodoro-Everywhere/pomodorough-core
-          ref: ${{ env.CORE_COMMIT }}
-          path: .build/pomodorough-core
-          persist-credentials: false
-
-      - name: Verify pinned source and released shared core
-        run: |
-          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
-          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
-          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
-          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
-          (
-            cd .build/pomodorough-core
-            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
-              --release \
-              --target wasm32-unknown-unknown \
-              --locked
-          )
-          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
-          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
-          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
-          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
-            Resources/SharedCore/pomodorough_core.wasm \
-            --sha256 "$CORE_SHA256"
-          released="$RUNNER_TEMP/pomodorough_core.wasm"
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-            --connect-timeout 30 --max-time 90 \
-            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
-            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
-            --output "$released"
-          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
-            "$released" \
-            --sha256 "$CORE_SHA256"
-          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
+      - name: Resolve latest shared core release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/fetch_shared_core.sh
 
       - name: Check documentation links
         run: python3 scripts/check_docs.py
@@ -328,10 +291,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          expected_sha="$(cat Resources/SharedCore/CORE_SHA256)"
+          [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
           verified_apps=0
           while IFS= read -r wasm; do
             actual_sha=$(shasum -a 256 "$wasm" | awk '{print $1}')
-            test "$actual_sha" = "$CORE_SHA256"
+            test "$actual_sha" = "$expected_sha"
             verified_apps=$((verified_apps + 1))
           done < <(find "$DERIVED_DATA_PATH/Build/Products" -type f -name 'pomodorough_core.wasm' -print)
           test "$verified_apps" -eq 2

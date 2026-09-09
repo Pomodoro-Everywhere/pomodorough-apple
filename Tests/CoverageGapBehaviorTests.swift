@@ -644,6 +644,29 @@ struct SynchronizedMutationCoverageBehaviorTests {
         #expect(started.state.pendingCommands.last?.taskId == projected.id.uuidString.lowercased())
     }
 
+    @Test @MainActor
+    func deletingTaskUsesProjectedSelectionOverStoredSelection() throws {
+        let controller = makeController()
+        let stored = try #require(FocusTask(title: "Stored selection"))
+        let selected = try #require(FocusTask(title: "Visible selection"))
+        var state = PersistedTimerState.fresh()
+        state.tasks = [stored, selected]
+        state.knownTasks = state.tasks
+        state.selectedTaskID = stored.id
+        let selection = try #require(try controller.plan(
+            .selectTask(selected.id), from: snapshot(state)))
+        state = selection.state
+        // A sync response can retain the old base while the pending choice stays visible.
+        state.selectedTaskID = stored.id
+        let input = snapshot(state, selectedTaskID: selected.id)
+        let deletingStored = try #require(try controller.plan(.task(.delete, stored), from: input))
+        #expect(deletingStored.requirements.selectedTaskOperationIDs.isEmpty)
+        #expect(deletingStored.projection?.selectedTaskId == selected.id.uuidString.lowercased())
+        let deletingSelected = try #require(try controller.plan(.task(.delete, selected), from: input))
+        #expect(deletingSelected.requirements.selectedTaskOperationIDs.count == 1)
+        #expect(deletingSelected.projection?.selectedTaskId == nil)
+    }
+
     @MainActor
     private func makeController() -> SynchronizedWorkspaceMutationController {
         SynchronizedWorkspaceMutationController(
