@@ -224,7 +224,16 @@ final class IrohRoomStore: @unchecked Sendable {
                     return workspace.roomState
                 }
             } catch {
-                if installedSecret, loadError == nil { try? secretStore.delete(roomID: roomID) }
+                if installedSecret, loadError == nil {
+                    do {
+                        try secretStore.delete(roomID: roomID)
+                    } catch {
+                        Self.logger.error(
+                            "createRoom rollback could not delete orphaned room secret; secret remains in keychain."
+                        )
+                        SentryCapture.capture(error)
+                    }
+                }
                 throw error
             }
         }

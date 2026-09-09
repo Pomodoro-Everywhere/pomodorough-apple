@@ -15,6 +15,14 @@ struct PersistedStateLoad: Sendable {
     let localState: PersistedTimerState
 }
 
+enum PersistedStateCorruptionError: LocalizedError, Sendable {
+    case skippedCorruptElements
+
+    var errorDescription: String? {
+        "Persisted timer state contained corrupt operations that were skipped."
+    }
+}
+
 struct PersistedStateTransition: Sendable {
     let state: PersistedTimerState
     let migrations: Set<PersistedStateMigration>
@@ -51,13 +59,29 @@ struct PersistedStateLoader {
         let storedData = preferredStoredData
             ?? defaults.data(forKey: Self.storageKey)
             ?? defaults.data(forKey: Self.legacyStorageKey)
-        let decodedState = storedData.flatMap {
-            try? JSONDecoder.api.decode(PersistedTimerState.self, from: $0)
+        let decodedState: PersistedTimerState? = storedData.flatMap { data in
+            guard let state = try? JSONDecoder.api.decode(PersistedTimerState.self, from: data) else {
+                return nil
+            }
+            Self.reportCorruptSkipIfNeeded(state, storedData: data)
+            return state
         }
         return PersistedStateLoad(
             storedData: storedData,
             decodedState: decodedState,
             localState: decodedState ?? .fresh()
+        )
+    }
+
+    private static func reportCorruptSkipIfNeeded(_ state: PersistedTimerState, storedData: Data) {
+        guard state.hasCorruptPendingOperations,
+              !(topLevelObject(in: storedData)?["hasCorruptPendingOperations"] as? Bool ?? false) else { return }
+        logger.error(
+            "Persisted state contained corrupt operations; skipped corrupt elements to preserve remaining state."
+        )
+        SentryCapture.captureOnce(
+            key: "persisted-state-corrupt-skip",
+            error: PersistedStateCorruptionError.skippedCorruptElements
         )
     }
 

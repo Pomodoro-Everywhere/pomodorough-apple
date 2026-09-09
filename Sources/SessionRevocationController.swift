@@ -100,6 +100,7 @@ actor SessionRevocationController {
     private var retryTask: Task<Void, Never>?
     private var retryTaskID: UUID?
     private var consecutiveStorageReadFailures = 0
+    private var consecutiveStorageWriteFailures = 0
     private(set) var storageDiagnostic: LogoutRevocationStorageDiagnostic?
 
     var isRetryRunning: Bool { retryTask != nil }
@@ -201,7 +202,7 @@ actor SessionRevocationController {
     private func retry(_ initial: LogoutRevocationObligation) async {
         let credentialRemoved = await removeActiveCredential(for: initial)
         if initial.remoteRevocationCompleted {
-            if credentialRemoved { try? store.remove(id: initial.id) }
+            if credentialRemoved { persistRemove(id: initial.id) }
             return
         }
         if safelyExpired(initial) {
@@ -256,7 +257,7 @@ actor SessionRevocationController {
             refreshOutcomeUnknown: true,
             requiresRefresh: true
         )
-        guard (try? store.replace(uncertain)) != nil else { return }
+        guard persistReplace(uncertain) else { return }
         let result = await revoker.revoke(uncertain)
         await apply(result, to: uncertain, freshlyRefreshed: false, credentialRemoved: credentialRemoved)
     }
@@ -271,7 +272,7 @@ actor SessionRevocationController {
             tokens: tokens,
             activeCredentialRefreshToken: obligation.activeCredentialRefreshToken
         )
-        guard (try? store.replace(replacement)) != nil else { return }
+        guard persistReplace(replacement) else { return }
         let result = await revoker.revoke(replacement)
         await apply(result, to: replacement, freshlyRefreshed: true, credentialRemoved: credentialRemoved)
     }
@@ -288,8 +289,47 @@ actor SessionRevocationController {
             requiresRefresh: obligation.requiresRefresh,
             remoteRevocationCompleted: true
         )
-        guard (try? store.replace(completed)) != nil else { return }
-        if credentialRemoved { try? store.remove(id: completed.id) }
+        guard persistReplace(completed) else { return }
+        if credentialRemoved { persistRemove(id: completed.id) }
+    }
+
+    @discardableResult
+    private func persistReplace(
+        _ obligation: LogoutRevocationObligation,
+        operation: String = #function
+    ) -> Bool {
+        do {
+            try store.replace(obligation)
+            noteStorageWriteSuccess()
+            return true
+        } catch {
+            recordStorageWriteFailure(error, operation: operation)
+            return false
+        }
+    }
+
+    @discardableResult
+    private func persistRemove(id: UUID, operation: String = #function) -> Bool {
+        do {
+            try store.remove(id: id)
+            noteStorageWriteSuccess()
+            return true
+        } catch {
+            recordStorageWriteFailure(error, operation: operation)
+            return false
+        }
+    }
+
+    private func recordStorageWriteFailure(_ error: Error, operation: String) {
+        consecutiveStorageWriteFailures += 1
+        storageDiagnostic = LogoutRevocationStorageDiagnostic(
+            consecutiveFailures: consecutiveStorageWriteFailures,
+            message: "\(operation): \(error.localizedDescription)"
+        )
+        Self.logger.error(
+            "Logout revocation persist failed: \(operation, privacy: .public)"
+        )
+        SentryCapture.captureOnce(key: "logout-revocation-persist", error: error)
     }
 
     private func safelyExpired(_ obligation: LogoutRevocationObligation) -> Bool {
@@ -331,11 +371,20 @@ actor SessionRevocationController {
     }
 
     private func recordStorageReadSuccess() {
-        if storageDiagnostic != nil {
+        if storageDiagnostic != nil, consecutiveStorageWriteFailures == 0 {
             Self.logger.notice("Pending logout credential storage became readable again")
         }
         consecutiveStorageReadFailures = 0
-        storageDiagnostic = nil
+        if consecutiveStorageWriteFailures == 0 {
+            storageDiagnostic = nil
+        }
+    }
+
+    private func noteStorageWriteSuccess() {
+        consecutiveStorageWriteFailures = 0
+        if consecutiveStorageReadFailures == 0 {
+            storageDiagnostic = nil
+        }
     }
 
     private func recordStorageReadFailure(_ error: Error) -> LogoutRevocationStorageDiagnostic {

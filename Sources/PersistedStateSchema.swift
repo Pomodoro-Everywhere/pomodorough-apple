@@ -237,7 +237,7 @@ enum PersistedStateSchema {
             knownTasks: room.knownTasks,
             selectedTaskID: room.selectedTaskID,
             legacyTaskAssignments: room.legacyTaskAssignments,
-            hasCorruptPendingOperations: pending.hasCorruptOperations,
+            hasCorruptPendingOperations: pending.hasCorruptOperations || room.hasCorruptHistory,
             settings: room.settings,
             cachedUser: account.cachedUser,
             pendingAccountSwitchUser: account.pendingAccountSwitchUser,
@@ -252,6 +252,16 @@ enum PersistedStateSchema {
         init(from decoder: Decoder) {
             value = try? Value(from: decoder)
         }
+    }
+
+    // Required queues stay null-strict (explicit null still fails the whole
+    // decode); only corrupt elements inside a present array skip lossily.
+    private static func decodeRequiredLossyArray<Value: Decodable>(
+        from values: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) throws -> [LossyDecodable<Value>] {
+        guard values.contains(key) else { return [] }
+        return try values.decode([LossyDecodable<Value>].self, forKey: key)
     }
 
     private struct DecodedGeneratorState {
@@ -288,6 +298,7 @@ enum PersistedStateSchema {
         let hasExplicitPhaseSelection: Bool
         let canonicalTimer: CanonicalTimer?
         let history: [HistoryItem]
+        let hasCorruptHistory: Bool
         let tasks: [FocusTask]
         let knownTasks: [FocusTask]
         let selectedTaskID: UUID?
@@ -337,6 +348,18 @@ enum PersistedStateSchema {
     private static func decodePending(
         from values: KeyedDecodingContainer<CodingKeys>
     ) throws -> DecodedPendingState {
+        let commands: [LossyDecodable<TimerCommand>] = try decodeRequiredLossyArray(
+            from: values,
+            key: .pendingCommands
+        )
+        let tasks = try values.decodeIfPresent(
+            [LossyDecodable<TaskOperation>].self,
+            forKey: .pendingTaskOperations
+        ) ?? []
+        let durations = try values.decodeIfPresent(
+            [LossyDecodable<DurationOperation>].self,
+            forKey: .pendingDurationOperations
+        ) ?? []
         let autoStart = try values.decodeIfPresent(
             [LossyDecodable<AutoStartOperation>].self,
             forKey: .pendingAutoStartOperations
@@ -350,14 +373,16 @@ enum PersistedStateSchema {
             forKey: .hasCorruptPendingOperations
         ) ?? false
         return try DecodedPendingState(
-            commands: values.decode([TimerCommand].self, forKey: .pendingCommands),
+            commands: commands.compactMap(\.value),
             localCommandDates: values.decodeIfPresent([String: Date].self, forKey: .localCommandDates) ?? [:],
-            taskOperations: values.decodeIfPresent([TaskOperation].self, forKey: .pendingTaskOperations) ?? [],
-            durationOperations: values.decodeIfPresent([DurationOperation].self, forKey: .pendingDurationOperations)?
-                .map(normalizedLegacySentinel) ?? [],
+            taskOperations: tasks.compactMap(\.value),
+            durationOperations: durations.compactMap(\.value).map(normalizedLegacySentinel),
             autoStartOperations: autoStart.compactMap(\.value).map(normalizedLegacySentinel),
             selectedTaskOperations: selectedTask.compactMap(\.value).map(normalizedLegacySentinel),
             hasCorruptOperations: persistedCorruption
+                || commands.contains { $0.value == nil }
+                || tasks.contains { $0.value == nil }
+                || durations.contains { $0.value == nil }
                 || autoStart.contains { $0.value == nil }
                 || selectedTask.contains { $0.value == nil }
         )
@@ -367,6 +392,10 @@ enum PersistedStateSchema {
         from values: KeyedDecodingContainer<CodingKeys>
     ) throws -> DecodedRoomState {
         let tasks = try values.decodeIfPresent([FocusTask].self, forKey: .tasks) ?? []
+        let history: [LossyDecodable<HistoryItem>] = try decodeRequiredLossyArray(
+            from: values,
+            key: .history
+        )
         return try DecodedRoomState(
             autoStartBreaks: values.decodeIfPresent(Bool.self, forKey: .autoStartBreaks) ?? false,
             localTimerOwners: values.decodeIfPresent([String: String].self, forKey: .localTimerOwners) ?? [:],
@@ -378,7 +407,8 @@ enum PersistedStateSchema {
             selectedPhaseGeneration: values.decodeIfPresent(Int64.self, forKey: .selectedPhaseGeneration) ?? 0,
             hasExplicitPhaseSelection: values.decodeIfPresent(Bool.self, forKey: .hasExplicitPhaseSelection) ?? false,
             canonicalTimer: values.decodeIfPresent(CanonicalTimer.self, forKey: .canonicalTimer),
-            history: values.decode([HistoryItem].self, forKey: .history),
+            history: history.compactMap(\.value),
+            hasCorruptHistory: history.contains { $0.value == nil },
             tasks: tasks,
             knownTasks: values.decodeIfPresent([FocusTask].self, forKey: .knownTasks) ?? tasks,
             selectedTaskID: values.decodeIfPresent(UUID.self, forKey: .selectedTaskID),

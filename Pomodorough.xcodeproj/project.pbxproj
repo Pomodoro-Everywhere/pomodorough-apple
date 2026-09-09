@@ -16,6 +16,7 @@
 		053F2350FCCDBDE503C4BA6F /* AlarmEffectCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D11621FC46E8D23C7F67C06 /* AlarmEffectCoordinator.swift */; };
 		05ADF2030E5861781198DA1B /* UnitPositiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */; };
 		085DDD6B8E401F6FBC9F4BCE /* PersistedQueueReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A60D80E7C01C1227AAB1F07 /* PersistedQueueReconciliation.swift */; };
+		08B2D3CFAE069563D7D8CECF /* IrohRoomStoreRollbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */; };
 		08B842AA74B8633316A97C7A /* CoverageGapBehaviorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */; };
 		097F6024855A8B8AA75B5F22 /* ModernTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B78A6C72FEDDC6BCC6B7DC1 /* ModernTabs.swift */; };
 		09FAB91AC913CC5933287240 /* SharedCoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CEEC2337A192634D24A340C /* SharedCoreModels.swift */; };
@@ -81,6 +82,7 @@
 		32E6F4F113879D715D9BE1E3 /* SynchronizationWireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */; };
 		32E94256D732CB58A1BDBB25 /* AppVersionInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9BB7245C1F9FD993DF005A /* AppVersionInfoTests.swift */; };
 		3304111FE49CB985AC2504F5 /* CentralizedAccountSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98F3DC0FF23AE7DA1D3BA0B /* CentralizedAccountSessionCoordinator.swift */; };
+		3501CE7CCAE635903F8A0F6C /* PersistedStateCorruptSkipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 181DAAB1D476F55EC7262DCE /* PersistedStateCorruptSkipTests.swift */; };
 		3546DB83BA987246ED2FB6AF /* EndpointIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5131154CE2452672A3A4F700 /* EndpointIdentity.swift */; };
 		356D58FFF6FC74C9885068D6 /* PomodoroughTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4755E1928278877B4EA62348 /* PomodoroughTheme.swift */; };
 		368D76AEDDB3D537C161FA84 /* TimerAccessibilityElement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0303C97930C62DA9D021350B /* TimerAccessibilityElement.swift */; };
@@ -139,6 +141,7 @@
 		59D6F412C4DCC2152CFD9E51 /* TaskBoardHero.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3E9897B5BCD498F85742F6 /* TaskBoardHero.swift */; };
 		5BE49EF9AF2F90897303FBBB /* RPCMessageCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CBFFA1E9D9565B804B08961 /* RPCMessageCodec.swift */; };
 		5C333AB5EA1A01C470B1A7FF /* MainContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8F4B9B9BCCA8F2070D63D3 /* MainContainer.swift */; };
+		5C41726962F3A0597FBD951C /* IrohRoomStoreRollbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */; };
 		5C5F3C5C652265C7C81ACB31 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D641D6CAC2F40A338AAC120 /* AppModel.swift */; };
 		5CC29A40436C1DF3A0E2BD1C /* APIDateRetainedStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7992AEDBA039737DA91F4360 /* APIDateRetainedStoreTests.swift */; };
 		5D7D020567E8B895940A7A57 /* AlarmEffectCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D11621FC46E8D23C7F67C06 /* AlarmEffectCoordinator.swift */; };
@@ -161,6 +164,7 @@
 		6E824AA46876EB397AE0E2FD /* TimerOperationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACA753B0F16F753B7DA1644 /* TimerOperationModels.swift */; };
 		6EB33A2C61F08293B9680E07 /* DurationRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE96CC08C9D010F5D2E128E /* DurationRow.swift */; };
 		6F4055FF9BAC596CE2729F38 /* RPCMessageValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99AC746729ADB1BBFF8FEE6C /* RPCMessageValidation.swift */; };
+		6F46E8FD82F49B722264C760 /* PersistedStateCorruptSkipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 181DAAB1D476F55EC7262DCE /* PersistedStateCorruptSkipTests.swift */; };
 		6F6BED1A6FC1A684271A8EAF /* AppStatePersistenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 548C52633BAFF8D04FF3C33C /* AppStatePersistenceCoordinator.swift */; };
 		6FACABDE53286EABD52160E6 /* TimerSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED3762000A0338A5D822855F /* TimerSessionController.swift */; };
 		6FC998ECBF9E243A266F62FD /* AppModelDecompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99FD08EB834A612834A4FC51 /* AppModelDecompositionTests.swift */; };
@@ -249,6 +253,7 @@
 		AB492C16E7AF250315F8F18C /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 35AA0AE6D9C79D57FA24B1BD /* GoogleSignInSwift */; };
 		AC60BEEA2D4A4F589ECADD9F /* WatchAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEE7E02424070389988E5403 /* WatchAssets.xcassets */; };
 		AC87597FC0BB949D7DD7FBE7 /* TrustedClockState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56B8E4C58C1FA9F178CDD269 /* TrustedClockState.swift */; };
+		AE1817AAC6680D5E539C8A7D /* SessionRevocationPersistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2978C70B1FF2160179F07D04 /* SessionRevocationPersistTests.swift */; };
 		AE9D7FE4AF2202C1E0C41E07 /* RailwayNetworkLines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724244F638BCEA9648A23B9A /* RailwayNetworkLines.swift */; };
 		AF8EDF2849085D6C6EE5EBD6 /* TasksScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3338212C1D24087870295D /* TasksScreen.swift */; };
 		AFA72B55F24D175A803F93BF /* ServicePatternCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE6D3C420FC1AB911E53262 /* ServicePatternCard.swift */; };
@@ -315,6 +320,7 @@
 		D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */; };
 		D78ED3D504C0542605BB9A61 /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
 		D89474D724A1904C8240127C /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
+		D8BD828CDA6832E8C118088B /* SessionRevocationPersistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2978C70B1FF2160179F07D04 /* SessionRevocationPersistTests.swift */; };
 		D9748460069EA29BC8F5E723 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */; };
 		DA4A39504FF57E9ACB4251CC /* SentryCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41DAEF25DD519EA966E58700 /* SentryCapture.swift */; };
 		DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2455C8C8ECE4B1401FA78CC8 /* RouteClockMark.swift */; };
@@ -461,6 +467,7 @@
 		16444CB19AC72DC69EBB6F7F /* SynchronizationWireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationWireModels.swift; sourceTree = "<group>"; };
 		17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohReplicationServiceCoverageTests.swift; sourceTree = "<group>"; };
 		17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Pomodorough.swift"; sourceTree = "<group>"; };
+		181DAAB1D476F55EC7262DCE /* PersistedStateCorruptSkipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedStateCorruptSkipTests.swift; sourceTree = "<group>"; };
 		18D8C0E6D0DD7DDCDCD71F08 /* CompletionChime.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = CompletionChime.wav; sourceTree = "<group>"; };
 		1E7473097A54FEEC975EC408 /* IrohLegacyTaskMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohLegacyTaskMigration.swift; sourceTree = "<group>"; };
 		20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRevocationController.swift; sourceTree = "<group>"; };
@@ -474,6 +481,7 @@
 		24F72CA3CA502137F9C4EF44 /* TimerMachineCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerMachineCard.swift; sourceTree = "<group>"; };
 		2647022289DC63027ACC0CCD /* CanonicalRecordCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanonicalRecordCodec.swift; sourceTree = "<group>"; };
 		27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinIrohRoomView.swift; sourceTree = "<group>"; };
+		2978C70B1FF2160179F07D04 /* SessionRevocationPersistTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRevocationPersistTests.swift; sourceTree = "<group>"; };
 		29FFA5F4F5578EC3B338B9BB /* SharedCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCore.swift; sourceTree = "<group>"; };
 		2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryCaptureTests.swift; sourceTree = "<group>"; };
 		2BA65CB22541A1FAD6009384 /* TaskBoardEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardEmptyState.swift; sourceTree = "<group>"; };
@@ -582,6 +590,7 @@
 		AE50A4937E18D925FD8F8CCC /* IrohRoomModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomModels.swift; sourceTree = "<group>"; };
 		B1E3C90D70D49C8F69F513DE /* WatchTimerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchTimerView.swift; sourceTree = "<group>"; };
 		B2BB423CB3E1BA12419562FC /* WireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireModels.swift; sourceTree = "<group>"; };
+		B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomStoreRollbackTests.swift; sourceTree = "<group>"; };
 		B89BDAA2BB7DF807BB2552DC /* ServicePatternScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServicePatternScreen.swift; sourceTree = "<group>"; };
 		B908C0CE40CB2094D4A76D84 /* TimerControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerControls.swift; sourceTree = "<group>"; };
 		B984C6E067218858ECFB2608 /* WatchAlertContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAlertContractTests.swift; sourceTree = "<group>"; };
@@ -761,6 +770,7 @@
 				D4C0A72BA43DCAFC4D61584F /* IrohProtocolNegativeCompatibilityTests.swift */,
 				17026574281F14C63AFB0841 /* IrohReplicationServiceCoverageTests.swift */,
 				3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */,
+				B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */,
 				39F166E83B43964696B39D1B /* LegacyMigrationCrashRecoveryTests.swift */,
 				5EA9D8F351248CDEAAFCD570 /* LegacyMigrationDurabilityTests.swift */,
 				2E603B243D29FD1320E6153B /* LegacyMigrationSourceRaceTests.swift */,
@@ -769,11 +779,13 @@
 				6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */,
 				23E73A1D6F89C1AAFBC49A74 /* ModelsSourceSplitCompatibilityTests.swift */,
 				9A3CD9AE3AA80976EBF73221 /* PersistedStateCompatibilityTests.swift */,
+				181DAAB1D476F55EC7262DCE /* PersistedStateCorruptSkipTests.swift */,
 				22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */,
 				897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */,
 				43EA519036AFB88FDBC5322E /* RetainedRoomRejoinTests.swift */,
 				AAB884EB9E8593E740893441 /* RoomReplicationControllerTests.swift */,
 				2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */,
+				2978C70B1FF2160179F07D04 /* SessionRevocationPersistTests.swift */,
 				39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */,
 				95459C448D13FAA06E6007CD /* SnapshotReplacementRecoveryTests.swift */,
 				645DF6461B89E328FD8FDD43 /* SSERevisionStreamLimitsTests.swift */,
@@ -1290,6 +1302,7 @@
 				9739DF462BB345FB58990404 /* IrohProtocolNegativeCompatibilityTests.swift in Sources */,
 				BD842A53CE6A8D2E5F6446A3 /* IrohReplicationServiceCoverageTests.swift in Sources */,
 				84B131A8A1403C42A16AFB5C /* IrohReplicationTests.swift in Sources */,
+				5C41726962F3A0597FBD951C /* IrohRoomStoreRollbackTests.swift in Sources */,
 				15C947053EE583A80E79A30D /* LegacyMigrationCrashRecoveryTests.swift in Sources */,
 				487DF4813A7E1241DE089C1C /* LegacyMigrationDurabilityTests.swift in Sources */,
 				C2B1BEF7F652D9B4B38415F8 /* LegacyMigrationSourceRaceTests.swift in Sources */,
@@ -1301,12 +1314,14 @@
 				E18951533779205398B8BDC2 /* MenuBarTimerTests.swift in Sources */,
 				773AEB98B6A6EE50655C58E7 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
 				7B32DC7AAB3CACBC785C665C /* PersistedStateCompatibilityTests.swift in Sources */,
+				3501CE7CCAE635903F8A0F6C /* PersistedStateCorruptSkipTests.swift in Sources */,
 				A8E0A6723798097C7C4DF550 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */,
 				F805FD21E2BBAB7469704A09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */,
 				8F167EF6736553C362FC10DF /* RetainedRoomRejoinTests.swift in Sources */,
 				F55FE30F7BB363948E39896C /* RoomReplicationControllerTests.swift in Sources */,
 				465741A0371919D20FC630B8 /* SSERevisionStreamLimitsTests.swift in Sources */,
 				B589F5C71C40CD7ACEFA1240 /* SentryCaptureTests.swift in Sources */,
+				D8BD828CDA6832E8C118088B /* SessionRevocationPersistTests.swift in Sources */,
 				D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */,
 				3EE87C877D0FA149A2EE210E /* SnapshotReplacementRecoveryTests.swift in Sources */,
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
@@ -1356,6 +1371,7 @@
 				A1B406D10176E46186EADC50 /* IrohProtocolNegativeCompatibilityTests.swift in Sources */,
 				7F94E3278EBD9E9173232D9C /* IrohReplicationServiceCoverageTests.swift in Sources */,
 				87BDDCCB865B8A72DD4AEBFC /* IrohReplicationTests.swift in Sources */,
+				08B2D3CFAE069563D7D8CECF /* IrohRoomStoreRollbackTests.swift in Sources */,
 				3DAD03D770221682D54E961B /* LegacyMigrationCrashRecoveryTests.swift in Sources */,
 				4A11EC99A3B962A43A12447F /* LegacyMigrationDurabilityTests.swift in Sources */,
 				7E90BFFC855AA69DF202787E /* LegacyMigrationSourceRaceTests.swift in Sources */,
@@ -1367,12 +1383,14 @@
 				58ADF2DECA9FFCB65B063AD1 /* MenuBarTimerTests.swift in Sources */,
 				9A572722943C8D6ABA5DDD97 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
 				24398B245363C38C96EF7316 /* PersistedStateCompatibilityTests.swift in Sources */,
+				6F46E8FD82F49B722264C760 /* PersistedStateCorruptSkipTests.swift in Sources */,
 				E5957DF586FCF854A38FA531 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */,
 				32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */,
 				666D26C401566CBE207B5573 /* RetainedRoomRejoinTests.swift in Sources */,
 				F0B39A4D97D4DA6D7C2E4D23 /* RoomReplicationControllerTests.swift in Sources */,
 				5501ED3615BEE0850B88FCA0 /* SSERevisionStreamLimitsTests.swift in Sources */,
 				109A5F0593DACAA600FEB78E /* SentryCaptureTests.swift in Sources */,
+				AE1817AAC6680D5E539C8A7D /* SessionRevocationPersistTests.swift in Sources */,
 				99EFFE32E536E90D52596E0D /* SharedCoreWASMTests.swift in Sources */,
 				C4619B3E2C2FF52F2A6D85DF /* SnapshotReplacementRecoveryTests.swift in Sources */,
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
