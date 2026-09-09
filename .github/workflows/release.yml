@@ -1046,21 +1046,11 @@ jobs:
           launch_pid="${launch_output##*: }"
           test -n "$launch_pid"
           [[ "$launch_pid" =~ ^[0-9]+$ ]]
-          uid="$(id -u)"
-          poll_deadline=30
-          poll_hit=""
-          for attempt in $(seq 1 "$poll_deadline"); do
-            if xcrun simctl spawn "$device_id" launchctl print "gui/$uid/$bundle_id" 2>/dev/null | grep -q "state = running"; then
-              poll_hit="yes"
-              break
-            fi
-            if [[ "$attempt" -eq "$poll_deadline" ]]; then
-              echo "Simulator app $bundle_id did not reach running state within ${poll_deadline}s" >&2
-              exit 1
-            fi
-            sleep 1
-          done
-          test -n "$poll_hit"
+          sleep 2
+          if ! ps -p "$launch_pid" >/dev/null 2>&1 || [[ "$(ps -p "$launch_pid" -o stat=)" == *Z* ]]; then
+            echo "Simulator app $bundle_id (pid $launch_pid) is not running after launch" >&2
+            exit 1
+          fi
           xcrun simctl terminate "$device_id" "$bundle_id"
 
       - name: Export SPDX SBOM

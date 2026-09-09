@@ -58,7 +58,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         preflight = workflow.split("  preflight:")[1].split("\n  selftest:")[0]
         self.assertIn("python3 scripts/check_interface_contract.py", preflight)
         self.assertNotIn("python3 -m unittest discover -s scripts/tests -v", preflight)
-        self.assertNotIn("sleep 2", workflow)
+        smoke = workflow.split("Clean-install and launch")[1].split("- name: Export SPDX SBOM")[0]
+        self.assertIn('ps -p "$launch_pid" >/dev/null 2>&1', smoke)
+        self.assertNotIn("state = running", smoke)
 
 
 if __name__ == "__main__":

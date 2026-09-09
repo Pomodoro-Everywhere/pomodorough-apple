@@ -97,9 +97,8 @@ class SharedCoreWorkflowTests(unittest.TestCase):
                 'launch_output="$(xcrun simctl launch',
                 'test -n "$launch_pid"',
                 '[[ "$launch_pid" =~ ^[0-9]+$ ]]',
-                'launchctl print',
-                'did not reach running state',
-                'test -n "$poll_hit"',
+                'ps -p "$launch_pid" >/dev/null 2>&1',
+                'is not running after launch',
                 'xcrun simctl terminate "$device_id" "$bundle_id"',
             )
             for clause in required:
@@ -110,14 +109,14 @@ class SharedCoreWorkflowTests(unittest.TestCase):
                 sorted(candidate.index(clause) for clause in ordered),
             )
             self.assertNotIn('codesign --remove-signature "$ios_simulator_staged_app"', candidate)
-            self.assertNotIn("sleep 2", candidate)
+            self.assertNotIn("launchctl print", candidate)
+            self.assertNotIn("state = running", candidate)
 
         assert_contract(workflow)
         survival_clauses = (
             '[[ "$launch_pid" =~ ^[0-9]+$ ]]',
-            "launchctl print",
-            "did not reach running state",
-            'test -n "$poll_hit"',
+            'ps -p "$launch_pid" >/dev/null 2>&1',
+            "is not running after launch",
             'xcrun simctl terminate "$device_id" "$bundle_id"',
         )
         for clause in survival_clauses:
