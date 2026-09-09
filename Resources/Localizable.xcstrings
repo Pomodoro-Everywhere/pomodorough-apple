@@ -1995,6 +1995,16 @@
         }
       }
     },
+    "Persisted timer state contained corrupt operations that were skipped.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persisted timer state contained corrupt operations that were skipped."
+          }
+        }
+      }
+    },
     "Pomodoro progress": {
       "localizations": {
         "en": {

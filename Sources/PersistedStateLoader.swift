@@ -19,7 +19,7 @@ enum PersistedStateCorruptionError: LocalizedError, Sendable {
     case skippedCorruptElements
 
     var errorDescription: String? {
-        "Persisted timer state contained corrupt operations that were skipped."
+        String(localized: "Persisted timer state contained corrupt operations that were skipped.")
     }
 }
 

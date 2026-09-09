@@ -1544,6 +1544,12 @@
         "value": "‏⟦Permissions are optional. The timer still works while Pomodorough is open.⟧"
       }
     },
+    "Persisted timer state contained corrupt operations that were skipped.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Persisted timer state contained corrupt operations that were skipped.⟧"
+      }
+    },
     "Pomodoro progress": {
       "stringUnit": {
         "state": "translated",
