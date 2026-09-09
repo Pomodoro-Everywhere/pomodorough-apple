@@ -1040,6 +1040,54 @@ struct IrohReplicationTests {
     }
 
     @Test @MainActor
+    func leavingRoomCancelsDepartedRunningTimerAlarm() async throws {
+        let suiteName = "PomodoroughTests.IrohLeaveAlarm.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let store = temporaryStore()
+        let roomTimer = CanonicalTimer(
+            id: "timer-room-leave",
+            taskId: nil as String?,
+            phase: .focus,
+            status: .running,
+            plannedDurationMs: 25 * 60_000,
+            elapsedAtAnchorMs: 0,
+            anchorAt: .now,
+            lastIntent: nil
+        )
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: roomTimer,
+                history: [],
+                tasks: [],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 0,
+                hlcCounter: 0
+            )
+        )
+        let scheduler = RecordingAlarmScheduler()
+        let model = AppModel(
+            defaults: defaults,
+            roomStore: store,
+            alarmScheduler: scheduler
+        )
+        #expect(model.canonicalTimer?.id == roomTimer.id)
+        #expect(model.canonicalTimer?.status == .running)
+        model.requestIrohRoomLeave()
+        await model.confirmIrohRoomLeave()
+        await model.waitForAlarmOperations()
+        #expect(scheduler.operations.contains(.cancel(timerID: roomTimer.id)))
+    }
+
+    @Test @MainActor
     func irohSignOutClearsAccountWithoutDiscardingRoomOrLocalReturnSelection() throws {
         let suiteName = "PomodoroughTests.IrohAccountClear.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

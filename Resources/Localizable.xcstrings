@@ -3333,6 +3333,16 @@
         }
       }
     },
+    "%arg finished pomodoros, %arg spent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%arg finished pomodoros, %arg spent"
+          }
+        }
+      }
+    },
     "Completed focus: %arg": {
       "localizations": {
         "en": {

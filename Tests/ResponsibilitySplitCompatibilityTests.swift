@@ -60,6 +60,27 @@ struct ResponsibilitySplitCompatibilityTests {
         #expect(TimerSessionController.nextPhaseGeneration(after: .max) == 0)
     }
 
+    @Test(arguments: [true, false]) @MainActor
+    func sameTimerCorrectionOnlySchedulesWhenOwned(ownsCurrentTimer: Bool) {
+        let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })
+        let date = Date(timeIntervalSince1970: 3_000)
+        let previous = TestFixtures.timer(status: .paused, elapsed: 1_000)
+        let current = CanonicalTimer(
+            id: previous.id,
+            taskId: nil,
+            phase: previous.phase,
+            status: .running,
+            plannedDurationMs: 60_000,
+            elapsedAtAnchorMs: 1_000,
+            anchorAt: previous.anchorAt.addingTimeInterval(5),
+            lastIntent: nil
+        )
+        let plan = controller.alarmPlan(
+            from: previous, to: current, at: date, ownsCurrentTimer: ownsCurrentTimer)
+        #expect(plan.actions.first == .cancel(timerID: previous.id))
+        #expect(plan.actions.count == (ownsCurrentTimer ? 2 : 1))
+    }
+
     @Test @MainActor
     func synchronizationPlanStopsAtProvisionalBreakWithoutReordering() throws {
         let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })

@@ -15,6 +15,10 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     var phase: String
     /// "running" | "paused" | "idle" (no active timer).
     var status: String
+    /// Canonical timer id when a timer is active; nil when idle. Lets the
+    /// phone reject delayed watch commands aimed at a previous timer.
+    /// Defaults nil so snapshots from older iOS apps still decode.
+    var timerId: String? = nil
     var plannedDurationMs: Int64
     var elapsedAtAnchorMs: Int64
     var anchorAt: Date
@@ -50,6 +54,12 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
 }
 
 struct WatchTimerCommand: Codable, Equatable, Sendable {
+    /// Unique command identity for dedupe/diagnostics.
+    /// Defaults to a fresh id so commands from older watch apps still decode.
+    var id: UUID = UUID()
+    /// Target canonical timer id for pause/resume/finish; nil for start,
+    /// selectPhase, setDuration and for payloads from older watch apps.
+    var timerId: String? = nil
     /// "start" | "pause" | "resume" | "finish" | "selectPhase" | "setDuration".
     var name: String
     /// TimerPhase rawValue, for selectPhase / setDuration.
@@ -58,15 +68,52 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     var minutes: Int?
     var sentAt: Date
 
-    static func start() -> Self { Self(name: "start", sentAt: .now) }
-    static func pause() -> Self { Self(name: "pause", sentAt: .now) }
-    static func resume() -> Self { Self(name: "resume", sentAt: .now) }
-    static func finish() -> Self { Self(name: "finish", sentAt: .now) }
+    // Explicit memberwise init (a custom init(from:) below suppresses the
+    // synthesized one).
+    init(
+        id: UUID = UUID(),
+        timerId: String? = nil,
+        name: String,
+        phase: String? = nil,
+        minutes: Int? = nil,
+        sentAt: Date
+    ) {
+        self.id = id
+        self.timerId = timerId
+        self.name = name
+        self.phase = phase
+        self.minutes = minutes
+        self.sentAt = sentAt
+    }
+
+    // Custom decoding: keys absent from older watch apps fall back to the
+    // defaults above instead of failing the whole command.
+    init(from decoder: Decoder) throws {        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        timerId = try container.decodeIfPresent(String.self, forKey: .timerId)
+        name = try container.decode(String.self, forKey: .name)
+        phase = try container.decodeIfPresent(String.self, forKey: .phase)
+        minutes = try container.decodeIfPresent(Int.self, forKey: .minutes)
+        sentAt = try container.decode(Date.self, forKey: .sentAt)
+    }
+
+    static func start(timerId: String? = nil) -> Self {
+        Self(id: UUID(), timerId: timerId, name: "start", sentAt: .now)
+    }
+    static func pause(timerId: String? = nil) -> Self {
+        Self(id: UUID(), timerId: timerId, name: "pause", sentAt: .now)
+    }
+    static func resume(timerId: String? = nil) -> Self {
+        Self(id: UUID(), timerId: timerId, name: "resume", sentAt: .now)
+    }
+    static func finish(timerId: String? = nil) -> Self {
+        Self(id: UUID(), timerId: timerId, name: "finish", sentAt: .now)
+    }
     static func selectPhase(_ rawValue: String) -> Self {
-        Self(name: "selectPhase", phase: rawValue, sentAt: .now)
+        Self(id: UUID(), timerId: nil, name: "selectPhase", phase: rawValue, sentAt: .now)
     }
     static func setDuration(minutes: Int, forPhaseRawValue rawValue: String) -> Self {
-        Self(name: "setDuration", phase: rawValue, minutes: minutes, sentAt: .now)
+        Self(id: UUID(), timerId: nil, name: "setDuration", phase: rawValue, minutes: minutes, sentAt: .now)
     }
 }
 

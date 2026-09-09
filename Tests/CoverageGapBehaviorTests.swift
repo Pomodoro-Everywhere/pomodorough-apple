@@ -629,6 +629,21 @@ struct SynchronizedMutationCoverageBehaviorTests {
         ])
     }
 
+    @Test @MainActor
+    func startTimerUsesProjectedSelectedTaskOverStoredSelection() throws {
+        let controller = makeController()
+        let stored = try #require(FocusTask(title: "Stored task"))
+        let projected = try #require(FocusTask(title: "Projected task"))
+        var state = PersistedTimerState.fresh()
+        state.tasks = [stored, projected]
+        state.knownTasks = [stored, projected]
+        state.selectedTaskID = stored.id
+
+        let started = try #require(try controller.plan(
+            .startTimer, from: snapshot(state, selectedTaskID: projected.id)))
+        #expect(started.state.pendingCommands.last?.taskId == projected.id.uuidString.lowercased())
+    }
+
     @MainActor
     private func makeController() -> SynchronizedWorkspaceMutationController {
         SynchronizedWorkspaceMutationController(

@@ -301,23 +301,23 @@ struct RetainedRoomRejoinTests {
     }
 
     @Test @MainActor
-    func controllerCapturesReturnBeforeTransportAndLeavesCorrectWorkspace() async throws {
+    func controllerCapturesReturnAfterTransportAndLeavesCorrectWorkspace() async throws {
         let fixture = try RetainedRejoinFixture()
         try fixture.retainRooms()
         let harness = try RetainedRejoinControllerFixture(fixture)
-        let original = harness.state
         harness.service.onStart = { harness.state.settings.selectedPhase = .longBreak }
         let result = await harness.controller.joinRoom(inviteText: try harness.invite(), environment: harness.environment)
         guard case .roomJoined(let joined) = result else {
             Issue.record("Expected retained room join, got \(result)")
             return
         }
-        #expect(harness.snapshots == 1)
-        #expect(fixture.store.activeReturnState == original)
+        let mutated = harness.state
+        #expect(harness.snapshots == 2)
+        #expect(fixture.store.activeReturnState == mutated)
         #expect(fixture.store.activeRoomID == fixture.roomA)
         harness.state = joined
         let returned = await harness.controller.leaveRoom(environment: harness.environment)
-        #expect(returned == .roomLeft(original))
+        #expect(returned == .roomLeft(mutated))
         fixture.restart()
         #expect(fixture.store.activeRoomID == nil)
         #expect(fixture.store.roomIDs.count == 2)

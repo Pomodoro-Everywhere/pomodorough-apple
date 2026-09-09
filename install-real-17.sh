@@ -7,7 +7,7 @@ DEVICE_NAME="17"
 WATCH_NAME="GUCCI SmartToilet 7 Nano"
 DERIVED_DATA_DIR="${DERIVED_DATA_DIR:-$ROOT_DIR/DerivedData/install-real-17}"
 BUILT_APP="$DERIVED_DATA_DIR/Build/Products/Release-iphoneos/Pomodorough.app"
-BUILT_WATCH_APP="$DERIVED_DATA_DIR/Build/Products/Release-watchos/Pomodorough.app"
+BUILT_WATCH_APP="$BUILT_APP/Watch/Pomodorough.app"
 
 if [[ -f "$ROOT_DIR/Supporting/SentryDSN.local" ]]; then
     SENTRY_DSN="$(tr -d '[:space:]' < "$ROOT_DIR/Supporting/SentryDSN.local")"
@@ -34,14 +34,26 @@ if [[ "$PLATFORM_NAME" != "iphoneos" ]]; then
     exit 1
 fi
 
-xcrun devicectl device install app --device "$DEVICE_NAME" "$BUILT_APP"
+if [[ ! -d "$BUILT_WATCH_APP" ]]; then
+    printf 'Embedded watch app not found: %s\n' "$BUILT_WATCH_APP" >&2
+    exit 1
+fi
+
+WATCH_PLATFORM_NAME="$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$BUILT_WATCH_APP/Info.plist")"
+if [[ "$WATCH_PLATFORM_NAME" != "watchos" ]]; then
+    printf 'Refusing to install non-device watch build with platform %s\n' "$WATCH_PLATFORM_NAME" >&2
+    exit 1
+fi
+
+xcrun devicectl device install app --device "$DEVICE_NAME" "$BUILT_APP" --timeout 180
 
 printf 'Installed iOS app on device %s\n' "$DEVICE_NAME"
 
-# Watch app ships embedded in the iOS bundle (Embed Watch Content) and is
-# delivered to the paired watch through the normal companion channel, which
-# is what registers the WatchConnectivity counterpart linkage.
-# Verify the embedded payload made it into the bundle:
-if [[ ! -d "$BUILT_APP/Watch/Pomodorough.app" ]]; then
-    printf 'WARNING: no embedded watch app in iOS bundle; WatchConnectivity pairing will fail\n' >&2
+# Keep the embedded companion payload, but do not depend on automatic Watch
+# delivery finishing. Install that same signed payload directly on the watch.
+if ! xcrun devicectl device install app --device "$WATCH_NAME" "$BUILT_WATCH_APP" --timeout 180; then
+    printf 'iOS installed, but direct watchOS installation failed. See devicectl error above.\n' >&2
+    exit 1
 fi
+
+printf 'Installed watchOS app on device %s\n' "$WATCH_NAME"

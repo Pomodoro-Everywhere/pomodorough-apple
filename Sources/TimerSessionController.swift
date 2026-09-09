@@ -459,7 +459,7 @@ extension TimerSessionController {
                 || currentTimer.elapsedAtAnchorMs != previousTimer.elapsedAtAnchorMs
                 || currentTimer.anchorAt != previousTimer.anchorAt else { return .none }
         var actions: [AlarmAction] = [.cancel(timerID: previousTimer.id)]
-        if currentTimer.status == .running {
+        if currentTimer.status == .running, ownsCurrentTimer {
             actions.append(.schedule(
                 timerID: currentTimer.id,
                 phase: currentTimer.phase,

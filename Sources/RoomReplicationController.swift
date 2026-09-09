@@ -292,7 +292,7 @@ final class RoomReplicationController {
             try await service.join(invite: invite)
             let joined = try dependencies.roomStore.activateJoinedRoom(
                 roomID: invite.roomID,
-                returnState: returnState
+                returnState: dependencies.workspaceSnapshot().state
             )
             mode = .iroh
             cancelCentralizedStreams()

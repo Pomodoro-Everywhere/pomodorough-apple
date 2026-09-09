@@ -25,31 +25,6 @@ struct DurationRow: View {
             }
         }
         .disabled(disabled)
-        .accessibilityRepresentation {
-            Button(phase.title) {
-                guard !disabled else { return }
-                select()
-            }
-            .disabled(disabled)
-            .accessibilityValue("\(minutes) minutes")
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityHint(
-                disabled
-                    ? "Stop the current timer to change this setting."
-                    : "Double tap to select. Swipe up or down to change duration."
-            )
-            .accessibilityAdjustableAction { direction in
-                guard !disabled else { return }
-                switch direction {
-                case .increment:
-                    changeMinutes(minutes + 1)
-                case .decrement:
-                    changeMinutes(minutes - 1)
-                @unknown default:
-                    break
-                }
-            }
-        }
     }
 
     private var phaseButton: some View {
@@ -73,7 +48,14 @@ struct DurationRow: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .accessibilityLabel(phase.title)
+        .accessibilityValue("\(minutes) minutes")
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(
+            disabled
+                ? "Stop the current timer to change this setting."
+                : "Double tap to select this phase."
+        )
     }
 
     private var durationControls: some View {

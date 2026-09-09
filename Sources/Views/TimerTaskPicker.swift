@@ -12,10 +12,14 @@ struct TimerTaskPicker: View {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 8) { pickerContent }
             } else {
-                HStack(spacing: 12) { pickerContent }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { pickerContent }
+                    VStack(alignment: .leading, spacing: 8) { pickerContent }
+                }
             }
         }
         .padding(.horizontal, 14)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(minHeight: layout == .landscape ? 40 : 48)
         .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
     }

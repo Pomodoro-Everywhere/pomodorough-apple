@@ -24,22 +24,6 @@ final class WatchSyncService: NSObject, ObservableObject {
                 Self.logOnce(key: "watch-cache-decode", error: error)
             }
         }
-        // TEMP-CRASH-REPRO (simulator only, never device): seed a running
-        // snapshot to exercise syncedView without WC.
-        #if targetEnvironment(simulator)
-        if self.snapshot == nil {
-            let now = Date()
-            self.snapshot = WatchTimerSnapshot(
-                phase: "focus", status: "running",
-                plannedDurationMs: 25 * 60 * 1_000, elapsedAtAnchorMs: 0, anchorAt: now,
-                selectedPhase: "focus",
-                focusDurationMs: 25 * 60 * 1_000,
-                shortBreakDurationMs: 5 * 60 * 1_000,
-                longBreakDurationMs: 15 * 60 * 1_000,
-                updatedAt: now
-            )
-        }
-        #endif
         if WCSession.isSupported() {
             WCSession.default.delegate = self
             WCSession.default.activate()
@@ -54,11 +38,9 @@ final class WatchSyncService: NSObject, ObservableObject {
         if session.isReachable {
             session.sendMessage(
                 payload,
-                replyHandler: { [weak self] reply in
-                    // Decode on the WC callback thread (same proven-safe pattern as
-                    // storeSnapshot): only Sendable values may cross into the Task.
-                    // Capturing the raw non-Sendable reply dict crashed here (SIGTRAP
-                    // in the actor-isolation check on the WC background queue).
+                replyHandler: { @Sendable [weak self] reply in
+                    // WC invokes callbacks off-main. Sendable prevents inherited
+                    // MainActor isolation; only the decoded snapshot crosses actors.
                     guard let data = reply[WatchSyncKeys.snapshot] as? Data else { return }
                     let snapshot: WatchTimerSnapshot
                     do {
@@ -71,7 +53,7 @@ final class WatchSyncService: NSObject, ObservableObject {
                         self?.ingest(snapshot)
                     }
                 },
-                errorHandler: { error in
+                errorHandler: { @Sendable error in
                     // Silent delivery preserved: no retry, no user surface.
                     // Log-only (no Sentry on watchOS), deduped to avoid spam.
                     Self.logOnce(key: "watch-request-send", error: error)
@@ -106,21 +88,24 @@ final class WatchSyncService: NSObject, ObservableObject {
             session.sendMessage(
                 [WatchSyncKeys.command: data],
                 replyHandler: nil,
-                errorHandler: { error in
-                    // Silent delivery preserved: command stays queued via
-                    // application context on next reachability change.
+                errorHandler: { @Sendable error in
+                    // Reachable send failed (e.g. link dropped mid-send):
+                    // fall back to the ordered user-info queue so the
+                    // command is still delivered exactly once in order.
                     Self.logOnce(key: "watch-command-send", error: error)
+                    Task { @MainActor in
+                        _ = WCSession.default.transferUserInfo([WatchSyncKeys.command: data])
+                    }
                 }
             )
         } else {
-            // Queued: delivered as soon as the phone is reachable again.
-            do {
-                try session.updateApplicationContext([WatchSyncKeys.command: data])
-            } catch {
-                // Log-only (no Sentry on watchOS by design); the next send
-                // re-queues via application context.
-                Self.logOnce(key: "watch-command-queue", error: error)
-            }
+            // Queued offline, one transfer per command: the system holds
+            // them ordered until the phone is reachable again. Application
+            // context is NOT used here — it keeps only the last dictionary,
+            // so queued commands would overwrite each other (and a sync
+            // pull would overwrite a queued Pause). Context stays reserved
+            // for replaceable state; the phone re-pushes on reachability.
+            _ = session.transferUserInfo([WatchSyncKeys.command: data])
         }
     }
 }
@@ -195,13 +180,17 @@ extension WatchSyncService: WCSessionDelegate {
     }
 }
 
-// Watch-side silent-delivery note (AP33): no Sentry on watchOS by design —
+// Watch-side delivery note: commands travel live via sendMessage and queued
+// via transferUserInfo (ordered, one transfer per command — application
+// context keeps only the last dictionary and must stay reserved for
+// replaceable state such as snapshot pulls). No Sentry on watchOS by design —
 // the Pomodorough-watchOS target does not link the Sentry package
 // (see project.yml: Sentry is a dependency of iOS/macOS targets only), so the
-// sendMessage errorHandlers above stay thin logOnce wrappers around the
+// sendMessage errorHandler above stays a thin logOnce wrapper around the
 // shared WatchSyncLogDedupe (covered in the macOS/iOS unit-test bundle).
-// Delivery stays silent (no retry, no user surface); the iPhone remains the
-// source of truth and re-pushes on reachability change. The iOS-side
-// WatchSyncService captures its own encode/send failures via SentryCapture.
+// Queued commands need no retry UI: the phone is the source of truth and
+// re-pushes its snapshot on reachability change. The iOS-side
+// WatchSyncService captures its own encode/send failures via SentryCapture
+// and handles didReceiveUserInfo for queued commands.
 // WCSession itself cannot be driven without a watchOS test host, which this
 // project does not have (Pomodorough-watchOS has no test bundle).

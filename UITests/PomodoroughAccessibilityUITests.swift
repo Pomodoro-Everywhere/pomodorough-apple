@@ -19,11 +19,9 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertEqual(elements(labelled: "No tasks yet", in: app).count, 1)
 
         app.buttons["Pattern"].tap()
-        assertPhase(label: "Focus", value: "25 minutes", in: app)
-        assertPhase(label: "Short break", value: "5 minutes", in: app)
-        assertPhase(label: "Long break", value: "15 minutes", in: app)
-        XCTAssertEqual(elements(labelled: "Reduce Focus duration", in: app).count, 0)
-        XCTAssertEqual(elements(labelled: "Increase Focus duration", in: app).count, 0)
+        assertPhaseControls(label: "Focus", value: "25 minutes", in: app)
+        assertPhaseControls(label: "Short break", value: "5 minutes", in: app)
+        assertPhaseControls(label: "Long break", value: "15 minutes", in: app)
     }
 
     func testAccessibilityExtraExtraExtraLargeKeepsCoreTasksReachable() {
@@ -44,9 +42,11 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(elements(labelled: "New task", in: app).firstMatch.exists)
 
         app.buttons["Pattern"].tap()
-        let focusPhase = elements(labelled: "Focus", in: app).firstMatch
-        XCTAssertTrue(focusPhase.waitForExistence(timeout: 5))
-        XCTAssertEqual(focusPhase.value as? String, "25 minutes")
+        let focusDuration = elements(labelled: "Focus duration", in: app).firstMatch
+        XCTAssertTrue(focusDuration.waitForExistence(timeout: 5))
+        XCTAssertEqual(focusDuration.value as? String, "25 minutes")
+        XCTAssertTrue(app.buttons["Reduce Focus duration"].exists)
+        XCTAssertTrue(app.buttons["Increase Focus duration"].exists)
     }
 
     func testNetworkSectionExposesModesRoomActionsAndPrivacyCopy() {
@@ -145,7 +145,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         waitForHittable(row, timeout: 5)
 
-        tapRowTrashButton(for: row)
+        tapRowTrashButton(named: "UI keep me", in: app)
         summonDeleteDialog(in: app)
         let cancel = app.buttons["Cancel"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
@@ -165,7 +165,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         waitForHittable(row, timeout: 5)
 
-        tapRowTrashButton(for: row)
+        tapRowTrashButton(named: "UI delete me", in: app)
         summonDeleteDialog(in: app)
         app.buttons["Delete task"].tap()
         XCTAssertFalse(row.waitForExistence(timeout: 5))
@@ -180,11 +180,12 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         app.buttons["Add task"].tap()
     }
 
-    private func tapRowTrashButton(for row: XCUIElement) {
-        // The row's visible trash button is folded into its accessibility
-        // representation, so it cannot be queried as a button. Tap it by
-        // coordinate at the row's trailing edge, where the trash icon sits.
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+    private func tapRowTrashButton(named title: String, in app: XCUIApplication) {
+        // The trash control keeps its own "Delete <task>" accessibility
+        // button so Voice Control can target it by name; tap it directly.
+        let trash = app.buttons["Delete \(title)"]
+        XCTAssertTrue(trash.waitForExistence(timeout: 5))
+        trash.tap()
     }
 
     private func summonDeleteDialog(in app: XCUIApplication) {
@@ -243,9 +244,15 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         }
     }
 
-    private func assertPhase(label: String, value: String, in app: XCUIApplication) {
+    private func assertPhaseControls(label: String, value: String, in app: XCUIApplication) {
+        // Phase select, duration readout, and both steppers stay
+        // independently reachable so Voice Control can target each one.
         let matches = elements(labelled: label, in: app)
-        XCTAssertEqual(matches.count, 1, "Expected one accessibility element for \(label)")
-        XCTAssertEqual(matches.firstMatch.value as? String, value)
+        XCTAssertEqual(matches.count, 1, "Expected one phase button for \(label)")
+        let duration = elements(labelled: "\(label) duration", in: app)
+        XCTAssertEqual(duration.count, 1, "Expected one duration readout for \(label)")
+        XCTAssertEqual(duration.firstMatch.value as? String, value)
+        XCTAssertEqual(elements(labelled: "Reduce \(label) duration", in: app).count, 1)
+        XCTAssertEqual(elements(labelled: "Increase \(label) duration", in: app).count, 1)
     }
 }

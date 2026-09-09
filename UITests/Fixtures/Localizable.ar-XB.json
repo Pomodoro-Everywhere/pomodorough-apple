@@ -2462,6 +2462,12 @@
         "value": "‏⟦%arg completed of %arg runs⟧"
       }
     },
+    "%arg finished pomodoros, %arg spent": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg finished pomodoros, %arg spent⟧"
+      }
+    },
     "Completed focus: %arg": {
       "stringUnit": {
         "state": "translated",

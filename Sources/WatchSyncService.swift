@@ -63,7 +63,7 @@ final class WatchSyncService: NSObject, ObservableObject {
             session.sendMessage(
                 [WatchSyncKeys.report: text],
                 replyHandler: nil,
-                errorHandler: { error in Self.reportSendFailed(error) }
+                errorHandler: { @Sendable error in Self.reportSendFailed(error) }
             )
         }
         return report
@@ -102,10 +102,34 @@ extension WatchSyncService: WCSessionDelegate {
         replyHandler([WatchSyncKeys.report: "ack"])
     }
 
+    // Watch commands are sent without a reply handler (fire-and-forget):
+    // without this overload the reachable-watch path has no receiver and
+    // Start/Pause/Resume/Done are dropped. Route same as the reply path.
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any]
+    ) {
+        handleIncoming(message)
+    }
+
+    // Offline watch commands arrive queued via transferUserInfo (ordered,
+    // one dictionary per command). Same handling as live messages.
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveUserInfo userInfo: [String: Any]
+    ) {
+        handleIncoming(userInfo)
+    }
+
 #if os(iOS)
     nonisolated func sessionDidBecomeInactive(_ session: WCSession) {}
 
-    nonisolated func sessionDidDeactivate(_ session: WCSession) {}
+    nonisolated func sessionDidDeactivate(_ session: WCSession) {
+        // The session deactivates on paired-Watch switch and stays down
+        // until reactivated: snapshot pushes then fail the .activated guard.
+        // Reactivate; activationDidComplete pushes the fresh snapshot.
+        session.activate()
+    }
 
     nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
         Task { @MainActor [weak self] in self?.push() }
@@ -126,7 +150,12 @@ extension WatchSyncService: WCSessionDelegate {
             return
         }
         Task { @MainActor [weak self] in
-            self?.model?.applyWatchCommand(command)
+            // Stale timer-targeted commands are rejected without mutation;
+            // push the current snapshot so the watch converges at once
+            // instead of waiting for the next local mutation.
+            if self?.model?.applyWatchCommand(command) == false {
+                self?.push()
+            }
         }
     }
 }

@@ -621,6 +621,7 @@ final class AppModel {
             return WatchTimerSnapshot(
                 phase: timer.phase.rawValue,
                 status: status,
+                timerId: timer.id,
                 plannedDurationMs: timer.plannedDurationMs,
                 elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
                 anchorAt: timer.anchorAt,
@@ -647,23 +648,49 @@ final class AppModel {
         )
     }
 
-    func applyWatchCommand(_ command: WatchTimerCommand) {
+    /// Applies a watch command. Returns false when a timer-targeted command
+    /// (pause/resume/finish) names a stale timer so the caller can push a
+    /// fresh snapshot; true otherwise. Legacy commands without a timerId are
+    /// accepted and validated by the domain controller as before.
+    @discardableResult
+    func applyWatchCommand(_ command: WatchTimerCommand) -> Bool {
         switch command.name {
-        case "start": start()
-        case "pause": pause()
-        case "resume": resume()
-        case "finish": finish()
+        case "start":
+            start()
+            return true
+        case "pause":
+            guard isWatchCommandTargetCurrent(command) else { return false }
+            pause()
+            return true
+        case "resume":
+            guard isWatchCommandTargetCurrent(command) else { return false }
+            resume()
+            return true
+        case "finish":
+            guard isWatchCommandTargetCurrent(command) else { return false }
+            finish()
+            return true
         case "selectPhase":
             if let raw = command.phase, let phase = TimerPhase(rawValue: raw) {
                 selectPhase(phase)
             }
+            return true
         case "setDuration":
             if let raw = command.phase, let phase = TimerPhase(rawValue: raw),
                let minutes = command.minutes {
                 setDurationMinutes(minutes, for: phase)
             }
-        default: break
+            return true
+        default: return true
         }
+    }
+
+    /// Timer-targeted watch commands must name the current timer. A nil
+    /// timerId means a legacy watch app that cannot name it: accept and let
+    /// the domain controller validate state as before.
+    private func isWatchCommandTargetCurrent(_ command: WatchTimerCommand) -> Bool {
+        guard let target = command.timerId else { return true }
+        return activeTimer?.id == target
     }
 
     func selectPhase(_ phase: TimerPhase) {
@@ -1826,10 +1853,9 @@ final class AppModel {
             if case .failed(let message) = transition { errorMessage = message }
             return
         }
-        timerState = state
         replicationMode = target
         defaults.set(target.rawValue, forKey: Self.replicationModeKey)
-        rebuildOptimisticState()
+        adoptRoomWorkspace(state)
         persist()
         if target == .centralized, let user {
             await completeAuthenticatedSession(
@@ -1854,10 +1880,9 @@ final class AppModel {
             if case .failed(let message) = transition { errorMessage = message }
             return false
         }
-        timerState = state
         replicationMode = .iroh
         defaults.set(ReplicationMode.iroh.rawValue, forKey: Self.replicationModeKey)
-        rebuildOptimisticState()
+        adoptRoomWorkspace(state)
         roomInvite = invite
         irohStatus = status
         errorMessage = nil
@@ -1913,10 +1938,9 @@ final class AppModel {
             if case .failed(let message) = transition { errorMessage = message }
             return false
         }
-        timerState = state
         replicationMode = .iroh
         defaults.set(ReplicationMode.iroh.rawValue, forKey: Self.replicationModeKey)
-        rebuildOptimisticState()
+        adoptRoomWorkspace(state)
         roomInvite = nil
         errorMessage = nil
         return true
@@ -1951,11 +1975,10 @@ final class AppModel {
             if case .failed(let message) = transition { errorMessage = message }
             return
         }
-        timerState = state
         replicationMode = .offline
         defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
         roomInvite = nil
-        rebuildOptimisticState()
+        adoptRoomWorkspace(state)
         persist()
     }
 
@@ -2126,6 +2149,21 @@ final class AppModel {
             from: history,
             on: referenceDate,
             calendar: calendar
+        )
+    }
+
+    /// Swaps in a room workspace, reprojects, and reconciles the alarm
+    /// across the swap so a departed running timer is cancelled and an
+    /// adopted running timer is scheduled when this device owns it.
+    /// Callers must set replicationMode before calling: projection reads it.
+    private func adoptRoomWorkspace(_ state: PersistedTimerState) {
+        let previousTimer = canonicalTimer
+        timerState = state
+        rebuildOptimisticState()
+        reconcileAlarm(
+            from: previousTimer,
+            to: canonicalTimer,
+            at: effectivePhysicalNow() ?? now()
         )
     }
 

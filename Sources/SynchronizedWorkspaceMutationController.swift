@@ -453,7 +453,7 @@ private extension SynchronizedWorkspaceMutationController {
     }
 
     func selectedTaskID(for phase: TimerPhase, snapshot: Snapshot) -> String? {
-        guard phase == .focus, let selected = snapshot.state.selectedTaskID else { return nil }
+        guard phase == .focus, let selected = snapshot.projectedSelectedTaskID else { return nil }
         return snapshot.tasks.first(where: { $0.id == selected })?
             .id.uuidString.lowercased()
     }

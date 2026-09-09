@@ -205,7 +205,7 @@ struct NetworkSectionView: View {
                         .foregroundStyle(PomodoroughTheme.signal)
                     TextField("Replacement room name (optional)", text: roomName)
                         .textFieldStyle(.roundedBorder)
-                        .foregroundStyle(PomodoroughTheme.track)
+                        .foregroundStyle(.primary)
                     Button {
                         isCreating.wrappedValue = true
                         Task {
@@ -247,7 +247,7 @@ struct NetworkSectionView: View {
                     .foregroundStyle(PomodoroughTheme.ticket)
                 TextField("Room name (optional)", text: roomName)
                     .textFieldStyle(.roundedBorder)
-                    .foregroundStyle(PomodoroughTheme.track)
+                    .foregroundStyle(.primary)
                     .accessibilityHint("One through 64 characters. Room name is display-only.")
                 Button {
                     isCreating.wrappedValue = true

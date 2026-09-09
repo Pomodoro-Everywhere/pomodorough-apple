@@ -39,6 +39,7 @@
 		13C231C63B35130008BBF295 /* PomodoroughLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 24C42F754317A531BE678A4B /* PomodoroughLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		15C947053EE583A80E79A30D /* LegacyMigrationCrashRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F166E83B43964696B39D1B /* LegacyMigrationCrashRecoveryTests.swift */; };
 		15DBCAB75EE12A495C4D7D83 /* IrohReplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB5513A77A7DD816A61A1607 /* IrohReplicationService.swift */; };
+		15E2D16BB9DE2462C3ED9001 /* WatchCommandIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20CAF1DC87018D590971EC77 /* WatchCommandIdentityTests.swift */; };
 		17AC98C3CA0A53DB76ED7824 /* TimerAlertPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44A83DA9997313441E2088EC /* TimerAlertPresentation.swift */; };
 		1816311AFB5B488D6C7EA8A1 /* LegacyPendingOperationRebase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0255DC2576EECA4059C086 /* LegacyPendingOperationRebase.swift */; };
 		1A4D2CCB012879E5892AC6F8 /* TimerSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED3762000A0338A5D822855F /* TimerSessionController.swift */; };
@@ -150,6 +151,7 @@
 		648D6CC7018847004382629F /* APIDateCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E7C2D3341B804E5936AF7B /* APIDateCodecTests.swift */; };
 		64AC3A07C50ACE18B324AF9E /* SectionHeading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C3F5C1F22298E87DE9EE29 /* SectionHeading.swift */; };
 		64F48A7B0F86C1149F671910 /* WatchTimerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E3C90D70D49C8F69F513DE /* WatchTimerView.swift */; };
+		65073F62FDB15993376FBBCF /* WatchCommandIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20CAF1DC87018D590971EC77 /* WatchCommandIdentityTests.swift */; };
 		660C51357760DC93057A38B9 /* LogoutRevocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7840B396036E3A9A4946E62B /* LogoutRevocationTests.swift */; };
 		666D26C401566CBE207B5573 /* RetainedRoomRejoinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43EA519036AFB88FDBC5322E /* RetainedRoomRejoinTests.swift */; };
 		676287219F6B9615143E7180 /* View+Pomodorough.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */; };
@@ -458,6 +460,7 @@
 		18D8C0E6D0DD7DDCDCD71F08 /* CompletionChime.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = CompletionChime.wav; sourceTree = "<group>"; };
 		1E7473097A54FEEC975EC408 /* IrohLegacyTaskMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohLegacyTaskMigration.swift; sourceTree = "<group>"; };
 		20730711A34B4EB5E9BCC709 /* SessionRevocationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRevocationController.swift; sourceTree = "<group>"; };
+		20CAF1DC87018D590971EC77 /* WatchCommandIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCommandIdentityTests.swift; sourceTree = "<group>"; };
 		21209644D253E40E15EC9998 /* RPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RPCMessage.swift; sourceTree = "<group>"; };
 		22A0FB54C793C4B2090D7DBD /* protocol-fixtures-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "protocol-fixtures-v1.json"; sourceTree = "<group>"; };
 		22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedStateDecouplingCompatibilityTests.swift; sourceTree = "<group>"; };
@@ -773,6 +776,7 @@
 				4523E76A7FE2206BCC8B9B56 /* TimerLiveActivityTests.swift */,
 				DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */,
 				DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */,
+				20CAF1DC87018D590971EC77 /* WatchCommandIdentityTests.swift */,
 				6638A577399DB25EED59B4F3 /* Compatibility */,
 				2580461C8A0483D06B7252CD /* Fixtures */,
 			);
@@ -1302,6 +1306,7 @@
 				7F438BB37C5BC3DA06CCCA24 /* TimerLiveActivityTests.swift in Sources */,
 				4255112A51D66FBEC7FFA25E /* UnitNegativeTests.swift in Sources */,
 				4A9136A6FAC18DF7D451623B /* UnitPositiveTests.swift in Sources */,
+				65073F62FDB15993376FBBCF /* WatchCommandIdentityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1365,6 +1370,7 @@
 				E7FEE5738E33452D9CA3EA19 /* TimerLiveActivityTests.swift in Sources */,
 				25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */,
 				05ADF2030E5861781198DA1B /* UnitPositiveTests.swift in Sources */,
+				15E2D16BB9DE2462C3ED9001 /* WatchCommandIdentityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1914,7 +1920,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 34;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1936,7 +1942,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.19.0;
+				MARKETING_VERSION = 0.21.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -2056,7 +2062,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 34;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2072,7 +2078,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.19.0;
+				MARKETING_VERSION = 0.21.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

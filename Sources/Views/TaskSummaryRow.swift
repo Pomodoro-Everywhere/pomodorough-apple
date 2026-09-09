@@ -15,11 +15,7 @@ struct TaskSummaryRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .monospacedDigit()
-        .accessibilityRepresentation {
-            Text(summary.task.title)
-                .accessibilityValue(summaryAccessibilityValue)
-                .accessibilityAction(named: "Delete task", delete)
-        }
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -37,16 +33,20 @@ struct TaskSummaryRow: View {
                     .font(.body.weight(.semibold))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text("\(summary.finishedPomodoros)")
-                    .frame(width: 68, alignment: .center)
-                Text(TaskTimeText.compact(summary.timeSpentMs))
-                    .frame(width: 70, alignment: .center)
+                HStack(spacing: 4) {
+                    Text("\(summary.finishedPomodoros)")
+                        .frame(width: 68, alignment: .center)
+                    Text(TaskTimeText.compact(summary.timeSpentMs))
+                        .frame(width: 70, alignment: .center)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(summaryAccessibilityLabel)
             }
         }
     }
 
-    private var summaryAccessibilityValue: String {
-        "\(summary.finishedPomodoros) finished pomodoros today, \(TaskTimeText.spoken(summary.timeSpentMs)) spent"
+    private var summaryAccessibilityLabel: String {
+        String(localized: "\(summary.finishedPomodoros) finished pomodoros, \(TaskTimeText.spoken(summary.timeSpentMs)) spent")
     }
 
     @ViewBuilder

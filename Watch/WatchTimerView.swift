@@ -1,157 +1,145 @@
 import SwiftUI
 
-/// Mirror of the iPhone timer. All state lives on iOS; this view renders the
-/// latest snapshot (countdown derived locally from the snapshot anchor) and
-/// forwards user intents as commands.
+/// The phone owns timer transitions; the watch only displays and controls them.
 struct WatchTimerView: View {
     @EnvironmentObject private var sync: WatchSyncService
-    @State private var now = Date()
-    @State private var ticker: Timer?
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+    @State private var confirmingFinish = false
+    @ScaledMetric(relativeTo: .body) private var countdownSize: CGFloat = 58
+
+    private let timerYellow = Color(red: 245 / 255, green: 208 / 255, blue: 91 / 255)
 
     var body: some View {
-        ScrollView {
+        Group {
             if let snapshot = sync.snapshot {
-                syncedView(snapshot)
+                VStack(spacing: 4) {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        dial(snapshot, at: context.date)
+                    }
+                    controls(snapshot)
+                }
             } else {
-                VStack(spacing: 8) {
-                    ProgressView()
-                    Text("Open Pomodorough on iPhone to connect")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                VStack(spacing: 12) {
+                    Image(systemName: "iphone")
+                        .font(.title2)
+                        .foregroundStyle(timerYellow)
+                    Text("Open Pomodorough on iPhone")
+                        .font(.headline)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.center)
+                    Button("Try again") { sync.requestSync() }
+                        .buttonStyle(.bordered)
                 }
-                .padding(.vertical, 16)
+                .padding()
             }
         }
-        .navigationTitle("Pomodorough")
-        .onAppear { startTicker(); sync.requestSync() }
-        .onDisappear { stopTicker() }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.black)
+        .overlay(alignment: .topLeading) {
+            Circle()
+                .fill(sync.isReachable ? Color.green : Color.gray)
+                .frame(width: 5, height: 5)
+                .padding(.leading, 10)
+                .padding(.top, 4)
+                .accessibilityLabel(sync.isReachable ? "iPhone connected" : "iPhone unreachable, showing last synced timer")
+        }
+        .onAppear { sync.requestSync() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { sync.requestSync() }
+        }
     }
 
-    private func syncedView(_ snapshot: WatchTimerSnapshot) -> some View {
-        let phase = WatchPhase(syncRawValue: snapshot.selectedPhase) ?? .focus
-        let minutes = Int(snapshot.durationMs(forPhaseRawValue: snapshot.selectedPhase) / 60_000)
-        let remaining = snapshot.remaining(at: now)
-        return VStack(spacing: 8) {
-            HStack(spacing: 4) {
+    private func dial(_ snapshot: WatchTimerSnapshot, at date: Date) -> some View {
+        let remaining = snapshot.remaining(at: date)
+        let duration = Double(snapshot.plannedDurationMs) / 1_000
+        let progress = duration > 0 ? min(1, max(0, 1 - remaining / duration)) : 0
+        let phase = snapshot.status == "idle" ? snapshot.selectedPhase : snapshot.phase
+        let phaseTitle = switch phase {
+        case "short_break": "Short break"
+        case "long_break": "Long break"
+        default: "Focus"
+        }
+        let status = snapshot.isPaused ? "Paused" : snapshot.isRunning ? "" : "Ready"
+
+        return GeometryReader { geometry in
+            ZStack {
                 Circle()
-                    .fill(sync.isReachable ? Color.green : Color.gray)
-                    .frame(width: 6, height: 6)
-                Text(sync.isReachable ? String(localized: "iPhone") : String(localized: "Offline"))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .stroke(timerYellow.opacity(0.12), lineWidth: 4)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(Color(red: 0.88, green: 0.29, blue: 0.24).opacity(0.8),
+                            style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                VStack(spacing: 3) {
+                    Text(phaseTitle)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(formatted(remaining))
+                        .font(.system(size: countdownSize, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(timerYellow)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                        .layoutPriority(1)
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
             }
+            .padding(6)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(phaseTitle), \(status.isEmpty ? "Running" : status)")
+        .accessibilityValue("\(formatted(remaining)) remaining")
+    }
 
-            Picker("Phase", selection: Binding(
-                get: { phase },
-                set: { sync.send(.selectPhase($0.syncRawValue)) }
-            )) {
-                ForEach(WatchPhase.allCases) { item in
-                    Text(item.shortLabel).tag(item)
+    private func controls(_ snapshot: WatchTimerSnapshot) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                if snapshot.isRunning {
+                    sync.send(.pause(timerId: snapshot.timerId))
+                } else if snapshot.isPaused {
+                    sync.send(.resume(timerId: snapshot.timerId))
+                } else {
+                    sync.send(.start())
+                }
+            } label: {
+                Label(snapshot.isRunning ? "Pause" : snapshot.isPaused ? "Resume" : "Start",
+                      systemImage: snapshot.isRunning ? "pause.fill" : "play.fill")
+                    .font(.callout.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(timerYellow)
+            .background(timerYellow.opacity(0.15), in: Capsule())
+
+            if snapshot.isRunning || snapshot.isPaused {
+                Button("Finish timer", systemImage: "checkmark") {
+                    confirmingFinish = true
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .frame(width: 44, height: 44)
+                .background(.white.opacity(0.12), in: Circle())
+                .confirmationDialog("Finish this timer?", isPresented: $confirmingFinish, titleVisibility: .visible) {
+                    Button("Finish timer") { sync.send(.finish(timerId: snapshot.timerId)) }
+                    Button("Cancel", role: .cancel) {}
                 }
             }
-            .labelsHidden()
-
-            Text(formatted(remaining))
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .monospacedDigit()
-
-            Text(activeTitle(snapshot))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            Stepper("\(minutes) min", value: Binding(
-                get: { minutes },
-                set: { sync.send(.setDuration(minutes: $0, forPhaseRawValue: snapshot.selectedPhase)) }
-            ), in: 1...180)
-
-            HStack {
-                primaryButton(snapshot)
-                Button("Done") { sync.send(.finish()) }
-                    .disabled(snapshot.status == "idle")
-            }
-            .buttonStyle(.bordered)
         }
-        .padding(.vertical, 8)
-    }
-
-    @ViewBuilder
-    private func primaryButton(_ snapshot: WatchTimerSnapshot) -> some View {
-        if snapshot.isRunning {
-            Button("Pause") { sync.send(.pause()) }.tint(.orange)
-        } else if snapshot.isPaused {
-            Button("Resume") { sync.send(.resume()) }.tint(.green)
-        } else {
-            Button("Start") { sync.send(.start()) }.tint(.green)
-        }
-    }
-
-    private func activeTitle(_ snapshot: WatchTimerSnapshot) -> String {
-        let phase = WatchPhase(syncRawValue: snapshot.phase) ?? .focus
-        switch snapshot.status {
-        case "running": return phase.title
-        case "paused": return "\(phase.title) · paused"
-        default: return "Ready"
-        }
+        .padding(.horizontal, 4)
+        .opacity(isLuminanceReduced ? 0 : 1)
+        .allowsHitTesting(!isLuminanceReduced)
+        .accessibilityHidden(isLuminanceReduced)
     }
 
     private func formatted(_ remaining: TimeInterval) -> String {
-        let total = max(0, Int(remaining.rounded()))
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-
-    private func startTicker() {
-        stopTicker()
-        now = Date()
-        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            Task { @MainActor in now = Date() }
-        }
-    }
-
-    private func stopTicker() {
-        ticker?.invalidate()
-        ticker = nil
-    }
-}
-
-enum WatchPhase: String, CaseIterable, Identifiable {
-    case focus
-    case shortBreak
-    case longBreak
-
-    var id: String { rawValue }
-
-    /// iOS TimerPhase raw values ("focus" | "short_break" | "long_break").
-    var syncRawValue: String {
-        switch self {
-        case .focus: "focus"
-        case .shortBreak: "short_break"
-        case .longBreak: "long_break"
-        }
-    }
-
-    init?(syncRawValue: String) {
-        switch syncRawValue {
-        case "focus": self = .focus
-        case "short_break": self = .shortBreak
-        case "long_break": self = .longBreak
-        default: return nil
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .focus: "Focus"
-        case .shortBreak: "Short break"
-        case .longBreak: "Long break"
-        }
-    }
-
-    var shortLabel: String {
-        switch self {
-        case .focus: "Focus"
-        case .shortBreak: "Short"
-        case .longBreak: "Long"
-        }
+        let seconds = max(0, Int(remaining.rounded(.up)))
+        return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 }
