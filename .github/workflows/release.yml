@@ -13,6 +13,15 @@ on:
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  CORE_COMMIT: "fde2eaf42c39cd175e23796b9037999abadef732"
+  CORE_RELEASE_TAG: "v0.11.0"
+  CORE_SHA256: "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  DERIVED_DATA_PATH: /tmp/PomodoroughReleaseDerivedData
+  IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
+  RELEASE_DIR: /tmp/PomodoroughRelease
+  RUST_TOOLCHAIN: "1.97.1"
+  XCODE_VERSION: "26.6"
 
 permissions:
   contents: write
@@ -24,38 +33,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-and-release:
+  preflight:
     runs-on: macos-26
-    timeout-minutes: 90
-    env:
-      CORE_COMMIT: "fde2eaf42c39cd175e23796b9037999abadef732"
-      CORE_RELEASE_TAG: "v0.11.0"
-      CORE_SHA256: "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      DERIVED_DATA_PATH: /tmp/PomodoroughReleaseDerivedData
-      IOS_DESTINATION: platform=iOS Simulator,name=iPhone 17
-      RELEASE_DIR: /tmp/PomodoroughRelease
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Write Sentry DSN for release telemetry
-        shell: bash
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${SENTRY_DSN:-}" ]]; then
-            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
-            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
-            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
-            # so export it for the xcodebuild steps below. Absent secret still
-            # builds with Sentry disabled.
-            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
-          fi
 
       - name: Check out pinned shared core
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -103,9 +89,7 @@ jobs:
         run: python3 scripts/check_docs.py
 
       - name: Check interface and localization contract
-        run: |
-          python3 -m unittest discover -s scripts/tests -v
-          python3 scripts/check_interface_contract.py
+        run: python3 scripts/check_interface_contract.py
 
       - name: Check cross-client protocol fixture
         run: python3 scripts/check_protocol_fixture.py
@@ -223,6 +207,123 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+  selftest:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run scripts self-test bundle
+        run: python3 -m unittest discover -s scripts/tests -v
+
+  test-ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Write Sentry DSN for release telemetry
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_DSN:-}" ]]; then
+            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
+            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
+            # so export it for the xcodebuild steps below. Absent secret still
+            # builds with Sentry disabled.
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: ${{ env.CORE_COMMIT }}
+          path: .build/pomodorough-core
+          persist-credentials: false
+
+      - name: Verify pinned source and released shared core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
+          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
+          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            Resources/SharedCore/pomodorough_core.wasm \
+            --sha256 "$CORE_SHA256"
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 30 --max-time 90 \
+            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Cache is performance-only. resolve_swift_packages.py byte-compare and
+      # the wasm sha verifiers above still run fail-closed after restore, so a
+      # stale cache can only fail loudly, never silently build wrong bits.
+      - name: Cache Rust toolchain and cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains
+            .build/pomodorough-core/target
+          key: release-rust-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-rust-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DERIVED_DATA_PATH }}/SourcePackages/checkouts
+          key: release-spm-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-spm-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache DerivedData build intermediates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: release-deriveddata-test-ios-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-deriveddata-test-ios-macos-26-xcode-26.6-rust-1.97.1-
+
       - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
           python3 scripts/resolve_swift_packages.py
@@ -246,6 +347,121 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           test
 
+  test-macos:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Write Sentry DSN for release telemetry
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_DSN:-}" ]]; then
+            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
+            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
+            # so export it for the xcodebuild steps below. Absent secret still
+            # builds with Sentry disabled.
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: ${{ env.CORE_COMMIT }}
+          path: .build/pomodorough-core
+          persist-credentials: false
+
+      - name: Verify pinned source and released shared core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
+          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
+          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            Resources/SharedCore/pomodorough_core.wasm \
+            --sha256 "$CORE_SHA256"
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 30 --max-time 90 \
+            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Cache is performance-only. resolve_swift_packages.py byte-compare and
+      # the wasm sha verifiers above still run fail-closed after restore, so a
+      # stale cache can only fail loudly, never silently build wrong bits.
+      - name: Cache Rust toolchain and cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains
+            .build/pomodorough-core/target
+          key: release-rust-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-rust-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DERIVED_DATA_PATH }}/SourcePackages/checkouts
+          key: release-spm-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-spm-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache DerivedData build intermediates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: release-deriveddata-test-macos-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-deriveddata-test-macos-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Resolve Swift packages without trusting a broken sandbox
+        run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resolvePackageDependencies
+
       - name: Test macOS
         run: >-
           xcodebuild
@@ -257,6 +473,121 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
+
+  build-ios-simulator:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Write Sentry DSN for release telemetry
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_DSN:-}" ]]; then
+            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
+            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
+            # so export it for the xcodebuild steps below. Absent secret still
+            # builds with Sentry disabled.
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: ${{ env.CORE_COMMIT }}
+          path: .build/pomodorough-core
+          persist-credentials: false
+
+      - name: Verify pinned source and released shared core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
+          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
+          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            Resources/SharedCore/pomodorough_core.wasm \
+            --sha256 "$CORE_SHA256"
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 30 --max-time 90 \
+            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Cache is performance-only. resolve_swift_packages.py byte-compare and
+      # the wasm sha verifiers above still run fail-closed after restore, so a
+      # stale cache can only fail loudly, never silently build wrong bits.
+      - name: Cache Rust toolchain and cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains
+            .build/pomodorough-core/target
+          key: release-rust-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-rust-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DERIVED_DATA_PATH }}/SourcePackages/checkouts
+          key: release-spm-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-spm-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache DerivedData build intermediates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: release-deriveddata-build-ios-sim-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-deriveddata-build-ios-sim-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Resolve Swift packages without trusting a broken sandbox
+        run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resolvePackageDependencies
 
       - name: Build iOS simulator app without signing credentials
         run: >-
@@ -271,6 +602,144 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           build
 
+      - name: Verify shared core in built iOS simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          wasm="$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator/Pomodorough.app/pomodorough_core.wasm"
+          if [[ -f "$wasm" ]]; then
+            actual_sha=$(shasum -a 256 "$wasm" | awk '{print $1}')
+            test "$actual_sha" = "$CORE_SHA256"
+          else
+            while IFS= read -r found; do
+              actual_sha=$(shasum -a 256 "$found" | awk '{print $1}')
+              test "$actual_sha" = "$CORE_SHA256"
+            done < <(find "$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator" -type f -name 'pomodorough_core.wasm' -print)
+          fi
+
+      - name: Upload iOS simulator app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-ios-simulator-app
+          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products/Release-iphonesimulator/Pomodorough.app
+          if-no-files-found: error
+          retention-days: 1
+
+  build-ios-device:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Write Sentry DSN for release telemetry
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_DSN:-}" ]]; then
+            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
+            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
+            # so export it for the xcodebuild steps below. Absent secret still
+            # builds with Sentry disabled.
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: ${{ env.CORE_COMMIT }}
+          path: .build/pomodorough-core
+          persist-credentials: false
+
+      - name: Verify pinned source and released shared core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
+          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
+          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            Resources/SharedCore/pomodorough_core.wasm \
+            --sha256 "$CORE_SHA256"
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 30 --max-time 90 \
+            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Cache is performance-only. resolve_swift_packages.py byte-compare and
+      # the wasm sha verifiers above still run fail-closed after restore, so a
+      # stale cache can only fail loudly, never silently build wrong bits.
+      - name: Cache Rust toolchain and cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains
+            .build/pomodorough-core/target
+          key: release-rust-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-rust-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DERIVED_DATA_PATH }}/SourcePackages/checkouts
+          key: release-spm-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-spm-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache DerivedData build intermediates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: release-deriveddata-build-ios-device-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-deriveddata-build-ios-device-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Resolve Swift packages without trusting a broken sandbox
+        run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resolvePackageDependencies
+
       - name: Build iOS device app without signing credentials
         run: >-
           xcodebuild
@@ -283,6 +752,138 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           build
+
+      - name: Verify shared core in built iOS device app
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r found; do
+            actual_sha=$(shasum -a 256 "$found" | awk '{print $1}')
+            test "$actual_sha" = "$CORE_SHA256"
+          done < <(find "$DERIVED_DATA_PATH/Build/Products/Release-iphoneos" -type f -name 'pomodorough_core.wasm' -print)
+
+      - name: Upload iOS device app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-ios-device-app
+          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products/Release-iphoneos/Pomodorough.app
+          if-no-files-found: error
+          retention-days: 1
+
+  build-macos:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Write Sentry DSN for release telemetry
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_DSN:-}" ]]; then
+            printf '%s' "$SENTRY_DSN" > Supporting/SentryDSN.local
+            # SentryDSN.local is never bundled; SentrySetup reads the DSN from
+            # Info.plist (SENTRY_DSN = $(SENTRY_DSN) expanded at build time),
+            # so export it for the xcodebuild steps below. Absent secret still
+            # builds with Sentry disabled.
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out pinned shared core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Pomodoro-Everywhere/pomodorough-core
+          ref: ${{ env.CORE_COMMIT }}
+          path: .build/pomodorough-core
+          persist-credentials: false
+
+      - name: Verify pinned source and released shared core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat Resources/SharedCore/CORE_COMMIT)" = "$CORE_COMMIT"
+          test "$(cat Resources/SharedCore/CORE_SHA256)" = "$CORE_SHA256"
+          test "$(git -C .build/pomodorough-core rev-parse HEAD)" = "$CORE_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.97.1
+          pinned_rustc=$(rustup which --toolchain 1.97.1 rustc)
+          (
+            cd .build/pomodorough-core
+            RUSTC="$pinned_rustc" rustup run 1.97.1 cargo build \
+              --release \
+              --target wasm32-unknown-unknown \
+              --locked
+          )
+          rebuilt=.build/pomodorough-core/target/wasm32-unknown-unknown/release/pomodorough_core.wasm
+          python3 .build/pomodorough-core/scripts/canonicalize_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py "$rebuilt"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            Resources/SharedCore/pomodorough_core.wasm \
+            --sha256 "$CORE_SHA256"
+          released="$RUNNER_TEMP/pomodorough_core.wasm"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 30 --max-time 90 \
+            --retry 3 --retry-delay 5 --retry-max-time 375 --retry-all-errors \
+            "https://github.com/Pomodoro-Everywhere/pomodorough-core/releases/download/$CORE_RELEASE_TAG/pomodorough_core.wasm" \
+            --output "$released"
+          python3 .build/pomodorough-core/scripts/verify_wasm_artifact.py \
+            "$released" \
+            --sha256 "$CORE_SHA256"
+          cmp "$released" Resources/SharedCore/pomodorough_core.wasm
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Cache is performance-only. resolve_swift_packages.py byte-compare and
+      # the wasm sha verifiers above still run fail-closed after restore, so a
+      # stale cache can only fail loudly, never silently build wrong bits.
+      - name: Cache Rust toolchain and cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains
+            .build/pomodorough-core/target
+          key: release-rust-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-rust-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DERIVED_DATA_PATH }}/SourcePackages/checkouts
+          key: release-spm-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-spm-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Cache DerivedData build intermediates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: release-deriveddata-build-macos-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            release-deriveddata-build-macos-macos-26-xcode-26.6-rust-1.97.1-
+
+      - name: Resolve Swift packages without trusting a broken sandbox
+        run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resolvePackageDependencies
 
       - name: Build macOS app without signing credentials
         run: >-
@@ -298,14 +899,70 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           build
 
+      - name: Verify shared core in built macOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r found; do
+            actual_sha=$(shasum -a 256 "$found" | awk '{print $1}')
+            test "$actual_sha" = "$CORE_SHA256"
+          done < <(find "$DERIVED_DATA_PATH/Build/Products/Release" -maxdepth 2 -type f -name 'pomodorough_core.wasm' -print)
+
+      - name: Upload macOS app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-macos-app
+          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products/Release/Pomodorough.app
+          if-no-files-found: error
+          retention-days: 1
+
+  package-and-release:
+    needs:
+      - preflight
+      - selftest
+      - test-ios
+      - test-macos
+      - build-ios-simulator
+      - build-ios-device
+      - build-macos
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Download iOS simulator app
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-ios-simulator-app
+          path: ${{ runner.temp }}/build-ios-simulator-app
+
+      - name: Download iOS device app
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-ios-device-app
+          path: ${{ runner.temp }}/build-ios-device-app
+
+      - name: Download macOS app
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-macos-app
+          path: ${{ runner.temp }}/build-macos-app
+
       - name: Package simulator and unsigned non-notarized apps
         shell: bash
         run: |
           set -euo pipefail
 
-          ios_simulator_app="$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator/Pomodorough.app"
-          ios_device_app="$DERIVED_DATA_PATH/Build/Products/Release-iphoneos/Pomodorough.app"
-          macos_app="$DERIVED_DATA_PATH/Build/Products/Release/Pomodorough.app"
+          ios_simulator_app="$RUNNER_TEMP/build-ios-simulator-app/Pomodorough.app"
+          ios_device_app="$RUNNER_TEMP/build-ios-device-app/Pomodorough.app"
+          macos_app="$RUNNER_TEMP/build-macos-app/Pomodorough.app"
           ios_simulator_staged_app="$RUNNER_TEMP/Pomodorough-iOS-Simulator/Pomodorough.app"
           ios_device_staging="$RUNNER_TEMP/Pomodorough-iOS-Device"
           ios_device_staged_app="$ios_device_staging/Payload/Pomodorough.app"
@@ -389,7 +1046,21 @@ jobs:
           launch_pid="${launch_output##*: }"
           test -n "$launch_pid"
           [[ "$launch_pid" =~ ^[0-9]+$ ]]
-          sleep 2
+          uid="$(id -u)"
+          poll_deadline=30
+          poll_hit=""
+          for attempt in $(seq 1 "$poll_deadline"); do
+            if xcrun simctl spawn "$device_id" launchctl print "gui/$uid/$bundle_id" 2>/dev/null | grep -q "state = running"; then
+              poll_hit="yes"
+              break
+            fi
+            if [[ "$attempt" -eq "$poll_deadline" ]]; then
+              echo "Simulator app $bundle_id did not reach running state within ${poll_deadline}s" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          test -n "$poll_hit"
           xcrun simctl terminate "$device_id" "$bundle_id"
 
       - name: Export SPDX SBOM

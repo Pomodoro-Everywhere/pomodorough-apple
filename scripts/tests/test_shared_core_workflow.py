@@ -11,17 +11,24 @@ CORE_SHA256 = "162954f2c68dc3f90b663483b7df327d583d97f64d1391b60105febe2383896a"
 
 
 class SharedCoreWorkflowTests(unittest.TestCase):
-    def core_download_command(self, workflow: str) -> str:
+    def core_download_commands(self, workflow: str) -> list[str]:
         lines = workflow.splitlines()
         starts = [index for index, line in enumerate(lines) if line.strip().startswith("curl --fail")]
-        self.assertEqual(len(starts), 1)
-        start = starts[0]
-        end = next(
-            index
-            for index in range(start, len(lines))
-            if lines[index].strip() == '--output "$released"'
-        )
-        return "\n".join(line.strip() for line in lines[start : end + 1])
+        self.assertGreaterEqual(len(starts), 1)
+        commands = []
+        for start in starts:
+            end = next(
+                index
+                for index in range(start, len(lines))
+                if lines[index].strip() == '--output "$released"'
+            )
+            commands.append("\n".join(line.strip() for line in lines[start : end + 1]))
+        return commands
+
+    def core_download_command(self, workflow: str) -> str:
+        commands = self.core_download_commands(workflow)
+        self.assertEqual(len(commands), 1)
+        return commands[0]
 
     def assert_bounded_core_download(self, workflow: str) -> None:
         expected = "\n".join(
@@ -34,7 +41,8 @@ class SharedCoreWorkflowTests(unittest.TestCase):
                 '--output "$released"',
             )
         )
-        self.assertEqual(self.core_download_command(workflow), expected)
+        for command in self.core_download_commands(workflow):
+            self.assertEqual(command, expected)
 
     def assert_portable_provenance_contract(self, workflow: str) -> None:
         normalized = "\n".join(line.strip() for line in workflow.splitlines())
@@ -89,7 +97,9 @@ class SharedCoreWorkflowTests(unittest.TestCase):
                 'launch_output="$(xcrun simctl launch',
                 'test -n "$launch_pid"',
                 '[[ "$launch_pid" =~ ^[0-9]+$ ]]',
-                'sleep 2',
+                'launchctl print',
+                'did not reach running state',
+                'test -n "$poll_hit"',
                 'xcrun simctl terminate "$device_id" "$bundle_id"',
             )
             for clause in required:
@@ -100,11 +110,14 @@ class SharedCoreWorkflowTests(unittest.TestCase):
                 sorted(candidate.index(clause) for clause in ordered),
             )
             self.assertNotIn('codesign --remove-signature "$ios_simulator_staged_app"', candidate)
+            self.assertNotIn("sleep 2", candidate)
 
         assert_contract(workflow)
         survival_clauses = (
             '[[ "$launch_pid" =~ ^[0-9]+$ ]]',
-            'sleep 2',
+            "launchctl print",
+            "did not reach running state",
+            'test -n "$poll_hit"',
             'xcrun simctl terminate "$device_id" "$bundle_id"',
         )
         for clause in survival_clauses:
@@ -131,10 +144,9 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assert_bounded_core_download(workflow)
         self.assert_bounded_core_download(release_workflow)
-        self.assertEqual(
-            self.core_download_command(workflow),
-            self.core_download_command(release_workflow),
-        )
+        expected = self.core_download_command(workflow)
+        for command in self.core_download_commands(release_workflow):
+            self.assertEqual(expected, command)
 
     def test_bounded_core_download_rejects_retry_and_verification_regressions(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
