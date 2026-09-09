@@ -1,5 +1,11 @@
 # App review backlog
 
+## Fixed - apple 0.23.0 release 2026-09-09
+
+- Release: commit `0ade608` ("release apple 0.23.0", MARKETING 0.23.0 build 37, project.yml + regen pbxproj only, mirrors 0.22.0) plus commit `3d7d7f5` (catalog AP51 corrupt-skip error string). Tag `v0.23.0` recreated at `3d7d7f5` after the first tag failed preflight (see below); no release object existed before publish. Release run `34406295739` all 8 jobs green, published `2026-09-09T22:11:10Z` with 5 assets. All three shards logged `CORE_PROVENANCE tag=v0.23.0 commit=238ef9fb… sha256=659a492e…` (no skew); release notes carry the core line. No core pin introduced — fetch_shared_core.sh resolved latest at build time.
+- First tag attempt (`0ade608`, run `34403689307`) failed preflight deterministically on "Check interface and localization contract": `PersistedStateCorruptionError.errorDescription` (AP51, commit d7f6e67) returned a bare literal. Fix wraps it in `String(localized:)` (pattern used by every other errorDescription) and catalogs the key in `Resources/Localizable.xcstrings` + `UITests/Fixtures/Localizable.ar-XB.json` (339 shipping keys). Reproduced locally (tag tree exit 1, b0acf3d exit 0); CI on d7f6e67 failed the same step. Not a flake, so no rerun; fixed forward per owner approval.
+- Evidence: local `check_interface_contract.py` ok (339 keys), docs/protocol/pins ok, script suite 502 passed / 1 skipped. Other-agent dirty files (AppModel, RoomReplicationController, 3 test files, release workflow, attestation script) verified byte-identical by sha256 before and after; never touched/staged/committed.
+
 ## Fixed - 0.23.0 review AP51/AP52/AP54 2026-09-10
 
 - [x] **AP51 High - corrupt op lossy-skip.** `pendingCommands`/`pendingTaskOperations`/`pendingDurationOperations`/`history` now decode via `LossyDecodable` (pattern from autoStart/selectedTask); skips set `hasCorruptPendingOperations`, required queues stay null-strict (`requiredNullState` fixture still throws). `PersistedStateLoader.load` logs + `captureOnce(key:"persisted-state-corrupt-skip")` on newly-detected skips only (total-garbage path still owned by coordinator, no double-capture). 3 tests in `Tests/PersistedStateCorruptSkipTests.swift` (unknown-enum forward-compat + 4-queue corrupt fixture + load-once report).
