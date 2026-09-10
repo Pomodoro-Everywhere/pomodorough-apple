@@ -1,5 +1,9 @@
 # App review backlog
 
+## Fixed - apple 0.27.0 release 2026-09-10
+
+- Release: commit `9f58e74` ("release apple 0.27.0", MARKETING 0.27.0 build 41, project.yml + pbxproj only, mirrors 0.26.0). Tag `v0.27.0` at `9f58e74`, first attempt green with no rerun. Release run `34507714539` all 9 jobs green (test-ios 33m34s RAN: 11 UI tests executed, 0 failures; test-macos 20m33s; selftest, preflight, 3 builds, package, package-and-release), published `2026-09-10T17:55:52Z` with 5 assets. Checked shards (ios-device, ios-simulator, macos, test-ios) all logged `CORE_PROVENANCE tag=v0.27.0 commit=e4fed82d… sha256=3c2bcb5a…` (no skew); release notes carry the core line. No core pin introduced — fetch_shared_core.sh resolved latest at build time.
+
 ## Fixed - 0.27.0 review AP74-AP77 2026-09-10
 
 - [x] **AP74 Medium - corrupt local-tasks-v1 conflated absent with corrupt.** Fixed: `migrateLegacyTasks` splits the guard — absent returns silently, decode failure logs + `captureOnce(key:"legacy-task-decode")` and returns with the blob kept (`removesLegacyTasksAfterProjection` untouched). Test `corruptLegacyTaskBlobSkipsMigrationAndCapturesOnce` asserts migration skipped, not failed, one capture, blob preserved, second run deduped.
