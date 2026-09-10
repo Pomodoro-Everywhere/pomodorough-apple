@@ -207,7 +207,10 @@ struct RetainedRoomRejoinTests {
             _ = try fixture.prepare()
             Issue.record("Secret compensation failure was hidden")
         } catch {
-            #expect(error.localizedDescription.contains("Room secret cleanup failed"))
+            let description = error.localizedDescription
+            #expect(description.contains(". Room secret cleanup failed: "))
+            #expect(!description.contains("%@"))
+            #expect(description.components(separatedBy: "Room secret cleanup failed: ").count == 2)
         }
         #expect(try Data(contentsOf: fixture.fileURL) == before)
         #expect(fixture.vault.secrets[fixture.roomA] == fixture.secretA)

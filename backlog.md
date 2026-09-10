@@ -1,5 +1,11 @@
 # App review backlog
 
+## Fixed - 0.26.0 review AP72-AP73 2026-09-10
+
+- [x] **AP72 Low - secret-compensation double-placeholder repeats AP64 anti-pattern.** Fixed: `compensatingJoinSecretLocked` splits into period-guarded failure sentence + `String(localized: "Room secret cleanup failed: %@")`, plain concatenation (no nested `String(localized:)` interpolation). Old catalog key `%@ Room secret cleanup failed: %@` replaced by `Room secret cleanup failed: %@` in `Resources/Localizable.xcstrings` + `UITests/Fixtures/Localizable.ar-XB.json`. Test `secretCompensationFailureIsReportedWithoutDeletingRoom` now pins the `. Room secret cleanup failed: ` boundary, no `%@` leak, exactly one cleanup sentence.
+- [x] **AP73 Medium - `captureLocalState` Sentry-dark (AP62/AP53 sibling).** Fixed: mirrors `projectionTransition` + `bootstrapRoomState` — `Logger.error` + `SentryCapture.capture` on `captureLocalOperations` throw, `.captureFailed` shape unchanged. Test `captureLocalStateReportsDurableWriteFailureAndKeepsStore` forces a durable-write throw (gated `AtomicDurableFileStore` hook, AP62 pattern) and asserts captureFailed, message carried, not quarantined, captured once, store unmutated.
+- Validation 2026-09-10: `Pomodorough-macOS` build green; full `PomodoroughMacTests` 779 passed / 0 failed / 0 skipped (778 baseline + 1 new: AP73 captureLocalState; AP72 strengthens an existing test); `Pomodorough-iOS` (simulator) + `Pomodorough-watchOS` (simulator) builds green; contract ok (341 keys: -1 stale +1 new); audit 0 violations, 6 documented exceptions; `git diff --check` clean. No project.yml change, no pbxproj regen (no new files).
+
 ## Fixed - apple 0.25.0 release 2026-09-10
 
 - Release: commit `d321978` ("Fix AP63 iOS fixture scene activation; harden AP67 first-sequence assertion", test-only, MARKETING 0.25.0 build 39 unchanged from `4eee74e`). Tag `v0.25.0` deleted at `4eee74e` (local + upstream) and recreated at `d321978` — no release object existed before publish. Release run `34466724151` all 9 jobs green, published `2026-09-10T11:00:10Z` with 5 assets. All six core-consuming shards logged `CORE_PROVENANCE tag=v0.25.0 commit=b0de2386… sha256=bd0a00ae…` (no skew); release notes carry the core line. No core pin introduced — fetch_shared_core.sh resolved latest at build time.

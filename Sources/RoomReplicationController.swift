@@ -381,6 +381,8 @@ final class RoomReplicationController {
             Task { [service] in await service.syncNow() }
             return .captured(captured)
         } catch {
+            Self.logger.error("captureLocalState captureLocalOperations failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             let quarantined = Self.isImmutableConflict(error)
             if quarantined {
                 let roomID = dependencies.roomStore.activeRoomID

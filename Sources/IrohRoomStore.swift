@@ -875,9 +875,10 @@ final class IrohRoomStore: @unchecked Sendable {
             try secretStore.delete(roomID: roomID)
             return failure
         } catch {
-            return IrohProtocolError.unavailable(
-                String(localized: "\(failure.localizedDescription) Room secret cleanup failed: \(error.localizedDescription)")
-            )
+            let failureMessage = failure.localizedDescription
+            let failureSentence = failureMessage.hasSuffix(".") ? failureMessage : failureMessage + "."
+            let cleanupDetail = String(localized: "Room secret cleanup failed: \(error.localizedDescription)")
+            return IrohProtocolError.unavailable("\(failureSentence) \(cleanupDetail)")
         }
     }
 

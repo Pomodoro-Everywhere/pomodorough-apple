@@ -1,16 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "%@ Room secret cleanup failed: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ Room secret cleanup failed: %@"
-          }
-        }
-      }
-    },
     "%@ duration": {
       "localizations": {
         "en": {
@@ -3599,6 +3589,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Server resolved a selected-task change."
+          }
+        }
+      }
+    },
+    "Room secret cleanup failed: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Room secret cleanup failed: %@"
           }
         }
       }

@@ -2,12 +2,6 @@
   "locale": "ar-XB",
   "layoutDirection": "right-to-left",
   "strings": {
-    "%@ Room secret cleanup failed: %@": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%@ Room secret cleanup failed: %@⟧"
-      }
-    },
     "%@ duration": {
       "stringUnit": {
         "state": "translated",
@@ -2622,6 +2616,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Server resolved a selected-task change.⟧"
+      }
+    },
+    "Room secret cleanup failed: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Room secret cleanup failed: %@⟧"
       }
     }
   },

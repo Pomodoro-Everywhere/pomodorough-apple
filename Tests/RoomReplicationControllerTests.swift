@@ -546,6 +546,45 @@ struct RoomReplicationControllerTests {
     }
 
     @Test @MainActor
+    func captureLocalStateReportsDurableWriteFailureAndKeepsStore() throws {
+        let failWrites = LockedTestValue(false)
+        let url = temporaryURL()
+        let store = IrohRoomStore(
+            fileURL: url,
+            secretStore: MemoryIrohRoomSecretStore(),
+            durableStore: AtomicDurableFileStore(fileURL: url) {
+                if failWrites.value { throw TestRoomServiceError.endpointUnavailable }
+            }
+        )
+        let roomState = try makeActiveRoom(in: store, returnState: .fresh())
+        let fixture = makeFixture(mode: .iroh, store: store)
+        let durableBefore = try #require(store.activeRoomState)
+        failWrites.value = true
+
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+
+        var mutated = roomState
+        mutated.settings.durationsMs.focus = 99 * 60_000
+        let transition = fixture.controller.captureLocalState(mutated)
+
+        guard case .captureFailed(let restored, let message, let quarantined) = transition else {
+            Issue.record("Expected captureFailed, got \(transition)")
+            return
+        }
+        #expect(restored == durableBefore)
+        #expect(!message.isEmpty)
+        #expect(!quarantined)
+        #expect(captured.value.count == 1)
+        #expect(store.activeRoomState == durableBefore)
+    }
+
+    @Test @MainActor
     func scheduleIrohStartupFailureLogsCapturesAndReportsUnavailable() async throws {
         let fixture = makeFixture(mode: .iroh)
         let roomState = try makeActiveRoom(in: fixture.store, returnState: .fresh())
