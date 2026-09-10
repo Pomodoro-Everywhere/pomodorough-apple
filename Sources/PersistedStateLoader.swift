@@ -169,8 +169,15 @@ struct PersistedStateLoader {
         uptime: TimeInterval,
         roomStore: IrohRoomStore?
     ) -> MigrationProgress {
-        guard let data = defaults.data(forKey: Self.localTaskStorageKey),
-              let legacyState = try? JSONDecoder.api.decode(LocalTaskState.self, from: data) else {
+        guard let data = defaults.data(forKey: Self.localTaskStorageKey) else {
+            return progress
+        }
+        let legacyState: LocalTaskState
+        do {
+            legacyState = try JSONDecoder.api.decode(LocalTaskState.self, from: data)
+        } catch {
+            Self.logger.error("migrateLegacyTasks decode failed, keeping blob: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "legacy-task-decode", error: error)
             return progress
         }
         var progress = progress

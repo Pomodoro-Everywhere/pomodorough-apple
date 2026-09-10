@@ -1,5 +1,14 @@
 # App review backlog
 
+## Fixed - 0.27.0 review AP74-AP77 2026-09-10
+
+- [x] **AP74 Medium - corrupt local-tasks-v1 conflated absent with corrupt.** Fixed: `migrateLegacyTasks` splits the guard — absent returns silently, decode failure logs + `captureOnce(key:"legacy-task-decode")` and returns with the blob kept (`removesLegacyTasksAfterProjection` untouched). Test `corruptLegacyTaskBlobSkipsMigrationAndCapturesOnce` asserts migration skipped, not failed, one capture, blob preserved, second run deduped.
+- [x] **AP75 Low - `requestAuthorization` throws collapsed to false.** Fixed: each backend throw logs + `captureOnce(key:"timer-alarm-authorization")` (shared key, so a double-throw captures once), `authorizationDenied` mapping unchanged. Test `timerAlarmAuthorizationThrowCapturesOnceAndStaysDenied` with both backends throwing asserts denied + single capture.
+- [x] **AP76 Low - revision-stream generic catch reconnected silently.** Fixed: reconnect path logs + `captureOnce(key:"revision-stream")` (cancellation/unauthorized paths unchanged, reconnect kept). Test `revisionStreamFailureReconnectsAndCapturesOnce` with a throwing `revisionEvents` asserts 1s reconnect sleep + one capture.
+- [x] **AP77 Low - tick/head throws collapsed to generic.** Fixed: `tick(...).validated` / `head(...).validatedHead` each run in `do/catch` with `Logger.error` + `captureOnce(key:"hlc-tick-core"/"hlc-head-core")` (AP65 precedent), skew-guard mapping unchanged (`invalidLocalClock` / `invalidResponse`). Tests `hlcTickThrowCapturesOnceAndStaysInvalidClock` + `hlcHeadThrowCapturesOnceAndStaysInvalidResponse` with throwing closures assert mapping + single capture + unmutated state.
+- Capture tests use a pre-test `resetForTesting()` plus `@MainActor`: the existing tick-rollback test (same suite) and failing-stream tests elsewhere exercise these paths with no backend and would otherwise poison the fixed once-keys.
+- Validation 2026-09-10: `Pomodorough-macOS` build green; full `PomodoroughMacTests` 784 passed / 0 failed / 0 skipped (779 baseline + 5 new: AP74, AP75, AP76, AP77 x2); `Pomodorough-iOS` (simulator) + `Pomodorough-watchOS` (simulator) builds green; audit 0 violations, 6 documented exceptions; complexity report: touched functions outside top-30, no new hotspot; `git diff --check` clean. No project.yml change, no pbxproj regen (no new files).
+
 ## Fixed - apple 0.26.0 release 2026-09-10
 
 - Release: commit `afa0e65` ("release apple 0.26.0", MARKETING 0.26.0 build 40, project.yml + pbxproj only, mirrors 0.25.0). Tag `v0.26.0` at `afa0e65`, first attempt green with no preflight failure. Release run `34491402419` all 9 jobs green, published `2026-09-10T15:20:57Z` with 5 assets. All six core-consuming shards logged `CORE_PROVENANCE tag=v0.26.0 commit=b25e0d8e… sha256=150d5aa6…` (no skew); release notes carry the core line. No core pin introduced — fetch_shared_core.sh resolved latest at build time.

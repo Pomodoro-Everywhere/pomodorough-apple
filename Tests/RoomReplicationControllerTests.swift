@@ -385,6 +385,27 @@ struct RoomReplicationControllerTests {
         #expect(fixture.sleeps.value.isEmpty)
     }
 
+    // AP76: generic revision-stream failure reconnects and captures once.
+    @Test @MainActor
+    func revisionStreamFailureReconnectsAndCapturesOnce() async {
+        // Failing-stream tests elsewhere run without a backend; clear their once-key.
+        SentryCapture.resetForTesting()
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = captured.value; c.append(error.localizedDescription); captured.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = makeFixture(mode: .centralized, revisionEvents: {
+            AsyncThrowingStream { $0.finish(throwing: URLError(.timedOut)) }
+        })
+        fixture.controller.setSceneActive(true, environment: environment())
+        fixture.controller.startRevisionStream()
+        await waitUntil { fixture.sleeps.value == [.seconds(1)] }
+        #expect(fixture.sleeps.value == [.seconds(1)])
+        #expect(fixture.revisionRequests.value == 1)
+        #expect(captured.value.count == 1)
+    }
+
     @Test @MainActor
     func retryCoalescesAndUsesLatestHistoryResolutionState() async {
         let fixture = makeFixture(

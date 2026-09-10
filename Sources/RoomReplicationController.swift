@@ -676,8 +676,10 @@ final class RoomReplicationController {
         } catch AppError.unauthorized {
             return await handleUnauthorizedRevisionStream(owner: owner, streamID: streamID)
         } catch {
-            return ownsCurrent(owner, streamID: streamID) && !Task.isCancelled
-                ? .reconnect(after: nextDelay) : .stop
+            guard ownsCurrent(owner, streamID: streamID), !Task.isCancelled else { return .stop }
+            Self.logger.error("revision stream failed, reconnecting: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "revision-stream", error: error)
+            return .reconnect(after: nextDelay)
         }
     }
 

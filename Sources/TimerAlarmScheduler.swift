@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 #if os(iOS)
 import AlarmKit
@@ -377,6 +378,11 @@ private final class TimerAlarmOperationCoordinator {
 
 @MainActor
 final class TimerAlarmScheduler: TimerAlarmScheduling {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "TimerAlarm"
+    )
+
     private let notifications: any TimerNotificationBackend
     private let alarms: any TimerSystemAlarmBackend
 
@@ -393,11 +399,24 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
 
     func requestAuthorization() async throws {
         guard notifications.isSupported || alarms.authorizationState != .unsupported else { return }
-        let notificationsAllowed = (try? await notifications.requestAuthorization()) ?? false
+        let notificationsAllowed: Bool
+        do {
+            notificationsAllowed = try await notifications.requestAuthorization()
+        } catch {
+            Self.logger.error("notification authorization failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "timer-alarm-authorization", error: error)
+            notificationsAllowed = false
+        }
         let alarmsAllowed: Bool
         switch alarms.authorizationState {
         case .notDetermined:
-            alarmsAllowed = (try? await alarms.requestAuthorization()) ?? false
+            do {
+                alarmsAllowed = try await alarms.requestAuthorization()
+            } catch {
+                Self.logger.error("alarm authorization failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.captureOnce(key: "timer-alarm-authorization", error: error)
+                alarmsAllowed = false
+            }
         case .authorized:
             alarmsAllowed = true
         case .unsupported, .denied:

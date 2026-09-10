@@ -390,6 +390,53 @@ struct SharedCoreWASMTests {
         }
         #expect(try JSONEncoder.api.encode(rejected) == before)
     }
+
+    // AP77: tick/head closure throws stay mapped but capture once.
+    // MainActor (AP65 precedent): SentryCapture backend is global.
+    @Test @MainActor func hlcTickThrowCapturesOnceAndStaysInvalidClock() throws {
+        // hlcTickAccepts… exercises this path without a backend; clear its once-key.
+        SentryCapture.resetForTesting()
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = captured.value; c.append(error.localizedDescription); captured.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        var state = PersistedTimerState.fresh()
+        let before = try JSONEncoder.api.encode(state)
+        let date = Date(timeIntervalSince1970: 1_000)
+        #expect(throws: AppError.invalidLocalClock) {
+            try state.advanceClock(at: date, tickingWith: { _ in throw URLError(.timedOut) })
+        }
+        #expect(throws: AppError.invalidLocalClock) {
+            try state.advanceClock(at: date, tickingWith: { _ in throw URLError(.notConnectedToInternet) })
+        }
+        #expect(captured.value.count == 1)
+        #expect(try JSONEncoder.api.encode(state) == before)
+    }
+
+    @Test @MainActor func hlcHeadThrowCapturesOnceAndStaysInvalidResponse() throws {
+        SentryCapture.resetForTesting()
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = captured.value; c.append(error.localizedDescription); captured.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        var state = PersistedTimerState.fresh()
+        let before = try JSONEncoder.api.encode(state)
+        let serverTime = Date(timeIntervalSince1970: 2_000)
+        #expect(throws: AppError.invalidResponse) {
+            try state.mergeClock(serverWallMs: 2_000_000, serverCounter: 0, serverTime: serverTime,
+                requestWall: serverTime, requestUptime: 100, responseUptime: 100,
+                headingWith: { _ in throw URLError(.timedOut) })
+        }
+        #expect(throws: AppError.invalidResponse) {
+            try state.mergeClock(serverWallMs: 2_000_000, serverCounter: 0, serverTime: serverTime,
+                requestWall: serverTime, requestUptime: 100, responseUptime: 100,
+                headingWith: { _ in throw URLError(.notConnectedToInternet) })
+        }
+        #expect(captured.value.count == 1)
+        #expect(try JSONEncoder.api.encode(state) == before)
+    }
 }
 
 private func freeStatus(_ free: Function, pointer: UInt32, length: UInt32) throws -> UInt32 {

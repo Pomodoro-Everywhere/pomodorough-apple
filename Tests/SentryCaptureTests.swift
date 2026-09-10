@@ -793,6 +793,38 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains("Secret Legacy Task"))
     }
 
+    // AP74: corrupt local-tasks-v1 is decode failure, not absence.
+    // Migration is skipped, the blob is kept, capture fires once.
+    // MainActor: SentryCapture backend is global.
+    @Test @MainActor
+    func corruptLegacyTaskBlobSkipsMigrationAndCapturesOnce() throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryLegacyDecode.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder.api.encode(PersistedTimerState.fresh()),
+            forKey: PersistedStateLoader.storageKey)
+        let corrupt = Data("corrupt-legacy-tasks".utf8)
+        defaults.set(corrupt, forKey: PersistedStateLoader.localTaskStorageKey)
+        let loader = PersistedStateLoader(defaults: defaults)
+        let load = loader.load()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let transition = loader.migrating(.fresh(), from: load, replicationMode: .centralized,
+            wallDate: Date(timeIntervalSince1970: 0), uptime: 100, roomStore: nil)
+        #expect(!transition.migrations.contains(.tasks))
+        #expect(!transition.removesLegacyTasksAfterProjection)
+        #expect(!transition.migrationFailed)
+        #expect(recorded.value.count == 1)
+        #expect(defaults.data(forKey: PersistedStateLoader.localTaskStorageKey) == corrupt)
+        _ = loader.migrating(.fresh(), from: load, replicationMode: .centralized,
+            wallDate: Date(timeIntervalSince1970: 0), uptime: 100, roomStore: nil)
+        #expect(recorded.value.count == 1)
+    }
+
     @Test
     func selectedTaskMigrationFailureMarksFailedAndCaptures() throws {
         let recorded = LockedTestValue<[String]>([])

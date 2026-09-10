@@ -355,6 +355,27 @@ struct UnitNegativeTests {
         #expect(alarms.operations.isEmpty)
     }
 
+    // AP75: backend authorization throws are captured once, mapping stays denied.
+    @Test @MainActor
+    func timerAlarmAuthorizationThrowCapturesOnceAndStaysDenied() async {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let notifications = RecordingNotificationBackend()
+        notifications.authorizationError = URLError(.timedOut)
+        let alarms = RecordingSystemAlarmBackend()
+        alarms.authorizationState = .notDetermined
+        alarms.authorizationError = URLError(.notConnectedToInternet)
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+        await #expect(throws: TimerAlarmError.self) {
+            try await scheduler.requestAuthorization()
+        }
+        #expect(recorded.value.count == 1)
+    }
+
     @Test @MainActor
     func timerAlarmSchedulerPropagatesSelectedBackendFailures() async throws {
         let notifications = RecordingNotificationBackend()

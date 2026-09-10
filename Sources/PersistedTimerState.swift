@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 extension PersistedTimerState {
     mutating func prepare(for authenticatedUser: User) {
@@ -229,10 +230,18 @@ extension PersistedTimerState {
             remote: nil,
             physicalNowMs: nowMs
         )
-        guard let nextClock = try? tick(input).validated(for: input),
-              WireBounds.isWithinClockSkew(wallMs: nextClock.wallMs, occurredAt: date) else {
+        let ticked: CoreHLCTickOutput
+        do {
+            ticked = try tick(input).validated(for: input)
+        } catch {
+            Logger(subsystem: "me.egigoka.pomodorough", category: "Clock").error("advanceClock tick failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "hlc-tick-core", error: error)
             throw AppError.invalidLocalClock
         }
+        guard WireBounds.isWithinClockSkew(wallMs: ticked.wallMs, occurredAt: date) else {
+            throw AppError.invalidLocalClock
+        }
+        let nextClock = ticked
         hlcWallMs = nextClock.wallMs
         hlcCounter = nextClock.counter
         trustedClockState = trustedClockState.recordingTrustedMilliseconds(nowMs)
@@ -288,13 +297,21 @@ extension PersistedTimerState {
             physicalNowMs: sample.serverTimeMs,
             observed: [local, serverClock]
         )
-        guard let mergedClock = try? head(input).validatedHead(for: input),
-              WireBounds.isWithinClockSkew(
-                wallMs: mergedClock.wallMs,
-                occurredAt: serverTime
-              ) else {
+        let merged: CoreHLC
+        do {
+            merged = try head(input).validatedHead(for: input)
+        } catch {
+            Logger(subsystem: "me.egigoka.pomodorough", category: "Clock").error("mergeClock head failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "hlc-head-core", error: error)
             throw AppError.invalidResponse
         }
+        guard WireBounds.isWithinClockSkew(
+            wallMs: merged.wallMs,
+            occurredAt: serverTime
+        ) else {
+            throw AppError.invalidResponse
+        }
+        let mergedClock = merged
         trustedClockState = resample.state
         hlcWallMs = mergedClock.wallMs
         hlcCounter = mergedClock.counter
