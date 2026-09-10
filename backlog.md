@@ -1,5 +1,13 @@
 # App review backlog
 
+## Blocked - apple 0.25.0 release 2026-09-10 (NOT published)
+
+- Release attempt: commit `4eee74e` ("release apple 0.25.0", MARKETING 0.25.0 build 39, project.yml + pbxproj only, mirrors 0.24.0). Tag `v0.25.0` at `4eee74e`, pushed to upstream. Release run `34452153798`: preflight/build-macos/build-ios-simulator/build-ios-device/test-macos/selftest/package green; `test-ios` failed 3 full attempts + 1 infra-flaked rerun, `package-and-release` skipped. No core pin introduced — build log shows `CORE_PROVENANCE tag=v0.25.0 commit=b0de2386… sha256=bd0a00ae…` (fetch_shared_core.sh resolved latest at build time).
+- Deterministic blocker (not a flake, do NOT rerun): new AP63 test `scheduleIrohStartupFailureLogsCapturesAndReportsUnavailable` (`Tests/RoomReplicationControllerTests.swift:549`) fails 3/3 on iOS, passes on macOS. Root cause: the fixture never calls `setSceneActive(true)`, and `activeContext` (`Sources/RoomReplicationController.swift:500-502`, pre-existing) returns nil on iOS while `sceneIsActive == false`, so `scheduleIrohStartup` returns before creating the Task — no status event, no Sentry capture. macOS has no such guard, hence the platform split. Fix: `setSceneActive(true, environment:)` in the test (or fixture) before `scheduleIrohStartup`. The 1a40c0a validation ran the Mac suite only (778 passed), iOS was build-only, so this never ran on iOS pre-tag.
+- Flake (passes sometimes, failed 2/3 iOS runs): AP67 test `watchPushFirstSequenceCarriesNonzeroSeedAndInitialCount` (`Tests/WatchCommandIdentityTests.swift:488`) expects first-push low32 == 1 but got 4 (off-by-3, twice) — extra emissions from `model.start()` race the reply snapshot. Passed once on the same commit; timing/order-dependent.
+- Infra flakes seen and retried per policy: Sentry xcframework downloads timed out once (`downloadError("The request timed out.")`, rerun accepted); CI `candidate-34452153863` failed on an unrelated python contract test (`directory-sync-hung-pid` FileNotFoundError).
+- Next: fix the AP63 fixture (one-line scene activation), decide tag handling (`v0.25.0` already points at `4eee74e` — delete + retag after fix, or cut 0.25.1), push, and re-monitor Release to published with core-provenance check.
+
 ## Fixed - 0.25.0 review AP62-AP71 2026-09-10
 
 - [x] **AP62 Medium - `projectionTransition` capture failure no telemetry + no failure test (AP53 sibling).** Fixed: mirrors `bootstrapRoomState` — `Logger.error` + `SentryCapture.capture` on `captureLocalOperations` throw, advanced phase + message still returned. Test `projectionTransitionReportsCaptureFailureAndKeepsAdvancedPhase` forces a durable-write throw (gated `afterReplacement` hook) and asserts phase advanced, message carried, captured once, store unmutated.
