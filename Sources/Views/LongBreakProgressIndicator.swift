@@ -13,7 +13,7 @@ struct LongBreakProgressIndicator: View {
         .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Pomodoro progress")
-        .accessibilityValue("\(progress) of 4 toward the next long break, \(completedToday) completed today")
+        .accessibilityValue(String(localized: "\(progress) of 4 toward the next long break, \(completedToday) completed today"))
     }
 }
 

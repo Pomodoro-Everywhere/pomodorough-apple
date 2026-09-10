@@ -497,6 +497,49 @@ struct RoomReplicationControllerTests {
         )) == .unchanged)
     }
 
+    @Test @MainActor
+    func bootstrapRoomStateReportsCaptureFailureAndKeepsAdvancedPhase() throws {
+        let failWrites = LockedTestValue(false)
+        let url = temporaryURL()
+        let store = IrohRoomStore(
+            fileURL: url,
+            secretStore: MemoryIrohRoomSecretStore(),
+            durableStore: AtomicDurableFileStore(fileURL: url) {
+                if failWrites.value { throw TestRoomServiceError.endpointUnavailable }
+            }
+        )
+        var completed = PersistedTimerState.fresh()
+        completed.canonicalTimer = TestFixtures.timer(status: .completed, elapsed: 60_000)
+        completed.history = [TestFixtures.history(
+            id: completed.canonicalTimer!.id,
+            durationMs: 60_000,
+            date: TestFixtures.anchor
+        )]
+        completed.settings.selectedPhase = .focus
+        _ = try makeActiveRoom(in: store, returnState: completed)
+        failWrites.value = true
+
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+
+        let bootstrap = RoomReplicationController.bootstrapRoomState(
+            mode: .iroh,
+            localState: .fresh(),
+            roomStore: store
+        )
+
+        #expect(bootstrap.mode == .iroh)
+        #expect(bootstrap.state.settings.selectedPhase == .shortBreak)
+        #expect(bootstrap.errorMessage != nil)
+        #expect(captured.value.count == 1)
+        #expect(store.activeRoomState?.settings.selectedPhase == .focus)
+    }
+
     @Test func secureRandomBytesReturnsRequestedIndependentPayloads() {
         let first = RoomReplicationController.secureRandomBytes(count: 32)
         let second = RoomReplicationController.secureRandomBytes(count: 32)

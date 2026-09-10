@@ -357,6 +357,67 @@ struct WatchCommandIdentityTests {
         #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 6, status: "paused"), over: adopted))
     }
 
+    @Test
+    func reinstallSeedChangeAdoptsDespiteNumericallySmallerSequence() {
+        func snapshot(sequence: UInt64, status: String) -> WatchTimerSnapshot {
+            WatchTimerSnapshot(
+                phase: "focus", status: status, sequence: sequence,
+                timerId: "timer-a",
+                plannedDurationMs: 60_000, elapsedAtAnchorMs: 0,
+                anchorAt: TestFixtures.anchor,
+                selectedPhase: "focus",
+                focusDurationMs: 60_000, shortBreakDurationMs: 60_000,
+                longBreakDurationMs: 60_000, updatedAt: TestFixtures.anchor
+            )
+        }
+        // Pre-reinstall install (seed 5, high counter) vs post-reinstall or
+        // seed-wrapped install (seed 2, low counter): the new epoch adopts
+        // even though its full sequence is numerically smaller, so snapshots
+        // can never brick behind a pre-reinstall sequence.
+        let preReinstall = snapshot(sequence: (UInt64(5) << 32) | 9_000, status: "paused")
+        let postReinstall = snapshot(sequence: (UInt64(2) << 32) | 3, status: "running")
+        #expect(postReinstall.sequence < preReinstall.sequence)
+        #expect(shouldAdoptWatchSnapshot(postReinstall, over: preReinstall))
+        // Same-epoch ordering is unchanged: stale rejected, newer accepted.
+        let sameEpoch = snapshot(sequence: (UInt64(2) << 32) | 4, status: "paused")
+        #expect(!shouldAdoptWatchSnapshot(postReinstall, over: sameEpoch))
+        #expect(shouldAdoptWatchSnapshot(sameEpoch, over: postReinstall))
+    }
+
+    @Test
+    func saturatedCounterRollsEpochAndStaysMonotonic() {
+        let saturated = (sequence: (UInt64(7) << 32) | UInt64(UInt32.max), seed: UInt32(7), count: UInt32.max)
+        let rolled = nextWatchSnapshotSequence(seed: saturated.seed, count: saturated.count)
+        #expect(rolled.seed == 8)
+        #expect(rolled.count == 1)
+        #expect(rolled.sequence == (UInt64(8) << 32) | 1)
+        #expect(rolled.sequence > saturated.sequence)
+        let steady = nextWatchSnapshotSequence(seed: 7, count: 41)
+        #expect(steady.sequence == (UInt64(7) << 32) | 42)
+        #expect(steady.seed == 7)
+        #expect(steady.count == 42)
+    }
+
+    @Test
+    func preSequenceSnapshotDecodesAsZeroAndAlwaysAdopts() throws {
+        let current = WatchTimerSnapshot(
+            phase: "focus", status: "paused", sequence: (UInt64(9) << 32) | 500,
+            timerId: "timer-a",
+            plannedDurationMs: 60_000, elapsedAtAnchorMs: 0,
+            anchorAt: TestFixtures.anchor,
+            selectedPhase: "focus",
+            focusDurationMs: 60_000, shortBreakDurationMs: 60_000,
+            longBreakDurationMs: 60_000, updatedAt: TestFixtures.anchor
+        )
+        let data = try JSONEncoder().encode(current)
+        var dict = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        dict?.removeValue(forKey: "sequence")
+        let legacy = try JSONSerialization.data(withJSONObject: dict ?? [:])
+        let decoded = try JSONDecoder().decode(WatchTimerSnapshot.self, from: legacy)
+        #expect(decoded.sequence == 0)
+        #expect(shouldAdoptWatchSnapshot(decoded, over: current))
+    }
+
 #if os(iOS)
     @Test @MainActor
     func watchPushStampsIncreasingSequences() throws {

@@ -72,6 +72,29 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+extension WatchTimerSnapshot {
+    // Custom decoding: snapshots from older iOS apps predate the sequence
+    // field; the synthesized decoder would throw keyNotFound, so an absent
+    // sequence falls back to 0 (legacy, always adopts). Memberwise init is
+    // preserved because this lives in an extension, not the struct body.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        phase = try container.decode(String.self, forKey: .phase)
+        status = try container.decode(String.self, forKey: .status)
+        sequence = try container.decodeIfPresent(UInt64.self, forKey: .sequence) ?? 0
+        timerId = try container.decodeIfPresent(String.self, forKey: .timerId)
+        timerRevision = try container.decodeIfPresent(WatchTimerRevision.self, forKey: .timerRevision)
+        plannedDurationMs = try container.decode(Int64.self, forKey: .plannedDurationMs)
+        elapsedAtAnchorMs = try container.decode(Int64.self, forKey: .elapsedAtAnchorMs)
+        anchorAt = try container.decode(Date.self, forKey: .anchorAt)
+        selectedPhase = try container.decode(String.self, forKey: .selectedPhase)
+        focusDurationMs = try container.decode(Int64.self, forKey: .focusDurationMs)
+        shortBreakDurationMs = try container.decode(Int64.self, forKey: .shortBreakDurationMs)
+        longBreakDurationMs = try container.decode(Int64.self, forKey: .longBreakDurationMs)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+}
+
 struct WatchTimerCommand: Codable, Equatable, Sendable {
     /// Unique command identity for dedupe/diagnostics.
     /// Defaults to a fresh id so commands from older watch apps still decode.
@@ -159,9 +182,12 @@ extension WatchUnknownCommandError: LocalizedError {
 
 /// Watch ingest ordering: a delayed refresh reply must not overwrite a
 /// newer application-context snapshot adopted earlier. Legacy snapshots
-/// (sequence 0) always adopt; otherwise the incoming snapshot adopts only
-/// when its phone-owned sequence is strictly newer. Pure so the macOS/iOS
-/// unit-test bundle covers the decision without a watchOS test host.
+/// (sequence 0) always adopt; a changed install seed (high 32 bits) always
+/// adopts, so a reinstall — or a wall-clock seed wrap — can never brick the
+/// watch behind a numerically larger pre-reinstall sequence; otherwise the
+/// incoming snapshot adopts only when its phone-owned sequence is strictly
+/// newer. Pure so the macOS/iOS unit-test bundle covers the decision
+/// without a watchOS test host.
 func shouldAdoptWatchSnapshot(
     _ incoming: WatchTimerSnapshot,
     over current: WatchTimerSnapshot?
@@ -169,7 +195,31 @@ func shouldAdoptWatchSnapshot(
     guard let current else { return true }
     guard incoming.sequence != 0 else { return true }
     guard current.sequence != 0 else { return true }
+    guard incoming.installSeed == current.installSeed else { return true }
     return incoming.sequence > current.sequence
+}
+
+/// High 32 bits of a phone-owned emission sequence: the per-install epoch.
+extension WatchTimerSnapshot {
+    var installSeed: UInt32 { UInt32(truncatingIfNeeded: sequence >> 32) }
+}
+
+/// Next phone-owned emission sequence for an initialized install seed.
+/// A saturated counter rolls the install epoch instead of repeating a
+/// sequence the watch would reject as stale, keeping emissions strictly
+/// monotonic. At the absolute ceiling (seed and counter both saturated)
+/// the sequence cannot advance; the caller still reports saturation.
+/// Pure so the macOS/iOS unit-test bundle covers the rollover.
+func nextWatchSnapshotSequence(
+    seed: UInt32,
+    count: UInt32
+) -> (sequence: UInt64, seed: UInt32, count: UInt32) {
+    if count < UInt32.max {
+        let count = count + 1
+        return ((UInt64(seed) << 32) | UInt64(count), seed, count)
+    }
+    guard seed < UInt32.max else { return ((UInt64(seed) << 32) | UInt64(count), seed, count) }
+    return ((UInt64(seed + 1) << 32) | 1, seed + 1, 1)
 }
 
 /// Attaches the snapshot's compare-and-set revision to timer controls.

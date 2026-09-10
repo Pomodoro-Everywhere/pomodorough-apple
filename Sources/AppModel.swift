@@ -7,6 +7,17 @@ private enum AccountDeletionPurgeState: String {
     case remoteCommitted = "remote_committed"
 }
 
+/// Durable-write step that failed without a thrown error (UserDefaults
+/// read-back mismatch during account-deletion cleanup). Bare step name:
+/// Sentry groups one issue per failed write.
+private struct AccountDeletionDurableWriteError: Error, Sendable {
+    let step: String
+}
+
+extension AccountDeletionDurableWriteError: LocalizedError {
+    var errorDescription: String? { step }
+}
+
 private struct InitialAppState {
     let transition: AppStatePersistenceCoordinator.LoadTransition
     let replicationMode: ReplicationMode
@@ -337,6 +348,10 @@ final class AppModel {
     ) {
         snapshotLoadFailure = transition.snapshotLoadFailure
         guard snapshotLoadFailure == nil else { return }
+        // Launch-time room bootstrap capture failure (AP53): the advanced
+        // phase is kept, the capture error stays visible like a projection
+        // error instead of dropping silently.
+        if let message = transition.bootstrapCaptureError { errorMessage = message }
         guard accountDeletionPurgeState == nil else {
             quarantineAccountDeletion()
             return
@@ -945,9 +960,9 @@ final class AppModel {
             do {
                 try roomStore.replaceActiveReturnState(returnState)
             } catch {
-                Self.logger.error("clearSignedOutState return-state failed: \(error.localizedDescription, privacy: .public)")
-                SentryCapture.capture(error)
-                errorMessage = error.localizedDescription
+                Self.logger.error("prepareSignedOutReturnState return-state failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.captureOnce(key: "sign-out-return-state", error: error)
+                errorMessage = String(localized: "Sign-out paused because its recovery state could not be saved.")
                 return false
             }
         }
@@ -1093,14 +1108,25 @@ final class AppModel {
             errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue credential cleanup.")
             return
         }
+        guard completeAccountDeletionOfflineReset() else { return }
+    }
+
+    // Tail of finishConfirmedAccountDeletion (AP58): durably select Offline
+    // and release deletion state. Each durable-write failure is logged +
+    // captured once (AP59) and leaves a localized retry message.
+    private func completeAccountDeletionOfflineReset() -> Bool {
         defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
         guard defaults.string(forKey: Self.replicationModeKey) == ReplicationMode.offline.rawValue else {
+            Self.logger.error("completeAccountDeletionOfflineReset replication-mode write failed")
+            SentryCapture.captureOnce(key: "account-deletion-offline-mode", error: AccountDeletionDurableWriteError(step: "replication-mode"))
             errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
-            return
+            return false
         }
         guard clearAccountDeletionRoomIDs() else {
+            Self.logger.error("completeAccountDeletionOfflineReset room-ids clear failed")
+            SentryCapture.captureOnce(key: "account-deletion-room-ids", error: AccountDeletionDurableWriteError(step: "room-ids"))
             errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue room cleanup.")
-            return
+            return false
         }
         replicationMode = .offline
         roomInvite = nil
@@ -1108,10 +1134,13 @@ final class AppModel {
         irohStatus = .stopped
         rebuildOptimisticState()
         guard clearAccountDeletionState() else {
+            Self.logger.error("completeAccountDeletionOfflineReset deletion-state clear failed")
+            SentryCapture.captureOnce(key: "account-deletion-state", error: AccountDeletionDurableWriteError(step: "deletion-state"))
             errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
-            return
+            return false
         }
         roomReplicationController.completeAccountDeletion()
+        return true
     }
 
     private func quarantineAccountDeletion() {

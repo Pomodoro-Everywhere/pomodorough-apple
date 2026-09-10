@@ -1594,29 +1594,33 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             body = refreshToken == "replacement-expired-refresh"
                 ? Self.tokenPairBody(accessToken: "replacement-access", refreshToken: "replacement-refresh")
                 : Self.tokenPairBody(accessToken: "stale-access", refreshToken: "stale-refresh")
-        case ("apple-api-coverage-expired-refresh-me", "/api/v1/me"),
-             ("apple-api-coverage-concurrent-refresh-single-flight", "/api/v1/me"),
+        case ("apple-api-coverage-exchange-save-me", "/api/v1/me"),
              ("apple-api-coverage-stale-refresh-generation", "/api/v1/me"),
-             ("apple-api-coverage-exchange-save-me", "/api/v1/me"),
-             ("apple-api-coverage-model-local-signout", "/api/v1/me"),
-             ("apple-api-coverage-model-sign-in", "/api/v1/me"):
+             ("apple-api-coverage-concurrent-refresh-single-flight", "/api/v1/me"),
+             ("apple-api-coverage-expired-refresh-me", "/api/v1/me"):
             statusCode = 200
             body = Self.meBody
-        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/challenge"),
-             ("apple-api-coverage-model-local-signout", "/api/v1/auth/google/challenge"),
-             ("apple-api-coverage-model-identity-failure", "/api/v1/auth/google/challenge"):
+        case let (scenario, "/api/v1/me") where scenario.hasPrefix("apple-api-coverage-model-local-signout")
+            || scenario.hasPrefix("apple-api-coverage-model-sign-in"):
+            statusCode = 200
+            body = Self.meBody
+        case ("apple-api-coverage-model-identity-failure", "/api/v1/auth/google/challenge"):
             statusCode = 200
             body = Data(#"{"challenge":"model-challenge","nonce":"model-nonce","expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
-        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/google/exchange"),
-             ("apple-api-coverage-model-local-signout", "/api/v1/auth/google/exchange"):
+        case let (scenario, "/api/v1/auth/google/challenge") where scenario.hasPrefix("apple-api-coverage-model-local-signout")
+            || scenario.hasPrefix("apple-api-coverage-model-sign-in"):
+            statusCode = 200
+            body = Data(#"{"challenge":"model-challenge","nonce":"model-nonce","expiresAt":"2099-01-01T00:00:00.000Z"}"#.utf8)
+        case let (scenario, "/api/v1/auth/google/exchange") where scenario.hasPrefix("apple-api-coverage-model-local-signout")
+            || scenario.hasPrefix("apple-api-coverage-model-sign-in"):
             statusCode = 200
             body = Self.tokenPairBody(accessToken: "model-access", refreshToken: "model-refresh")
-        case ("apple-api-coverage-model-sign-in", "/api/v1/sync"),
-             ("apple-api-coverage-model-local-signout", "/api/v1/sync"):
+        case let (scenario, "/api/v1/sync") where scenario.hasPrefix("apple-api-coverage-model-local-signout")
+            || scenario.hasPrefix("apple-api-coverage-model-sign-in"):
             statusCode = 200
             body = Self.syncResponse(revision: 0, history: [])
-        case ("apple-api-coverage-model-sign-in", "/api/v1/auth/logout"),
-             ("apple-api-coverage-model-local-signout", "/api/v1/auth/logout"):
+        case let (scenario, "/api/v1/auth/logout") where scenario.hasPrefix("apple-api-coverage-model-local-signout")
+            || scenario.hasPrefix("apple-api-coverage-model-sign-in"):
             statusCode = 204
             body = Data()
         case ("apple-api-coverage-exchange-save-me", "/api/v1/auth/google/exchange"),

@@ -418,17 +418,28 @@ final class RoomReplicationController {
         return .projectionApplied(updated, errorMessage: errorMessage)
     }
 
+    /// Launch-time counterpart of `projectionTransition`: advances the default
+    /// phase after a completion, then captures the derived selection as local
+    /// operations. A capture failure is logged + captured and carried to the
+    /// caller as `errorMessage`; the advanced phase is still returned so the
+    /// launch does not resurrect the completed phase.
     static func bootstrapRoomState(
         mode: ReplicationMode,
         localState: PersistedTimerState,
         roomStore: IrohRoomStore
-    ) -> (mode: ReplicationMode, state: PersistedTimerState) {
-        guard mode == .iroh else { return (mode, localState) }
-        guard var roomState = roomStore.activeRoomState else { return (.offline, localState) }
+    ) -> (mode: ReplicationMode, state: PersistedTimerState, errorMessage: String?) {
+        guard mode == .iroh else { return (mode, localState, nil) }
+        guard var roomState = roomStore.activeRoomState else { return (.offline, localState, nil) }
         if advanceDefaultPhaseAfterCompletion(in: &roomState) {
-            _ = try? roomStore.captureLocalOperations(from: roomState)
+            do {
+                _ = try roomStore.captureLocalOperations(from: roomState)
+            } catch {
+                Self.logger.error("bootstrapRoomState captureLocalOperations failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+                return (.iroh, roomState, error.localizedDescription)
+            }
         }
-        return (.iroh, roomState)
+        return (.iroh, roomState, nil)
     }
 
     private static func advanceDefaultPhaseAfterCompletion(

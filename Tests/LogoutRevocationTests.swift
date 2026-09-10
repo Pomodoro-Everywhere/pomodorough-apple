@@ -7,7 +7,10 @@ import Testing
 struct LogoutRevocationTests {
     @Test(arguments: [false, true]) @MainActor
     func failedDetachKeepsAccountUsableThenRetryResets(cancelSwitch: Bool) async throws {
-        let scenario = cancelSwitch ? "apple-api-coverage-model-sign-in" : "apple-api-coverage-model-local-signout"
+        let base = cancelSwitch ? "apple-api-coverage-model-sign-in" : "apple-api-coverage-model-local-signout"
+        // UUID-suffixed scenario: the stub recorder is keyed by the full
+        // scenario string, so parallel suites never share or reset it.
+        let scenario = "\(base)-logout-revocation-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: scenario))
         defer { defaults.removePersistentDomain(forName: scenario) }
         var state = TestFixtures.syncContractState(includesPendingOperations: false)
@@ -16,48 +19,51 @@ struct LogoutRevocationTests {
             state.pendingAccountSwitchUser = TestFixtures.user
         }
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
-        let tokens = tokenPair(access: "retained")
-        let active = OrderedTokenStore(tokens: tokens)
         let obligations = MemoryLogoutRevocationStore()
         obligations.failAppend.value = true
+        let logoutSession = LogoutRevocationTestSession(scenario: scenario, store: obligations)
+        let session = logoutSession.session
+        defer { logoutSession.invalidateIfDrained() }
+        let tokens = tokenPair(access: "retained")
+        let active = OrderedTokenStore(tokens: tokens)
         let identity = RecordingGoogleIdentityProvider()
         let model = AppModel(
             api: APIClient(session: session, keychain: active, logoutRevocationStore: obligations),
             defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
             alarmScheduler: RecordingAlarmScheduler(), googleIdentityProvider: identity
         )
-        await model.restore()
-        try #require(model.isSignedIn)
-        if cancelSwitch { try #require(model.pendingAccountSwitchUser != nil) }
-        if cancelSwitch { await model.cancelAccountSwitch() } else { model.signOut() }
-        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(!model.isWorking)
-        #expect(model.isSignedIn)
-        #expect(active.tokens == tokens)
-        #expect(identity.signOutCount == 0)
-        #expect(model.errorMessage != nil)
-        if !cancelSwitch {
-            let count = TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" }
-            await model.sync(force: true)
-            #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == count + 1)
+        try await logoutSession.run(model: model) {
+            await model.restore()
+            try #require(model.isSignedIn)
+            if cancelSwitch { try #require(model.pendingAccountSwitchUser != nil) }
+            if cancelSwitch { await model.cancelAccountSwitch() } else { model.signOut() }
+            for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(!model.isWorking)
+            #expect(model.isSignedIn)
+            #expect(active.tokens == tokens)
+            #expect(identity.signOutCount == 0)
+            #expect(model.errorMessage != nil)
+            if !cancelSwitch {
+                let count = TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" }
+                await model.sync(force: true)
+                #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == count + 1)
+            }
+            obligations.failAppend.value = false
+            if cancelSwitch { await model.cancelAccountSwitch() } else { model.signOut() }
+            for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(!model.isWorking)
+            #expect(model.sessionState == .localOnly)
+            #expect(active.tokens == nil)
+            #expect(identity.signOutCount == 1)
+            let persisted = try JSONDecoder.api.decode(
+                PersistedTimerState.self, from: #require(defaults.data(forKey: "timer-state-v2"))
+            )
+            #expect(persisted.pendingAccountSwitchUser == nil)
+            for _ in 0..<200 where try !obligations.load().isEmpty {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(try obligations.load().isEmpty)
         }
-        obligations.failAppend.value = false
-        if cancelSwitch { await model.cancelAccountSwitch() } else { model.signOut() }
-        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(!model.isWorking)
-        #expect(model.sessionState == .localOnly)
-        #expect(active.tokens == nil)
-        #expect(identity.signOutCount == 1)
-        let persisted = try JSONDecoder.api.decode(
-            PersistedTimerState.self, from: #require(defaults.data(forKey: "timer-state-v2"))
-        )
-        #expect(persisted.pendingAccountSwitchUser == nil)
-        for _ in 0..<200 where try !obligations.load().isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(try obligations.load().isEmpty)
     }
 
     @Test

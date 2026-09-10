@@ -222,6 +222,9 @@ final class AppStatePersistenceCoordinator {
         let shouldReportInvalidLocalClock: Bool
         var snapshotLoadFailure: SnapshotLoadFailure? = nil
         var legacyTaskSource: Data? = nil
+        /// Phase-advance capture failure from launch-time room bootstrap
+        /// (AP53). Surfaced as a non-blocking error, never a load failure.
+        var bootstrapCaptureError: String? = nil
     }
 
     enum LoadCompletionEffect: Equatable, Sendable {
@@ -315,7 +318,8 @@ final class AppStatePersistenceCoordinator {
                 && migrated.removesLegacyTasksAfterProjection,
             shouldPersistAfterProjection: migrated.shouldPersist(projectionSucceeded: true),
             shouldReportInvalidLocalClock: migrated.shouldReportInvalidLocalClock,
-            legacyTaskSource: migrated.legacyTaskSource
+            legacyTaskSource: migrated.legacyTaskSource,
+            bootstrapCaptureError: roomBootstrap.errorMessage
         )
     }
 

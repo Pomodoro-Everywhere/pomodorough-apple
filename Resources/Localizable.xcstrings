@@ -2715,6 +2715,16 @@
         }
       }
     },
+    "Sign-out paused because its recovery state could not be saved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-out paused because its recovery state could not be saved."
+          }
+        }
+      }
+    },
     "Signs in to sync your timer across devices": {
       "localizations": {
         "en": {
@@ -3389,6 +3399,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%arg finished pomodoros, %arg spent"
+          }
+        }
+      }
+    },
+    "%arg of 4 toward the next long break, %arg completed today": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%arg of 4 toward the next long break, %arg completed today"
           }
         }
       }

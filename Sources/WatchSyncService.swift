@@ -101,14 +101,11 @@ final class WatchSyncService: NSObject, ObservableObject {
             if seed == 0 { seed = 1 }
             count = 0
         }
-        if count < UInt32.max {
-            count += 1
-        } else {
-            Self.sequenceSaturated()
-        }
-        sequenceDefaults.set(Int(truncatingIfNeeded: seed), forKey: SequenceKeys.seed)
-        sequenceDefaults.set(Int(truncatingIfNeeded: count), forKey: SequenceKeys.count)
-        return (UInt64(seed) << 32) | UInt64(count)
+        if count == UInt32.max { Self.sequenceSaturated() }
+        let next = nextWatchSnapshotSequence(seed: seed, count: count)
+        sequenceDefaults.set(Int(truncatingIfNeeded: next.seed), forKey: SequenceKeys.seed)
+        sequenceDefaults.set(Int(truncatingIfNeeded: next.count), forKey: SequenceKeys.count)
+        return next.sequence
     }
 }
 
