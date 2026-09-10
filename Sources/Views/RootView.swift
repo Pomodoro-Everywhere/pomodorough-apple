@@ -21,7 +21,9 @@ struct RootView: View {
 #if os(macOS)
         .frame(minWidth: 516, minHeight: 420)
 #else
-        .frame(minWidth: 320, minHeight: 420)
+        // No minimum height: small phones in landscape (e.g. SE, 375pt)
+        // must fit the tab/navigation hierarchy in actual available space.
+        .frame(minWidth: 320)
 #endif
         .tint(PomodoroughTheme.signal)
         .alert("Pomodorough", isPresented: errorPresented) {

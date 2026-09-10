@@ -26,6 +26,13 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     var phase: String
     /// "running" | "paused" | "idle" (no active timer).
     var status: String
+    /// Phone-owned monotonic emission order. High 32 bits seed a per-install
+    /// epoch from wall-clock milliseconds at first emission; low 32 bits
+    /// count emissions within the install, so order never depends on the
+    /// snapshot's wall-clock `updatedAt` (which can move backward).
+    /// Defaults 0 so snapshots from older iOS apps still decode; 0 always
+    /// adopts (legacy back-compat).
+    var sequence: UInt64 = 0
     /// Canonical timer id when a timer is active; nil when idle. Lets the
     /// phone reject delayed watch commands aimed at a previous timer.
     /// Defaults nil so snapshots from older iOS apps still decode.
@@ -148,6 +155,21 @@ struct WatchUnknownCommandError: Error, Sendable {
 extension WatchUnknownCommandError: LocalizedError {
     // Bare name: Sentry groups one issue per unknown command vocabulary word.
     var errorDescription: String? { name }
+}
+
+/// Watch ingest ordering: a delayed refresh reply must not overwrite a
+/// newer application-context snapshot adopted earlier. Legacy snapshots
+/// (sequence 0) always adopt; otherwise the incoming snapshot adopts only
+/// when its phone-owned sequence is strictly newer. Pure so the macOS/iOS
+/// unit-test bundle covers the decision without a watchOS test host.
+func shouldAdoptWatchSnapshot(
+    _ incoming: WatchTimerSnapshot,
+    over current: WatchTimerSnapshot?
+) -> Bool {
+    guard let current else { return true }
+    guard incoming.sequence != 0 else { return true }
+    guard current.sequence != 0 else { return true }
+    return incoming.sequence > current.sequence
 }
 
 /// Attaches the snapshot's compare-and-set revision to timer controls.

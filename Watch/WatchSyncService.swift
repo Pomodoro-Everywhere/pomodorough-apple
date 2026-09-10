@@ -227,6 +227,13 @@ extension WatchSyncService: WCSessionDelegate {
     }
 
     private func ingest(_ snapshot: WatchTimerSnapshot) {
+        // Delayed refresh replies share this path with application-context
+        // pushes: reject snapshots older than the adopted one so a late
+        // reply cannot resurrect a stale countdown or controls.
+        guard shouldAdoptWatchSnapshot(snapshot, over: self.snapshot) else {
+            Self.logOnce(key: "watch-snapshot-stale")
+            return
+        }
         self.snapshot = snapshot
         commandError = nil
         do {

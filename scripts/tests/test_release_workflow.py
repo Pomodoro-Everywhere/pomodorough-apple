@@ -19,6 +19,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         publish = workflow.index("--draft=false", upload)
         self.assertLess(upload, verify)
         self.assertLess(verify, publish)
+        gates = (
+            'cmp "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"',
+            'shasum -a 256 -c SHA256SUMS.txt',
+            'cmp expected-manifest-assets.txt actual-manifest-assets.txt',
+            'verify_attestations "${expected_release_assets[@]}"',
+        )
+        verifier = workflow.split("verify_release_assets() {", 1)[1]
+        positions = [verifier.index(gate) for gate in gates]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('expected_release_assets=("${expected_assets[@]}" "SHA256SUMS.txt")', workflow)
+        self.assertIn('gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY" &', workflow)
 
     def test_release_shards_tests_builds_and_selftest_in_parallel(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")

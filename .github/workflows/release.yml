@@ -665,17 +665,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  package-and-release:
+  package:
     needs:
-      - preflight
-      - selftest
-      - test-ios
-      - test-macos
       - build-ios-simulator
       - build-ios-device
       - build-macos
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      bundle-sha256: ${{ steps.bundle.outputs.sha256 }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -861,6 +862,75 @@ jobs:
           cd "$RELEASE_DIR"
           shasum -a 256 ./*.ipa ./*.zip ./*.spdx.json > SHA256SUMS.txt
 
+      - name: Seal release transfer
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          transfer="$RUNNER_TEMP/release-transfer"
+          mkdir "$transfer"
+          cp -R "$RELEASE_DIR" "$transfer/assets"
+          cp -R "$RUNNER_TEMP/core-provenance-ios-simulator" "$transfer/core-provenance-ios-simulator"
+          tar -cf "$RUNNER_TEMP/release-transfer.tar" -C "$transfer" .
+          checksum="$(shasum -a 256 "$RUNNER_TEMP/release-transfer.tar" | awk '{print $1}')"
+          printf 'sha256=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sealed release
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sealed-release
+          path: ${{ runner.temp }}/release-transfer.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  package-and-release:
+    needs:
+      - preflight
+      - selftest
+      - test-ios
+      - test-macos
+      - build-ios-simulator
+      - build-ios-device
+      - build-macos
+      - package
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download sealed release
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact-id }}
+          path: ${{ runner.temp }}/sealed-release
+          merge-multiple: true
+
+      - name: Verify and restore sealed release
+        env:
+          EXPECTED_BUNDLE_SHA256: ${{ needs.package.outputs.bundle-sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          archive="$RUNNER_TEMP/sealed-release/release-transfer.tar"
+          actual_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          test "$actual_sha" = "$EXPECTED_BUNDLE_SHA256"
+          # Verify the producer's exact bytes before extracting or attesting them.
+          transfer="$RUNNER_TEMP/release-transfer"
+          mkdir "$transfer"
+          tar -xf "$archive" -C "$transfer"
+          test ! -e "$RELEASE_DIR"
+          mv "$transfer/assets" "$RELEASE_DIR"
+          mv "$transfer/core-provenance-ios-simulator" "$RUNNER_TEMP/core-provenance-ios-simulator"
+          cd "$RELEASE_DIR"
+          shasum -a 256 -c SHA256SUMS.txt
+
       - name: Attest artifact provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
@@ -885,6 +955,26 @@ jobs:
           )
           expected_release_assets=("${expected_assets[@]}" "SHA256SUMS.txt")
 
+          verify_attestations() {
+            local asset pid failed=0 max_parallel=3
+            local -a pids=()
+            for asset in "$@"; do
+              gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY" &
+              pids+=("$!")
+              if [[ "${#pids[@]}" -eq "$max_parallel" ]]; then
+                # Drain every child even after failure; never publish on partial success.
+                for pid in "${pids[@]}"; do
+                  wait "$pid" || failed=1
+                done
+                pids=()
+              fi
+            done
+            for pid in "${pids[@]}"; do
+              wait "$pid" || failed=1
+            done
+            return "$failed"
+          }
+
           verify_release_assets() {
             published_dir="$(mktemp -d "$RUNNER_TEMP/published-release.XXXXXX")"
             gh release download "$RELEASE_TAG" \
@@ -899,10 +989,7 @@ jobs:
               printf '%s\n' "${expected_assets[@]}" | sort > expected-manifest-assets.txt
               awk '{print $2}' SHA256SUMS.txt | sed -e 's|^\*||' -e 's|^\./||' | sort > actual-manifest-assets.txt
               cmp expected-manifest-assets.txt actual-manifest-assets.txt
-              for asset in "${expected_assets[@]}"; do
-                gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
-              done
-              gh attestation verify SHA256SUMS.txt --repo "$GITHUB_REPOSITORY"
+              verify_attestations "${expected_release_assets[@]}"
             )
           }
 

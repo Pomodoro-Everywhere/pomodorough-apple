@@ -18,13 +18,13 @@ struct IrohReplicationTests {
         let history: [HistoryItem]
     }
 
-    @Test @MainActor
-    func confirmedAccountDeletionPurgesLocalAndIrohWorkspacesAcrossRestart() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func confirmedAccountDeletionPurgesLocalAndIrohWorkspacesAcrossRestart(restarts: Bool) async throws {
         let scenario = "apple-api-coverage-account-delete-success"
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
         let suiteName = "PomodoroughTests.IrohAccountDelete.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
         let directory = FileManager.default.temporaryDirectory
@@ -83,20 +83,36 @@ struct IrohReplicationTests {
         #expect(roomStore.roomIDs.isEmpty)
         #expect(secretStore.contains(roomID: roomID))
         #expect(model.tasks.isEmpty)
+        #expect(model.hasPendingAccountDeletionRecovery)
+        #expect(model.isWorkspaceMutationBlocked)
         secretStore.setDeleteFailure(false, roomID: roomID)
+        if !restarts {
+            defaults.ignoredSetKeys = ["replication-mode-v1"]
+            await model.retryAccountDeletionRecovery()
+            #expect(model.hasPendingAccountDeletionRecovery)
+            #expect(model.isWorkspaceMutationBlocked)
+            #expect(model.replicationMode == .iroh)
+            defaults.ignoredSetKeys = []
+        }
         let reopenedStore = IrohRoomStore(fileURL: fileURL, secretStore: secretStore)
-        let reopened = AppModel(
+        let reopened = restarts ? AppModel(
             api: APIClient(session: session, keychain: tokenStore),
             defaults: defaults,
             roomStore: reopenedStore,
             alarmScheduler: RecordingAlarmScheduler()
-        )
+        ) : model
         #expect(reopened.tasks.isEmpty)
-        await reopened.restore()
+        if restarts { await reopened.restore() } else { await reopened.retryAccountDeletionRecovery() }
 
         #expect(defaults.string(forKey: "account-deletion-state-v1") == nil)
         #expect(!secretStore.contains(roomID: roomID))
         #expect(reopenedStore.roomIDs.isEmpty)
+        #expect(reopened.replicationMode == .offline)
+        #expect(defaults.string(forKey: "replication-mode-v1") == ReplicationMode.offline.rawValue)
+        #expect(!reopened.hasPendingAccountDeletionRecovery)
+        #expect(!reopened.isWorkspaceMutationBlocked)
+        reopened.start()
+        #expect(reopened.canonicalTimer?.status == .running)
     }
 
     @Test @MainActor
@@ -1164,6 +1180,68 @@ struct IrohReplicationTests {
         } else {
             #expect(operations.isEmpty)
         }
+    }
+
+    @Test @MainActor
+    func failedReturnCleanupAbortsLogoutThenRetryCannotRestoreAccount() async throws {
+        let scenario = "apple-api-coverage-model-local-signout"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let suiteName = "PomodoroughTests.ReturnCleanup.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("rooms.json")
+        let backup = directory.appendingPathComponent("backup.json")
+        let secrets = MemoryIrohRoomSecretStore()
+        let store = IrohRoomStore(fileURL: url, secretStore: secrets)
+        var account = TestFixtures.syncContractState(includesPendingOperations: false)
+        account.cachedUser = TestFixtures.user
+        defaults.set(try JSONEncoder.api.encode(account), forKey: "timer-state-v2")
+        let secret = Data(0...31)
+        _ = try store.createRoom(
+            roomID: IrohProtocolV1.roomID(for: secret), roomSecret: secret,
+            name: nil, returnState: account, genesis: emptyGenesis()
+        )
+        let tokens = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "return-access", accessTokenExpiresAt: .distantFuture,
+            refreshToken: "return-refresh", refreshTokenExpiresAt: .distantFuture
+        ))
+        let model = AppModel(
+            api: APIClient(session: session, keychain: tokens), defaults: defaults,
+            roomStore: store, alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+        try #require(model.isSignedIn)
+        try FileManager.default.moveItem(at: url, to: backup)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        model.signOut()
+        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.isSignedIn)
+        #expect(model.errorMessage != nil)
+        #expect(tokens.tokens != nil)
+        #expect(store.activeReturnState == account)
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: backup, to: url)
+        model.signOut()
+        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isSignedIn)
+        let reopened = IrohRoomStore(fileURL: url, secretStore: secrets)
+        #expect(reopened.activeReturnState?.cachedUser == nil)
+        #expect(reopened.activeReturnState?.history.isEmpty == true)
+        model.requestIrohRoomLeave()
+        await model.confirmIrohRoomLeave()
+        #expect(model.replicationMode == .offline)
+        #expect(model.user == nil)
+        #expect(model.history.isEmpty)
+        let persisted = try JSONDecoder.api.decode(
+            PersistedTimerState.self, from: #require(defaults.data(forKey: "timer-state-v2"))
+        )
+        #expect(persisted.cachedUser == nil)
+        #expect(persisted.history.isEmpty)
     }
 
     @Test @MainActor

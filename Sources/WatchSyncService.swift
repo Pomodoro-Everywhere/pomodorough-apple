@@ -14,13 +14,20 @@ final class WatchSyncService: NSObject, ObservableObject {
     private weak var model: AppModel?
     private nonisolated let replySnapshot = Mutex<Data?>(nil)
     private nonisolated let incomingSerial = WatchCommandSerialQueue()
+    private var sequenceDefaults: UserDefaults = .standard
+
+    private enum SequenceKeys {
+        static let seed = "watch-snapshot-seq-seed"
+        static let count = "watch-snapshot-seq-count"
+    }
 
     private var session: WCSession? {
         WCSession.isSupported() ? WCSession.default : nil
     }
 
-    func attach(_ model: AppModel) {
+    func attach(_ model: AppModel, defaults: UserDefaults = .standard) {
         self.model = model
+        self.sequenceDefaults = defaults
         _ = push()
         guard let session else { return }
         // Always (re)claim the delegate: a previous AppModel instance may have
@@ -36,7 +43,7 @@ final class WatchSyncService: NSObject, ObservableObject {
         guard let model else { return "skip no model" }
         let data: Data
         do {
-            data = try JSONEncoder().encode(model.makeWatchSnapshot())
+            data = try JSONEncoder().encode(stampedSnapshot(model.makeWatchSnapshot()))
             replySnapshot.withLock { $0 = data }
         } catch {
             replySnapshot.withLock { $0 = nil }
@@ -71,6 +78,37 @@ final class WatchSyncService: NSObject, ObservableObject {
             )
         }
         return report
+    }
+
+    /// Stamps the snapshot with the next phone-owned emission sequence so
+    /// the watch can reject delayed refresh replies that predate an already
+    /// adopted application-context snapshot.
+    private func stampedSnapshot(_ snapshot: WatchTimerSnapshot) -> WatchTimerSnapshot {
+        var stamped = snapshot
+        stamped.sequence = nextSnapshotSequence()
+        return stamped
+    }
+
+    /// Monotonic per install, persisted across relaunches, room swaps, and
+    /// account changes. The seed separates installs (wall clock is used only
+    /// for this one-time seed); the counter orders emissions within the
+    /// install, so delivery order never depends on snapshot wall-clock time.
+    private func nextSnapshotSequence() -> UInt64 {
+        var seed = UInt32(truncatingIfNeeded: sequenceDefaults.integer(forKey: SequenceKeys.seed))
+        var count = UInt32(truncatingIfNeeded: sequenceDefaults.integer(forKey: SequenceKeys.count))
+        if seed == 0 {
+            seed = UInt32(truncatingIfNeeded: UInt64(Date().timeIntervalSince1970 * 1_000))
+            if seed == 0 { seed = 1 }
+            count = 0
+        }
+        if count < UInt32.max {
+            count += 1
+        } else {
+            Self.sequenceSaturated()
+        }
+        sequenceDefaults.set(Int(truncatingIfNeeded: seed), forKey: SequenceKeys.seed)
+        sequenceDefaults.set(Int(truncatingIfNeeded: count), forKey: SequenceKeys.count)
+        return (UInt64(seed) << 32) | UInt64(count)
     }
 }
 
@@ -187,7 +225,7 @@ extension WatchSyncService: WCSessionDelegate {
 #else
 @MainActor
 final class WatchSyncService: NSObject, ObservableObject {
-    func attach(_ model: AppModel) {}
+    func attach(_ model: AppModel, defaults: UserDefaults = .standard) {}
 
     @discardableResult
     func push() -> String { "Watch sync unavailable" }
@@ -221,6 +259,11 @@ extension WatchSyncService {
     nonisolated static func commandDecodeFailed(_ error: Error) {
         Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(error.localizedDescription, privacy: .public)")
         SentryCapture.captureOnce(key: "watch-command-decode", error: error)
+    }
+
+    nonisolated static func sequenceSaturated() {
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot sequence saturated")
+        SentryCapture.captureOnce(key: "watch-snapshot-sequence", error: WatchSnapshotUnavailableError())
     }
 
     nonisolated static func snapshotUnavailable() {

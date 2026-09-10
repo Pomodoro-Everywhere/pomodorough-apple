@@ -562,6 +562,12 @@ final class RoomReplicationController {
         await service.stop()
     }
 
+    func completeAccountDeletion() {
+        modeGeneration += 1
+        applyMode(.offline)
+        accountDeletionQuarantined = false
+    }
+
     func rollbackAccountDeletion(
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationForegroundAction {

@@ -146,7 +146,7 @@ final class AppModel {
         physicalAnchor = startup.initialState.physicalAnchor
         needsPermissionIntroduction = startup.initialState.needsPermissionIntroduction
         restoreInitialState(startup.initialState.transition)
-        watchSync.attach(self)
+        watchSync.attach(self, defaults: defaults)
     }
 
     private static func makeStartup(
@@ -874,49 +874,49 @@ final class AppModel {
     }
 
     func cancelAccountSwitch() async {
-        guard let transition = accountSessionCoordinator.beginAccountSwitchCancellation(
-            hasPendingAccountSwitch: timerState.pendingAccountSwitchUser != nil,
-            isWorking: isWorking
-        ) else { return }
+        guard timerState.pendingAccountSwitchUser != nil, !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         if let failure = await accountSessionCoordinator.logout() {
             errorMessage = failure
             return
         }
+        guard let transition = accountSessionCoordinator.beginAccountSwitchCancellation(
+            hasPendingAccountSwitch: true, isWorking: false
+        ) else { return }
         applyAccountReset(transition)
         timerState.pendingAccountSwitchUser = nil
         persist()
     }
 
     func signOut() {
-        guard snapshotLoadFailure == nil else { return }
+        guard snapshotLoadFailure == nil, !isWorking else { return }
         let preservesBootstrapResolution = timerState.cachedUser == nil && timerState.bootstrapUser != nil
-        guard let transition = accountSessionCoordinator.beginSignOut(
-            isWorking: isWorking,
-            preservesBootstrapResolution: preservesBootstrapResolution,
-            pendingStrategy: timerState.pendingBootstrapResolution?.strategy
-        ) else { return }
         isWorking = true
         Task {
             await persistLogoutThenReset(
-                transition,
                 preservesBootstrapResolution: preservesBootstrapResolution
             )
         }
     }
 
     private func persistLogoutThenReset(
-        _ transition: CentralizedAccountSessionCoordinator.Transition<
-            CentralizedAccountSessionCoordinator.ResetAction
-        >,
         preservesBootstrapResolution: Bool
     ) async {
         defer { isWorking = false }
+        // The return workspace must be safe on disk before credentials are detached.
+        guard prepareSignedOutReturnState(preservesBootstrapResolution: preservesBootstrapResolution) else {
+            return
+        }
         if let failure = await accountSessionCoordinator.logout() {
             errorMessage = failure
             return
         }
+        guard let transition = accountSessionCoordinator.beginSignOut(
+            isWorking: false,
+            preservesBootstrapResolution: preservesBootstrapResolution,
+            pendingStrategy: timerState.pendingBootstrapResolution?.strategy
+        ) else { return }
         if !preservesBootstrapResolution, let timer = canonicalTimer {
             cancelAlarm(timerID: timer.id)
         }
@@ -934,6 +934,26 @@ final class AppModel {
         applyCoordinatorEffects(transition.effects)
     }
 
+    private func prepareSignedOutReturnState(preservesBootstrapResolution: Bool) -> Bool {
+        let transition = accountSessionCoordinator.signedOutStorageTransition(
+            state: timerState,
+            replicationMode: replicationMode,
+            preservesBootstrapResolution: preservesBootstrapResolution,
+            activeReturnState: roomStore.activeReturnState
+        )
+        if let returnState = transition.irohReturnState {
+            do {
+                try roomStore.replaceActiveReturnState(returnState)
+            } catch {
+                Self.logger.error("clearSignedOutState return-state failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+                errorMessage = error.localizedDescription
+                return false
+            }
+        }
+        return true
+    }
+
     private func clearSignedOutState(preservesBootstrapResolution: Bool) {
         let transition = accountSessionCoordinator.signedOutStorageTransition(
             state: timerState,
@@ -942,14 +962,6 @@ final class AppModel {
             activeReturnState: roomStore.activeReturnState
         )
         timerState = transition.state
-        if let returnState = transition.irohReturnState {
-            do {
-                try roomStore.replaceActiveReturnState(returnState)
-            } catch {
-                Self.logger.error("clearSignedOutState return-state failed: \(error.localizedDescription, privacy: .public)")
-                SentryCapture.capture(error)
-            }
-        }
         if transition.rebuildsProjection { rebuildOptimisticState() }
         persist()
         watchSync.push()
@@ -1081,14 +1093,25 @@ final class AppModel {
             errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue credential cleanup.")
             return
         }
+        defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
+        guard defaults.string(forKey: Self.replicationModeKey) == ReplicationMode.offline.rawValue else {
+            errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
+            return
+        }
         guard clearAccountDeletionRoomIDs() else {
             errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue room cleanup.")
             return
         }
+        replicationMode = .offline
+        roomInvite = nil
+        isIrohRoomLeaveConfirmationPresented = false
+        irohStatus = .stopped
+        rebuildOptimisticState()
         guard clearAccountDeletionState() else {
             errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
             return
         }
+        roomReplicationController.completeAccountDeletion()
     }
 
     private func quarantineAccountDeletion() {

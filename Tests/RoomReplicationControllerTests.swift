@@ -253,6 +253,26 @@ struct RoomReplicationControllerTests {
     }
 
     @Test @MainActor
+    func completedDeletionAllowsNewRoomForegroundStartup() async throws {
+        let fixture = makeFixture(mode: .iroh)
+        let state = try makeActiveRoom(in: fixture.store, returnState: .fresh())
+        fixture.workspace.value = workspace(from: state)
+        await fixture.controller.quiesceForAccountDeletion()
+        try fixture.store.purgeAccountData(retainedRoomIDs: fixture.store.roomIDs, roomSecretAccounts: [])
+        fixture.controller.completeAccountDeletion()
+        guard case .unchanged = await fixture.controller.changeMode(
+            to: .offline, environment: environment(for: state)
+        ) else { Issue.record("Deletion must finalize Offline mode"); return }
+        let newState = try makeActiveRoom(in: fixture.store, returnState: .fresh())
+        fixture.workspace.value = workspace(from: newState)
+        _ = await fixture.controller.changeMode(to: .iroh, environment: environment(for: newState))
+        fixture.controller.setSceneActive(true, environment: environment(for: newState))
+        await waitUntil { await fixture.service.startedContexts.count > 0 }
+        #expect(await fixture.service.startedContexts.count > 0)
+        await fixture.controller.quiesceForAccountDeletion()
+    }
+
+    @Test @MainActor
     func accountDeletionRollbackRestartsIrohEndpoint() async throws {
         let fixture = makeFixture(mode: .iroh)
         let roomState = try makeActiveRoom(in: fixture.store, returnState: .fresh())

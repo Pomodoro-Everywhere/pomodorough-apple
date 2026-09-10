@@ -5,6 +5,61 @@ import Testing
 
 @Suite("Durable logout revocation")
 struct LogoutRevocationTests {
+    @Test(arguments: [false, true]) @MainActor
+    func failedDetachKeepsAccountUsableThenRetryResets(cancelSwitch: Bool) async throws {
+        let scenario = cancelSwitch ? "apple-api-coverage-model-sign-in" : "apple-api-coverage-model-local-signout"
+        let defaults = try #require(UserDefaults(suiteName: scenario))
+        defer { defaults.removePersistentDomain(forName: scenario) }
+        var state = TestFixtures.syncContractState(includesPendingOperations: false)
+        if cancelSwitch {
+            state.cachedUser = User(id: "old-user", email: "old@example.com", name: "Old", avatarUrl: "")
+            state.pendingAccountSwitchUser = TestFixtures.user
+        }
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let tokens = tokenPair(access: "retained")
+        let active = OrderedTokenStore(tokens: tokens)
+        let obligations = MemoryLogoutRevocationStore()
+        obligations.failAppend.value = true
+        let identity = RecordingGoogleIdentityProvider()
+        let model = AppModel(
+            api: APIClient(session: session, keychain: active, logoutRevocationStore: obligations),
+            defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(), googleIdentityProvider: identity
+        )
+        await model.restore()
+        try #require(model.isSignedIn)
+        if cancelSwitch { try #require(model.pendingAccountSwitchUser != nil) }
+        if cancelSwitch { await model.cancelAccountSwitch() } else { model.signOut() }
+        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isWorking)
+        #expect(model.isSignedIn)
+        #expect(active.tokens == tokens)
+        #expect(identity.signOutCount == 0)
+        #expect(model.errorMessage != nil)
+        if !cancelSwitch {
+            let count = TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" }
+            await model.sync(force: true)
+            #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == count + 1)
+        }
+        obligations.failAppend.value = false
+        if cancelSwitch { await model.cancelAccountSwitch() } else { model.signOut() }
+        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isWorking)
+        #expect(model.sessionState == .localOnly)
+        #expect(active.tokens == nil)
+        #expect(identity.signOutCount == 1)
+        let persisted = try JSONDecoder.api.decode(
+            PersistedTimerState.self, from: #require(defaults.data(forKey: "timer-state-v2"))
+        )
+        #expect(persisted.pendingAccountSwitchUser == nil)
+        for _ in 0..<200 where try !obligations.load().isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(try obligations.load().isEmpty)
+    }
+
     @Test
     func detachmentPersistsObligationBeforeDeletingActiveCredentials() async throws {
         let tokens = tokenPair(access: "account-a")
@@ -486,6 +541,7 @@ private struct LegacyLogoutRevocationObligation: Codable {
 }
 
 private final class MemoryLogoutRevocationStore: LogoutRevocationStoring, @unchecked Sendable {
+    let failAppend = LockedTestValue(false)
     private let lock = NSLock()
     private var storage: [LogoutRevocationObligation]
     private let events: EventLog?
@@ -495,6 +551,7 @@ private final class MemoryLogoutRevocationStore: LogoutRevocationStoring, @unche
     }
     func load() throws -> [LogoutRevocationObligation] { lock.withLock { storage } }
     func append(_ obligation: LogoutRevocationObligation) throws {
+        if failAppend.value { throw CocoaError(.fileWriteNoPermission) }
         events?.append("obligation-save")
         lock.withLock { storage.append(obligation) }
     }

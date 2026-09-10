@@ -56,7 +56,7 @@ struct TimerMachineCard: View {
                     )
                 }
             }
-            LongBreakProgressIndicator(progress: model.longBreakProgress)
+            LongBreakProgressIndicator(progress: model.longBreakProgress, completedToday: model.completedFocusCountToday)
         }
     }
 }

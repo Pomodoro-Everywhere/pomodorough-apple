@@ -312,6 +312,79 @@ struct WatchCommandIdentityTests {
     }
 #endif
 
+    @Test
+    func watchSnapshotOrderingAdoptsNewerRejectsStale() {
+        func snapshot(sequence: UInt64, status: String) -> WatchTimerSnapshot {
+            WatchTimerSnapshot(
+                phase: "focus", status: status, sequence: sequence,
+                timerId: "timer-a",
+                plannedDurationMs: 60_000, elapsedAtAnchorMs: 0,
+                anchorAt: TestFixtures.anchor,
+                selectedPhase: "focus",
+                focusDurationMs: 60_000, shortBreakDurationMs: 60_000,
+                longBreakDurationMs: 60_000, updatedAt: TestFixtures.anchor
+            )
+        }
+        let current = snapshot(sequence: 10, status: "paused")
+        #expect(!shouldAdoptWatchSnapshot(snapshot(sequence: 9, status: "running"), over: current))
+        #expect(!shouldAdoptWatchSnapshot(snapshot(sequence: 10, status: "paused"), over: current))
+        #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 11, status: "running"), over: current))
+        #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 0, status: "running"), over: current))
+        #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 12, status: "running"), over: nil))
+        #expect(shouldAdoptWatchSnapshot(
+            snapshot(sequence: 12, status: "running"),
+            over: snapshot(sequence: 0, status: "paused")
+        ))
+    }
+
+    @Test
+    func delayedRefreshReplyCannotResurrectStaleCountdown() {
+        func snapshot(sequence: UInt64, status: String) -> WatchTimerSnapshot {
+            WatchTimerSnapshot(
+                phase: "focus", status: status, sequence: sequence,
+                timerId: "timer-a",
+                plannedDurationMs: 60_000, elapsedAtAnchorMs: 0,
+                anchorAt: TestFixtures.anchor,
+                selectedPhase: "focus",
+                focusDurationMs: 60_000, shortBreakDurationMs: 60_000,
+                longBreakDurationMs: 60_000, updatedAt: TestFixtures.anchor
+            )
+        }
+        // Watch adopted the newer paused context (seq 5); a delayed running
+        // refresh reply (seq 4) must not resurrect the old countdown.
+        let adopted = snapshot(sequence: 5, status: "paused")
+        #expect(!shouldAdoptWatchSnapshot(snapshot(sequence: 4, status: "running"), over: adopted))
+        #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 6, status: "paused"), over: adopted))
+    }
+
+#if os(iOS)
+    @Test @MainActor
+    func watchPushStampsIncreasingSequences() throws {
+        let (model, defaults, suite) = makeModel()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.start()
+        model.watchSync.push()
+        var reply: [String: Any] = [:]
+        model.watchSync.session(WCSession.default, didReceiveMessage: [WatchSyncKeys.requestSync: true]) {
+            reply = $0
+        }
+        let first = try JSONDecoder().decode(
+            WatchTimerSnapshot.self,
+            from: try #require(reply[WatchSyncKeys.snapshot] as? Data)
+        )
+        model.watchSync.push()
+        model.watchSync.session(WCSession.default, didReceiveMessage: [WatchSyncKeys.requestSync: true]) {
+            reply = $0
+        }
+        let second = try JSONDecoder().decode(
+            WatchTimerSnapshot.self,
+            from: try #require(reply[WatchSyncKeys.snapshot] as? Data)
+        )
+        #expect(first.sequence != 0)
+        #expect(second.sequence > first.sequence)
+    }
+#endif
+
     // MARK: - Helpers
 
     @MainActor

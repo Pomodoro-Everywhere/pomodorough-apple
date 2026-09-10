@@ -15,14 +15,21 @@ struct TimerScreen: View {
 
             ZStack {
                 if layout == .landscape {
-                    VStack(spacing: 10) {
-                        if let conflict = model.conflictMessage {
-                            ConflictBanner(message: conflict, dismiss: model.dismissConflict)
+                    // Scroll recovery: landscape height on small phones can
+                    // be shorter than the card, so content scrolls instead
+                    // of extending past the visible area.
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            if let conflict = model.conflictMessage {
+                                ConflictBanner(message: conflict, dismiss: model.dismissConflict)
+                            }
+                            TimerMachineCard(model: model, layout: layout)
                         }
-                        TimerMachineCard(model: model, layout: layout)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: 760)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
                     .timerChromeHidden(true)
                 } else {
                     ScrollView {
