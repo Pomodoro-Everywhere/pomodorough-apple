@@ -1,5 +1,9 @@
 # App review backlog
 
+## Fixed - apple 0.24.0 release 2026-09-10
+
+- Release: commit `e62bdb7` ("release apple 0.24.0", MARKETING 0.24.0 build 38, project.yml + regen pbxproj only, mirrors 0.23.0). Tag `v0.24.0` at `e62bdb7`, first attempt green with no preflight failure. Release run `34443919674` all 9 jobs green, published `2026-09-10T06:40:20Z` with 5 assets. All six core-consuming shards logged `CORE_PROVENANCE tag=v0.24.0 commit=cf818b86… sha256=0878d0e7…` (no skew); release notes carry the core line. No core pin introduced — fetch_shared_core.sh resolved latest at build time.
+
 ## Fixed - 0.24.0 review AP53/AP55-AP61 2026-09-10
 
 - [x] **AP55 High - bare interpolation broke the contract gate.** `Sources/Views/LongBreakProgressIndicator.swift:16` used a bare interpolated `accessibilityValue`. Fixed: `String(localized:)` with the same wording; key `%arg of 4 toward the next long break, %arg completed today` added to `Resources/Localizable.xcstrings` (341 shipping keys) + `UITests/Fixtures/Localizable.ar-XB.json`. `scripts/check_interface_contract.py` ok.
