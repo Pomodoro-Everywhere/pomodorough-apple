@@ -550,6 +550,12 @@ struct RoomReplicationControllerTests {
         let fixture = makeFixture(mode: .iroh)
         let roomState = try makeActiveRoom(in: fixture.store, returnState: .fresh())
         fixture.workspace.value = workspace(from: roomState)
+        // iOS nil-guards scheduleIrohStartup while the scene is inactive
+        // (activeContext), so activate first. Settle the activation's
+        // successful start before arming the failure: its Task is unstaged,
+        // and must complete before setStartError to keep the capture count exact.
+        fixture.controller.setSceneActive(true, environment: environment(for: roomState))
+        await waitUntil { await fixture.service.startCompletionCount == 1 }
         await fixture.service.setStartError(.endpointUnavailable)
 
         let captured = LockedTestValue<[String]>([])

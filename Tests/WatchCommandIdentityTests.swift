@@ -484,8 +484,23 @@ struct WatchCommandIdentityTests {
             WatchTimerSnapshot.self,
             from: try #require(reply[WatchSyncKeys.snapshot] as? Data)
         )
+        // Absolute count 1 is over-pinned: attach/start/projection pushes
+        // already advance the counter before this first observed reply.
+        // Pin the shape (nonzero seed + count) and monotonic increase instead.
         #expect(first.installSeed != 0)
-        #expect(first.sequence == (UInt64(first.installSeed) << 32) | 1)
+        let firstCount = UInt32(truncatingIfNeeded: first.sequence)
+        #expect(firstCount != 0)
+        #expect(first.sequence == (UInt64(first.installSeed) << 32) | UInt64(firstCount))
+        model.watchSync.push()
+        model.watchSync.session(WCSession.default, didReceiveMessage: [WatchSyncKeys.requestSync: true]) {
+            reply = $0
+        }
+        let second = try JSONDecoder().decode(
+            WatchTimerSnapshot.self,
+            from: try #require(reply[WatchSyncKeys.snapshot] as? Data)
+        )
+        #expect(second.installSeed == first.installSeed)
+        #expect(second.sequence > first.sequence)
     }
 #endif
 
