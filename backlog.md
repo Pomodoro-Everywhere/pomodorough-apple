@@ -1,5 +1,9 @@
 # App review backlog
 
+## Fixed - apple 0.26.0 release 2026-09-10
+
+- Release: commit `afa0e65` ("release apple 0.26.0", MARKETING 0.26.0 build 40, project.yml + pbxproj only, mirrors 0.25.0). Tag `v0.26.0` at `afa0e65`, first attempt green with no preflight failure. Release run `34491402419` all 9 jobs green, published `2026-09-10T15:20:57Z` with 5 assets. All six core-consuming shards logged `CORE_PROVENANCE tag=v0.26.0 commit=b25e0d8e… sha256=150d5aa6…` (no skew); release notes carry the core line. No core pin introduced — fetch_shared_core.sh resolved latest at build time.
+
 ## Fixed - 0.26.0 review AP72-AP73 2026-09-10
 
 - [x] **AP72 Low - secret-compensation double-placeholder repeats AP64 anti-pattern.** Fixed: `compensatingJoinSecretLocked` splits into period-guarded failure sentence + `String(localized: "Room secret cleanup failed: %@")`, plain concatenation (no nested `String(localized:)` interpolation). Old catalog key `%@ Room secret cleanup failed: %@` replaced by `Room secret cleanup failed: %@` in `Resources/Localizable.xcstrings` + `UITests/Fixtures/Localizable.ar-XB.json`. Test `secretCompensationFailureIsReportedWithoutDeletingRoom` now pins the `. Room secret cleanup failed: ` boundary, no `%@` leak, exactly one cleanup sentence.
