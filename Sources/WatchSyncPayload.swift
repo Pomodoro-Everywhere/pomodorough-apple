@@ -26,12 +26,14 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     var phase: String
     /// "running" | "paused" | "idle" (no active timer).
     var status: String
-    /// Phone-owned monotonic emission order. High 32 bits seed a per-install
-    /// epoch from wall-clock milliseconds at first emission; low 32 bits
-    /// count emissions within the install, so order never depends on the
-    /// snapshot's wall-clock `updatedAt` (which can move backward).
-    /// Defaults 0 so snapshots from older iOS apps still decode; 0 always
-    /// adopts (legacy back-compat).
+    /// Phone-owned monotonic emission order. High 32 bits seed a random
+    /// per-install epoch at first emission; low 32 bits count emissions
+    /// within the install, so order never depends on the snapshot's
+    /// wall-clock `updatedAt` (which can move backward) and two installs
+    /// never share an epoch (wall-clock low32 seeds collided).
+    /// Defaults 0 so snapshots from older iOS apps still decode; 0 adopts
+    /// only over a missing or legacy (0) current snapshot, otherwise it is
+    /// treated as stale (see shouldAdoptWatchSnapshot).
     var sequence: UInt64 = 0
     /// Canonical timer id when a timer is active; nil when idle. Lets the
     /// phone reject delayed watch commands aimed at a previous timer.
@@ -181,20 +183,26 @@ extension WatchUnknownCommandError: LocalizedError {
 }
 
 /// Watch ingest ordering: a delayed refresh reply must not overwrite a
-/// newer application-context snapshot adopted earlier. Legacy snapshots
-/// (sequence 0) always adopt; a changed install seed (high 32 bits) always
-/// adopts, so a reinstall — or a wall-clock seed wrap — can never brick the
-/// watch behind a numerically larger pre-reinstall sequence; otherwise the
-/// incoming snapshot adopts only when its phone-owned sequence is strictly
-/// newer. Pure so the macOS/iOS unit-test bundle covers the decision
-/// without a watchOS test host.
+/// newer application-context snapshot adopted earlier. A changed install
+/// seed (high 32 bits) always adopts, so a reinstall — or an epoch
+/// rollover — can never brick the watch behind a numerically larger
+/// pre-reinstall sequence; otherwise the incoming snapshot adopts only
+/// when its phone-owned sequence is strictly newer. Legacy snapshots
+/// (sequence 0, from iOS apps predating the sequence field) adopt only
+/// over a missing or legacy current snapshot: during the upgrade window
+/// the watch starts empty and adopts the first legacy snapshot, but once
+/// a sequenced snapshot is adopted a legacy 0 is stale and rejected.
+/// Tradeoff: downgrading the iOS app to a pre-sequence build leaves the
+/// watch pinned on its last sequenced snapshot until its cache is cleared
+/// (downgrades are unsupported; reinstall resets the cache). Pure so the
+/// macOS/iOS unit-test bundle covers the decision without a watchOS host.
 func shouldAdoptWatchSnapshot(
     _ incoming: WatchTimerSnapshot,
     over current: WatchTimerSnapshot?
 ) -> Bool {
     guard let current else { return true }
-    guard incoming.sequence != 0 else { return true }
     guard current.sequence != 0 else { return true }
+    guard incoming.sequence != 0 else { return false }
     guard incoming.installSeed == current.installSeed else { return true }
     return incoming.sequence > current.sequence
 }
@@ -202,6 +210,16 @@ func shouldAdoptWatchSnapshot(
 /// High 32 bits of a phone-owned emission sequence: the per-install epoch.
 extension WatchTimerSnapshot {
     var installSeed: UInt32 { UInt32(truncatingIfNeeded: sequence >> 32) }
+}
+
+/// Random per-install epoch for phone-owned emission sequences.
+/// Never 0, so the "unseeded" sentinel stays unambiguous. SystemRandomNumberGenerator
+/// keeps two installs from sharing an epoch (wall-clock low32 seeds collided
+/// for installs within the same millisecond). Pure so the macOS/iOS
+/// unit-test bundle covers the install-separation property.
+func makeWatchInstallSeed() -> UInt32 {
+    var generator = SystemRandomNumberGenerator()
+    return UInt32.random(in: 1...UInt32.max, using: &generator)
 }
 
 /// Next phone-owned emission sequence for an initialized install seed.

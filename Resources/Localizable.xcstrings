@@ -1,16 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "%@ Room join rollback failed: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ Room join rollback failed: %@"
-          }
-        }
-      }
-    },
     "%@ Room secret cleanup failed: %@": {
       "localizations": {
         "en": {
@@ -2415,56 +2405,6 @@
         }
       }
     },
-    "Server resolved a duration change as %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a duration change as %@."
-          }
-        }
-      }
-    },
-    "Server resolved a selected-task change as %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a selected-task change as %@."
-          }
-        }
-      }
-    },
-    "Server resolved a task change as %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a task change as %@."
-          }
-        }
-      }
-    },
-    "Server resolved a timer action as %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a timer action as %@."
-          }
-        }
-      }
-    },
-    "Server resolved an auto-start change as %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved an auto-start change as %@."
-          }
-        }
-      }
-    },
     "Server returned an invalid response.": {
       "localizations": {
         "en": {
@@ -3599,6 +3539,66 @@
           "stringUnit": {
             "state": "translated",
             "value": "iPhone"
+          }
+        }
+      }
+    },
+    "Room join rollback failed: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Room join rollback failed: %@"
+          }
+        }
+      }
+    },
+    "Server resolved a timer action.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server resolved a timer action."
+          }
+        }
+      }
+    },
+    "Server resolved a task change.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server resolved a task change."
+          }
+        }
+      }
+    },
+    "Server resolved a duration change.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server resolved a duration change."
+          }
+        }
+      }
+    },
+    "Server resolved an auto-start change.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server resolved an auto-start change."
+          }
+        }
+      }
+    },
+    "Server resolved a selected-task change.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server resolved a selected-task change."
           }
         }
       }

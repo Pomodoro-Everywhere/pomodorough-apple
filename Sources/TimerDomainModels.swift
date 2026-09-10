@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum TimerPhase: String, Codable, CaseIterable, Identifiable, Sendable {
     case focus
@@ -187,15 +188,21 @@ struct TimerSettings: Codable, Equatable, Sendable {
         legacyMinutesKey: CodingKeys,
         defaultValue: Int64
     ) -> Int64 {
-        let duration = (try? values.decodeIfPresent(Int64.self, forKey: durationKey)) ?? nil
-        let legacyMinutes = (try? values.decodeIfPresent(Int.self, forKey: legacyMinutesKey)) ?? nil
-        if let duration {
-            return normalizedDuration(duration)
+        do {
+            if values.contains(durationKey),
+               let duration = try values.decodeIfPresent(Int64.self, forKey: durationKey) {
+                return normalizedDuration(duration)
+            }
+            if values.contains(legacyMinutesKey),
+               let legacyMinutes = try values.decodeIfPresent(Int.self, forKey: legacyMinutesKey) {
+                return Int64(min(180, max(1, legacyMinutes))) * DurationValues.wireUnitMs
+            }
+            return defaultValue
+        } catch {
+            Logger(subsystem: "me.egigoka.pomodorough", category: "TimerSettings").error("decodedDuration failed, using default: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "timer-settings-duration-decode", error: error)
+            return defaultValue
         }
-        if let legacyMinutes {
-            return Int64(min(180, max(1, legacyMinutes))) * DurationValues.wireUnitMs
-        }
-        return defaultValue
     }
 
     private static func normalizedDuration(_ durationMs: Int64) -> Int64 {

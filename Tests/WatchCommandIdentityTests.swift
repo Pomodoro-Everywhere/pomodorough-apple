@@ -329,7 +329,7 @@ struct WatchCommandIdentityTests {
         #expect(!shouldAdoptWatchSnapshot(snapshot(sequence: 9, status: "running"), over: current))
         #expect(!shouldAdoptWatchSnapshot(snapshot(sequence: 10, status: "paused"), over: current))
         #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 11, status: "running"), over: current))
-        #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 0, status: "running"), over: current))
+        #expect(!shouldAdoptWatchSnapshot(snapshot(sequence: 0, status: "running"), over: current))
         #expect(shouldAdoptWatchSnapshot(snapshot(sequence: 12, status: "running"), over: nil))
         #expect(shouldAdoptWatchSnapshot(
             snapshot(sequence: 12, status: "running"),
@@ -399,7 +399,7 @@ struct WatchCommandIdentityTests {
     }
 
     @Test
-    func preSequenceSnapshotDecodesAsZeroAndAlwaysAdopts() throws {
+    func preSequenceSnapshotDecodesAsZeroAndAdoptsOnlyOverLegacy() throws {
         let current = WatchTimerSnapshot(
             phase: "focus", status: "paused", sequence: (UInt64(9) << 32) | 500,
             timerId: "timer-a",
@@ -415,7 +415,32 @@ struct WatchCommandIdentityTests {
         let legacy = try JSONSerialization.data(withJSONObject: dict ?? [:])
         let decoded = try JSONDecoder().decode(WatchTimerSnapshot.self, from: legacy)
         #expect(decoded.sequence == 0)
-        #expect(shouldAdoptWatchSnapshot(decoded, over: current))
+        #expect(shouldAdoptWatchSnapshot(decoded, over: nil))
+        #expect(shouldAdoptWatchSnapshot(
+            decoded,
+            over: WatchTimerSnapshot(
+                phase: "focus", status: "paused", sequence: 0,
+                timerId: "timer-a",
+                plannedDurationMs: 60_000, elapsedAtAnchorMs: 0,
+                anchorAt: TestFixtures.anchor,
+                selectedPhase: "focus",
+                focusDurationMs: 60_000, shortBreakDurationMs: 60_000,
+                longBreakDurationMs: 60_000, updatedAt: TestFixtures.anchor
+            )
+        ))
+        #expect(!shouldAdoptWatchSnapshot(decoded, over: current))
+        #expect(shouldAdoptWatchSnapshot(current, over: decoded))
+    }
+
+    @Test
+    func installSeedIsNonzeroRandomPerInstall() {
+        var seeds = Set<UInt32>()
+        for _ in 0..<256 {
+            let seed = makeWatchInstallSeed()
+            #expect(seed != 0)
+            seeds.insert(seed)
+        }
+        #expect(seeds.count > 1)
     }
 
 #if os(iOS)
@@ -443,6 +468,24 @@ struct WatchCommandIdentityTests {
         )
         #expect(first.sequence != 0)
         #expect(second.sequence > first.sequence)
+    }
+
+    @Test @MainActor
+    func watchPushFirstSequenceCarriesNonzeroSeedAndInitialCount() throws {
+        let (model, defaults, suite) = makeModel()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        model.start()
+        model.watchSync.push()
+        var reply: [String: Any] = [:]
+        model.watchSync.session(WCSession.default, didReceiveMessage: [WatchSyncKeys.requestSync: true]) {
+            reply = $0
+        }
+        let first = try JSONDecoder().decode(
+            WatchTimerSnapshot.self,
+            from: try #require(reply[WatchSyncKeys.snapshot] as? Data)
+        )
+        #expect(first.installSeed != 0)
+        #expect(first.sequence == (UInt64(first.installSeed) << 32) | 1)
     }
 #endif
 

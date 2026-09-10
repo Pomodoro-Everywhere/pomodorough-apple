@@ -238,7 +238,7 @@ extension WatchSyncService: WCSessionDelegate {
         commandError = nil
         do {
             let data = try JSONEncoder().encode(snapshot)
-            UserDefaults.standard.set(data, forKey: "watch-timer-snapshot")
+            UserDefaults.standard.set(data, forKey: storeKey)
         } catch {
             // Log-only (no Sentry on watchOS by design); in-memory snapshot
             // is already set, only the disk cache for offline launch is lost.

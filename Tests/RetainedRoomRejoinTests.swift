@@ -354,6 +354,33 @@ struct RetainedRoomRejoinTests {
     }
 
     @Test @MainActor
+    func controllerJoinAndRollbackFailuresReportSeparateSentencesAndCapture() async throws {
+        let fixture = try RetainedRejoinFixture()
+        let harness = try RetainedRejoinControllerFixture(fixture)
+        fixture.vault.failDelete = true
+
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+
+        let result = await harness.controller.joinRoom(
+            inviteText: try harness.invite(), environment: harness.environment
+        )
+        guard case .failed(let message) = result else {
+            Issue.record("Expected join failure, got \(result)")
+            return
+        }
+        #expect(message.contains("joined room has no valid genesis. Room join rollback failed: "))
+        #expect(captured.value.count == 1)
+        #expect(harness.service.stops == 1)
+        #expect(fixture.vault.secrets[fixture.roomA] == fixture.secretA)
+    }
+
+    @Test @MainActor
     func controllerActiveRejoinIsNoOpWithoutTransportOrReturnReplacement() async throws {
         let fixture = try RetainedRejoinFixture()
         try fixture.retainRooms()

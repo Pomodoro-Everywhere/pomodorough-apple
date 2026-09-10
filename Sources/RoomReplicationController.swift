@@ -337,7 +337,11 @@ final class RoomReplicationController {
             do {
                 try dependencies.roomStore.rollbackJoinedRoom(preparation)
             } catch {
-                message = String(localized: "\(message) Room join rollback failed: \(error.localizedDescription)")
+                Self.logger.error("recoverFailedJoin rollback failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
+                let rollbackDetail = String(localized: "Room join rollback failed: \(error.localizedDescription)")
+                let joinSentence = message.hasSuffix(".") ? message : message + "."
+                message = "\(joinSentence) \(rollbackDetail)"
             }
         }
         if resumesCentralized { resumeCentralized() }
@@ -412,6 +416,8 @@ final class RoomReplicationController {
             do {
                 updated = try dependencies.roomStore.captureLocalOperations(from: updated)
             } catch {
+                Self.logger.error("projectionTransition captureLocalOperations failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 errorMessage = error.localizedDescription
             }
         }
@@ -478,6 +484,8 @@ final class RoomReplicationController {
                 guard !Task.isCancelled,
                       self.mode == .iroh,
                       self.dependencies.roomStore.activeRoomID == context.roomID else { return }
+                Self.logger.error("scheduleIrohStartup failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 self.eventHandler(.statusChanged(.unavailable(error.localizedDescription)))
             }
         }

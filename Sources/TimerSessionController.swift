@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 @MainActor
 final class TimerSessionController {
@@ -476,7 +477,8 @@ extension TimerSessionController {
     static func derivedNextPhase(
         from history: [HistoryItem],
         on referenceDate: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        coreProvider: (@Sendable () throws -> SharedCore)? = nil
     ) -> TimerPhase? {
         guard let latestCompletion = history
             .filter({ $0.status == CanonicalTimer.Status.completed.rawValue })
@@ -488,14 +490,20 @@ extension TimerSessionController {
             }) else { return nil }
         guard let completionDate = latestCompletion.completedAt ?? latestCompletion.endedAt,
               calendar.isDate(completionDate, inSameDayAs: referenceDate) else { return nil }
-        guard let core = try? SharedCore.bundled() else { return nil }
-        return try? selectedPhase(
-            after: latestCompletion,
-            in: history,
-            at: completionDate,
-            calendar: calendar,
-            core: core
-        )
+        do {
+            let core = try coreProvider?() ?? SharedCore.bundled()
+            return try selectedPhase(
+                after: latestCompletion,
+                in: history,
+                at: completionDate,
+                calendar: calendar,
+                core: core
+            )
+        } catch {
+            Logger(subsystem: "me.egigoka.pomodorough", category: "TimerSession").error("derivedNextPhase failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "derived-phase-core", error: error)
+            return nil
+        }
     }
 
     static func displayCompletedFocusCount(

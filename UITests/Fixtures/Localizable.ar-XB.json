@@ -2,12 +2,6 @@
   "locale": "ar-XB",
   "layoutDirection": "right-to-left",
   "strings": {
-    "%@ Room join rollback failed: %@": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%@ Room join rollback failed: %@⟧"
-      }
-    },
     "%@ Room secret cleanup failed: %@": {
       "stringUnit": {
         "state": "translated",
@@ -1796,36 +1790,6 @@
         "value": "‏⟦Sends an alert and plays a sound until you dismiss it or start another timer.⟧"
       }
     },
-    "Server resolved a duration change as %@.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Server resolved a duration change as %@.⟧"
-      }
-    },
-    "Server resolved a selected-task change as %@.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Server resolved a selected-task change as %@.⟧"
-      }
-    },
-    "Server resolved a task change as %@.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Server resolved a task change as %@.⟧"
-      }
-    },
-    "Server resolved a timer action as %@.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Server resolved a timer action as %@.⟧"
-      }
-    },
-    "Server resolved an auto-start change as %@.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Server resolved an auto-start change as %@.⟧"
-      }
-    },
     "Server returned an invalid response.": {
       "stringUnit": {
         "state": "translated",
@@ -2622,6 +2586,42 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦iPhone⟧"
+      }
+    },
+    "Room join rollback failed: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Room join rollback failed: %@⟧"
+      }
+    },
+    "Server resolved a timer action.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a timer action.⟧"
+      }
+    },
+    "Server resolved a task change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a task change.⟧"
+      }
+    },
+    "Server resolved a duration change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a duration change.⟧"
+      }
+    },
+    "Server resolved an auto-start change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved an auto-start change.⟧"
+      }
+    },
+    "Server resolved a selected-task change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a selected-task change.⟧"
       }
     }
   },

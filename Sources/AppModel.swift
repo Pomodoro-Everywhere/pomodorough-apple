@@ -2342,9 +2342,9 @@ final class AppModel {
             do {
                 try await operation()
             } catch {
+                Self.logger.error("alarmOperation failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 if reportsError {
-                    Self.logger.error("alarmOperation failed: \(error.localizedDescription, privacy: .public)")
-                    SentryCapture.capture(error)
                     self?.errorMessage = AlarmEffectCoordinator.errorMessage(for: error)
                 }
             }

@@ -90,15 +90,14 @@ final class WatchSyncService: NSObject, ObservableObject {
     }
 
     /// Monotonic per install, persisted across relaunches, room swaps, and
-    /// account changes. The seed separates installs (wall clock is used only
-    /// for this one-time seed); the counter orders emissions within the
+    /// account changes. The seed is a random per-install epoch (see
+    /// makeWatchInstallSeed); the counter orders emissions within the
     /// install, so delivery order never depends on snapshot wall-clock time.
     private func nextSnapshotSequence() -> UInt64 {
         var seed = UInt32(truncatingIfNeeded: sequenceDefaults.integer(forKey: SequenceKeys.seed))
         var count = UInt32(truncatingIfNeeded: sequenceDefaults.integer(forKey: SequenceKeys.count))
         if seed == 0 {
-            seed = UInt32(truncatingIfNeeded: UInt64(Date().timeIntervalSince1970 * 1_000))
-            if seed == 0 { seed = 1 }
+            seed = makeWatchInstallSeed()
             count = 0
         }
         if count == UInt32.max { Self.sequenceSaturated() }

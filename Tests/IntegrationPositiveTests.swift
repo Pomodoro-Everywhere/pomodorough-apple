@@ -4619,6 +4619,31 @@ struct IntegrationPositiveTests {
         #expect(model.conflictMessage == (outcome == "rejected" ? "lost race" : nil))
     }
 
+    @Test @MainActor
+    func rejectedAcknowledgementWithoutReasonUsesLocalizedFallbackWithoutRawToken() async throws {
+        let scenario = "sync-contract-ack-rejected-silent"
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(
+            try JSONEncoder.api.encode(TestFixtures.syncContractState(includesPendingOperations: true)),
+            forKey: "timer-state-v2"
+        )
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let model = AppModel(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+
+        await model.restore()
+
+        #expect(model.pendingChangeCount == 0)
+        #expect(model.errorMessage == nil)
+        #expect(model.conflictMessage == "Server resolved a timer action.")
+    }
+
     private enum LogoutFixtureProbe: Error {
         case beforeResponse
         case beforeSignOut

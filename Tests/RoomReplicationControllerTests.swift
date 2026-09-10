@@ -498,6 +498,79 @@ struct RoomReplicationControllerTests {
     }
 
     @Test @MainActor
+    func projectionTransitionReportsCaptureFailureAndKeepsAdvancedPhase() throws {
+        let failWrites = LockedTestValue(false)
+        let url = temporaryURL()
+        let store = IrohRoomStore(
+            fileURL: url,
+            secretStore: MemoryIrohRoomSecretStore(),
+            durableStore: AtomicDurableFileStore(fileURL: url) {
+                if failWrites.value { throw TestRoomServiceError.endpointUnavailable }
+            }
+        )
+        var completed = PersistedTimerState.fresh()
+        completed.canonicalTimer = TestFixtures.timer(status: .completed, elapsed: 60_000)
+        completed.history = [TestFixtures.history(
+            id: completed.canonicalTimer!.id,
+            durationMs: 60_000,
+            date: TestFixtures.anchor
+        )]
+        completed.settings.selectedPhase = .focus
+        _ = try makeActiveRoom(in: store, returnState: completed)
+        let fixture = makeFixture(mode: .iroh, store: store)
+        failWrites.value = true
+
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+
+        let roomID = try #require(store.activeRoomID)
+        let roomState = try #require(store.activeRoomState)
+        let transition = fixture.controller.projectionTransition(for: .init(
+            roomID: roomID,
+            state: roomState
+        ))
+
+        guard case .projectionApplied(let state, let errorMessage) = transition else {
+            Issue.record("Expected projectionApplied, got \(transition)")
+            return
+        }
+        #expect(state.settings.selectedPhase == .shortBreak)
+        #expect(errorMessage != nil)
+        #expect(captured.value.count == 1)
+        #expect(store.activeRoomState?.settings.selectedPhase == .focus)
+    }
+
+    @Test @MainActor
+    func scheduleIrohStartupFailureLogsCapturesAndReportsUnavailable() async throws {
+        let fixture = makeFixture(mode: .iroh)
+        let roomState = try makeActiveRoom(in: fixture.store, returnState: .fresh())
+        fixture.workspace.value = workspace(from: roomState)
+        await fixture.service.setStartError(.endpointUnavailable)
+
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+
+        fixture.controller.scheduleIrohStartup(environment: environment(for: roomState))
+        let expected = RoomReplicationEvent.statusChanged(
+            .unavailable(TestRoomServiceError.endpointUnavailable.localizedDescription)
+        )
+        await waitUntil { fixture.events.value.contains(expected) }
+
+        #expect(fixture.events.value.contains(expected))
+        #expect(captured.value.count == 1)
+    }
+
+    @Test @MainActor
     func bootstrapRoomStateReportsCaptureFailureAndKeepsAdvancedPhase() throws {
         let failWrites = LockedTestValue(false)
         let url = temporaryURL()
@@ -557,9 +630,10 @@ struct RoomReplicationControllerTests {
         revisionStreamUnauthorized: Bool = false,
         cancelsSleep: Bool = true,
         isHistoryResolutionBlocking: Bool = false,
-        revisionEvents: (@Sendable () async throws -> AsyncThrowingStream<Int64, Error>)? = nil
+        revisionEvents: (@Sendable () async throws -> AsyncThrowingStream<Int64, Error>)? = nil,
+        store: IrohRoomStore? = nil
     ) -> ControllerFixture {
-        let store = IrohRoomStore(
+        let store = store ?? IrohRoomStore(
             fileURL: temporaryURL(),
             secretStore: MemoryIrohRoomSecretStore()
         )

@@ -611,6 +611,37 @@ struct SentryCaptureTests {
     }
 
     @Test @MainActor
+    func alarmCancelFailureWithoutErrorReportStillCapturesAndStaysSilent() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        let suite = "PomodoroughTests.SentryAlarmCancel.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryAlarmCancel-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scheduler = RecordingAlarmScheduler()
+        let model = AppModel(
+            api: APIClient(keychain: StaticTokenStore()), defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: scheduler
+        )
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        model.start()
+        await model.waitForAlarmOperations()
+        let timerID = try #require(model.canonicalTimer?.id)
+        scheduler.cancellationError = URLError(.notConnectedToInternet)
+        model.adoptRoomWorkspace(PersistedTimerState.fresh())
+        await model.waitForAlarmOperations()
+        #expect(recorded.value.count == 1)
+        #expect(model.errorMessage == nil)
+        #expect(model.canonicalTimer == nil)
+        #expect(scheduler.operations.contains(.cancel(timerID: timerID)))
+    }
+
+    @Test @MainActor
     func irohCompletionFailureKeepsMessageAndCaptures() async throws {
         let recorded = LockedTestValue<[String]>([])
         let suite = "PomodoroughTests.SentryIrohCompletion.\(UUID().uuidString)"

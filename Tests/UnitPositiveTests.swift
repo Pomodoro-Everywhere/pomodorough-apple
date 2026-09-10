@@ -2247,6 +2247,58 @@ struct UnitPositiveTests {
         #expect(AppModel.derivedNextPhase(from: history, on: reference) == .shortBreak)
     }
 
+    @Test @MainActor
+    func derivedNextPhaseCoreFailureCapturesOnceAndKeepsNilFallback() {
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let now = Date()
+        let history = [HistoryItem(
+            id: "history-corrupt-core",
+            timerId: "timer-corrupt-core",
+            commandId: "command-corrupt-core",
+            taskId: nil,
+            phase: .focus,
+            status: CanonicalTimer.Status.completed.rawValue,
+            plannedDurationMs: 1_500_000,
+            completedAt: now,
+            endedAt: now
+        )]
+
+        let result = TimerSessionController.derivedNextPhase(
+            from: history,
+            on: now,
+            coreProvider: { throw SharedCoreError.invalidResponse("corrupt-core") }
+        )
+
+        #expect(result == nil)
+        #expect(captured.value.count == 1)
+    }
+
+    @Test func corruptDurationTypeFallsBackToDefaultAndCapturesOnce() throws {
+        let captured = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = captured.value
+            current.append(error.localizedDescription)
+            captured.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let data = Data(#"{"selectedPhase":"focus","autoStartBreaks":false,"focusDurationMs":"soon","shortBreakDurationMs":300000,"longBreakDurationMs":900000}"#.utf8)
+
+        let settings = try JSONDecoder().decode(TimerSettings.self, from: data)
+        let again = try JSONDecoder().decode(TimerSettings.self, from: data)
+
+        #expect(settings.durationsMs.focus == DurationValues.defaults.focus)
+        #expect(settings.durationsMs.shortBreak == 300_000)
+        #expect(settings.durationsMs.longBreak == 900_000)
+        #expect(again.durationsMs.focus == DurationValues.defaults.focus)
+        #expect(captured.value.count == 1)
+    }
+
     @Test func parserEmitsNamedJSONAndPlainRevisionEvents() {
         var parser = SSERevisionParser()
 

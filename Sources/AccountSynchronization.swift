@@ -559,27 +559,27 @@ private extension AccountSynchronization {
     private func conflictMessage(for response: SyncResponse) -> String? {
         if let conflict = response.acknowledgements.first(where: { $0.outcome == .rejected }) {
             return conflict.reason.isEmpty
-                ? String(localized: "Server resolved a timer action as \(conflict.outcome.rawValue).")
+                ? String(localized: "Server resolved a timer action.")
                 : conflict.reason
         }
         if let conflict = response.taskAcknowledgements.first(where: { $0.outcome == .rejected }) {
             return conflict.reason.isEmpty
-                ? String(localized: "Server resolved a task change as \(conflict.outcome.rawValue).")
+                ? String(localized: "Server resolved a task change.")
                 : conflict.reason
         }
         if let conflict = response.durationAcknowledgements.first(where: { $0.outcome == .rejected }) {
             return conflict.reason.isEmpty
-                ? String(localized: "Server resolved a duration change as \(conflict.outcome.rawValue).")
+                ? String(localized: "Server resolved a duration change.")
                 : conflict.reason
         }
         if let conflict = response.autoStartAcknowledgements.first(where: { $0.outcome == .rejected }) {
             return conflict.reason.isEmpty
-                ? String(localized: "Server resolved an auto-start change as \(conflict.outcome.rawValue).")
+                ? String(localized: "Server resolved an auto-start change.")
                 : conflict.reason
         }
         if let conflict = response.selectedTaskAcknowledgements.first(where: { $0.outcome == .rejected }) {
             return conflict.reason.isEmpty
-                ? String(localized: "Server resolved a selected-task change as \(conflict.outcome.rawValue).")
+                ? String(localized: "Server resolved a selected-task change.")
                 : conflict.reason
         }
         return nil

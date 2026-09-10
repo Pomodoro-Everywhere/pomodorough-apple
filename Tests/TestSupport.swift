@@ -2678,6 +2678,12 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
                 selectedTaskAcknowledgements[index]["outcome"] = outcome
                 selectedTaskAcknowledgements[index]["reason"] = outcome == "applied" ? "" : "lost race"
             }
+        } else if scenario == "sync-contract-ack-rejected-silent" {
+            rejectSilently(&timerAcknowledgements)
+            rejectSilently(&taskAcknowledgements)
+            rejectSilently(&durationAcknowledgements)
+            rejectSilently(&autoStartAcknowledgements)
+            rejectSilently(&selectedTaskAcknowledgements)
         } else if scenario == "sync-contract-ack-reordered" {
             timerAcknowledgements.reverse()
             taskAcknowledgements.reverse()
@@ -2702,6 +2708,13 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             selectedTaskAcknowledgements: selectedTaskAcknowledgements,
             tasks: []
         )
+    }
+
+    private static func rejectSilently(_ acknowledgements: inout [[String: Any]]) {
+        for index in acknowledgements.indices {
+            acknowledgements[index]["outcome"] = "rejected"
+            acknowledgements[index]["reason"] = ""
+        }
     }
 
     private static func cumulativeTasks(for scenario: String?) -> [[String: Any]] {
