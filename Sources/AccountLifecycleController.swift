@@ -331,6 +331,8 @@ final class AccountLifecycleController {
             try await revocations.signOut()
             return nil
         } catch {
+            Self.logger.error("logout failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.capture(error)
             return error.localizedDescription
         }
     }

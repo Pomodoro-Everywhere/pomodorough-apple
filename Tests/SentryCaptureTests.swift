@@ -1283,6 +1283,36 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains("deletion-refresh"))
     }
 
+    // AP81: logout append throw returns message and captures without tokens.
+    @Test @MainActor
+    func logoutAppendFailureReturnsMessageAndCaptures() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let tokenStore = RecordingTokenStore(tokens: TokenPair(
+            accessToken: "logout-append-access", accessTokenExpiresAt: .distantFuture,
+            refreshToken: "logout-append-refresh", refreshTokenExpiresAt: .distantFuture
+        ))
+        let api = APIClient(keychain: tokenStore)
+        #expect(try await api.restoreTokens())
+        let controller = AccountLifecycleController(
+            api: api,
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: FailingAppendRevocationStore()
+        )
+        let message = await controller.logout()
+        let returned = try #require(message)
+        #expect(!returned.isEmpty)
+        #expect(recorded.value.count == 1)
+        #expect(!returned.contains("logout-append-access"))
+        #expect(!returned.contains("logout-append-refresh"))
+        #expect(!recorded.value[0].contains("logout-append-access"))
+        #expect(!recorded.value[0].contains("logout-append-refresh"))
+    }
+
     // AP80: receipt throw captures, nil/mismatch stays silent.
     // createRoom clears the receipt and capture validates it, so the
     // corrupt receipt is staged via the persisted state file instead.
@@ -1468,6 +1498,15 @@ private struct SentryRetryRevoker: LogoutRevoking, Sendable {
     func revoke(_ obligation: LogoutRevocationObligation) async -> LogoutRevocationResult {
         result
     }
+}
+
+private final class FailingAppendRevocationStore: LogoutRevocationStoring, @unchecked Sendable {
+    func load() throws -> [LogoutRevocationObligation] { [] }
+    func append(_ obligation: LogoutRevocationObligation) throws {
+        throw CocoaError(.fileWriteNoPermission)
+    }
+    func replace(_ obligation: LogoutRevocationObligation) throws {}
+    func remove(id: UUID) throws {}
 }
 
 private struct SentryTestKeyStore: IrohEndpointKeyStoring {
