@@ -863,8 +863,16 @@ extension CentralizedAccountSessionCoordinator {
         if let receipt = migrated.irohLegacyTaskMigration {
             guard receipt.roomID == roomID,
                   receipt.source == pendingLegacyMigration?.legacyTaskSource,
-                  stored.irohLegacyTaskMigration == receipt,
-                  (try? roomStore.committedLegacyTaskMigration(source: receipt.source)) == receipt else {
+                  stored.irohLegacyTaskMigration == receipt else {
+                return false
+            }
+            do {
+                guard try roomStore.committedLegacyTaskMigration(source: receipt.source) == receipt else {
+                    return false
+                }
+            } catch {
+                Self.logger.error("containsCommittedLegacyRecords failed: \(error.localizedDescription, privacy: .public)")
+                SentryCapture.capture(error)
                 return false
             }
         } else {

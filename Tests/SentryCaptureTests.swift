@@ -1230,6 +1230,108 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains(roomID))
     }
 
+    // AP78: AlarmKit fallback still notifies and captures once.
+    @Test @MainActor
+    func timerAlarmScheduleFallbackNotifiesAndCapturesOnce() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let uuid = try #require(UUID(uuidString: "83A06D73-1D2D-441E-AFC2-E36DA0518613"))
+        let timerID = "timer-\(uuid.uuidString.lowercased())"
+        let notificationID = TimerAlarmScheduler.notificationID(for: timerID)
+        let notifications = RecordingNotificationBackend()
+        notifications.canScheduleResult = true
+        let alarms = RecordingSystemAlarmBackend()
+        alarms.authorizationState = .authorized
+        alarms.operationError = AppError.invalidResponse
+        let scheduler = TimerAlarmScheduler(notifications: notifications, alarms: alarms)
+        try await scheduler.schedule(timerID: timerID, phase: .focus, duration: 60)
+        try await scheduler.resume(timerID: timerID, phase: .focus, duration: 30)
+        #expect(notifications.operations.contains(.schedule(identifier: notificationID, phase: .focus, duration: 60)))
+        #expect(notifications.operations.contains(.schedule(identifier: notificationID, phase: .focus, duration: 30)))
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP79: restoreAccountDeletionCredentials distinguishes absent from throw.
+    @Test @MainActor
+    func restoreAccountDeletionCredentialsThrowReturnsFalseAndCaptures() async {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let store = RecordingTokenStore(tokens: nil, failures: [])
+        let controller = AccountLifecycleController(
+            api: APIClient(keychain: store),
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            revocationStore: TestLogoutRevocationStore()
+        )
+        #expect(await controller.restoreAccountDeletionCredentials() == false)
+        #expect(recorded.value.count == 0)
+        store.replaceTokens(TokenPair(
+            accessToken: "deletion-access", accessTokenExpiresAt: .distantFuture,
+            refreshToken: "deletion-refresh", refreshTokenExpiresAt: .distantFuture
+        ))
+        store.setFailures([.load])
+        #expect(await controller.restoreAccountDeletionCredentials() == false)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains("deletion-access"))
+        #expect(!recorded.value[0].contains("deletion-refresh"))
+    }
+
+    // AP80: receipt throw captures, nil/mismatch stays silent.
+    // createRoom clears the receipt and capture validates it, so the
+    // corrupt receipt is staged via the persisted state file instead.
+    @Test @MainActor
+    func committedReceiptThrowReturnsFalseAndCaptures() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryReceipt-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let secret = Data(repeating: 5, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let secrets = MemoryIrohRoomSecretStore()
+        let fileURL = dir.appendingPathComponent("rooms.json")
+        let setup = IrohRoomStore(fileURL: fileURL, secretStore: secrets)
+        _ = try setup.createRoom(
+            roomID: roomID, roomSecret: secret, name: "Secret Room",
+            returnState: .fresh(), genesis: sentryEmptyGenesis()
+        )
+        let changedSource = Data("receipt-source-changed".utf8)
+        var saved = try JSONDecoder.api.decode(IrohReplicationState.self, from: Data(contentsOf: fileURL))
+        var roomState = saved.rooms[0].roomState
+        roomState.irohLegacyTaskMigration = IrohLegacyTaskMigration(roomID: roomID, source: changedSource, state: roomState)
+        saved.rooms[0].roomState = roomState
+        try JSONEncoder.api.encode(saved).write(to: fileURL, options: .atomic)
+        let store = IrohRoomStore(fileURL: fileURL, secretStore: secrets)
+        let stored = try #require(store.activeRoomState)
+        let api = APIClient(keychain: StaticTokenStore())
+        let coordinator = CentralizedAccountSessionCoordinator(
+            lifecycle: AccountLifecycleController(api: api, googleIdentityProvider: RecordingGoogleIdentityProvider()),
+            synchronization: AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() }),
+            initialPublication: .init(sessionState: .localOnly),
+            roomStore: store
+        )
+        let transition = AppStatePersistenceCoordinator.LoadTransition(
+            replicationMode: .iroh, state: stored, removesLegacyTasksAfterProjection: false,
+            shouldPersistAfterProjection: false, shouldReportInvalidLocalClock: false,
+            snapshotLoadFailure: nil, legacyTaskSource: changedSource
+        )
+        coordinator.setLegacyMigrationForTesting(transition: transition, roomID: roomID)
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        #expect(coordinator.containsCommittedLegacyRecords(stored, in: stored) == false)
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains(roomID))
+    }
+
     private func sentryStrippedTimerJSON(removing keys: [String]) throws -> Data {
         let data = try JSONEncoder.api.encode(PersistedTimerState.fresh())
         let object = try JSONSerialization.jsonObject(with: data)

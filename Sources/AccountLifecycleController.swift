@@ -197,7 +197,13 @@ final class AccountLifecycleController {
     }
 
     func restoreAccountDeletionCredentials() async -> Bool {
-        (try? await api.restoreTokens(excluding: revocationStore)) == true
+        do {
+            return try await api.restoreTokens(excluding: revocationStore)
+        } catch {
+            Self.logger.error("restoreAccountDeletionCredentials failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "account-deletion-restore-credentials", error: error)
+            return false
+        }
     }
 
     func verifyRestoredSession(

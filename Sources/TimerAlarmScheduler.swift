@@ -441,6 +441,8 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                 } catch {
                     // AlarmKit can fail at fire time (e.g. quota, transient store error).
                     // Fall through to the notification path so the timer still alerts.
+                    Self.logger.error("alarm schedule failed, falling back to notification: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.captureOnce(key: "timer-alarm-schedule-fallback", error: error)
                     try? alarms.cancel(id: alarmID)
                 }
             }
@@ -484,6 +486,8 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                     notifications.remove(identifier: Self.notificationID(for: timerID))
                     return
                 } catch {
+                    Self.logger.error("alarm resume failed, falling back to notification: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.captureOnce(key: "timer-alarm-schedule-fallback", error: error)
                     try? alarms.cancel(id: alarmID)
                 }
             }
