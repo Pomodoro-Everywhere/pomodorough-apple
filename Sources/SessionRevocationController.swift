@@ -400,6 +400,7 @@ actor SessionRevocationController {
             Self.logger.error(
                 "Pending logout credentials remain unreadable: \(diagnostic.message, privacy: .public)"
             )
+            SentryCapture.captureOnce(key: "logout-revocation-storage-read", error: error)
         }
         return diagnostic
     }

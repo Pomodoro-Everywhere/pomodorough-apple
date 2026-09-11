@@ -494,6 +494,14 @@ actor IrohReplicationService {
         SentryCapture.capture(error)
     }
 
+    // AP83: per-peer sync failure body shared so the unit-test bundle
+    // drives the same deduped log + capture logic. Error-only (sync error,
+    // never tickets, IDs, or secrets); the peer loop still continues.
+    nonisolated static func peerSyncFailed(_ error: Error) {
+        logger.error("peer sync failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.captureOnce(key: "iroh-peer-sync", error: error)
+    }
+
     private func syncKnownPeers(context: IrohServiceContext, generation owner: Int) async -> Bool {
         guard owns(owner, roomID: context.roomID), syncOwner == nil, let endpoint else { return false }
         let syncID = UUID()
@@ -527,7 +535,11 @@ actor IrohReplicationService {
             } catch IrohProtocolError.immutableConflict {
                 await stopForConflict(generation: owner)
                 return false
+            } catch is CancellationError {
+                // Expected silent: generation superseded or task cancelled.
+                continue
             } catch {
+                Self.peerSyncFailed(error)
                 continue
             }
         }

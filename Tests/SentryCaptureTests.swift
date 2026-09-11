@@ -1313,6 +1313,173 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains("logout-append-refresh"))
     }
 
+    // AP82: finish plan keeps clock message, captures core once.
+    @Test @MainActor
+    func finishPlanClockVsCoreSplit() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let suite = "PomodoroughTests.AP82Finish.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Finish-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        model.reportFinishPlanFailure(AppError.invalidLocalClock)
+        #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
+        #expect(recorded.value.isEmpty)
+        SentryCapture.resetForTesting()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        let core = SharedCoreError.core("ap82-finish")
+        model.reportFinishPlanFailure(core)
+        #expect(model.errorMessage == core.localizedDescription)
+        #expect(recorded.value.count == 1)
+        model.reportFinishPlanFailure(SharedCoreError.core("ap82-finish-retry"))
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP82: centralized break keeps clock message, captures core once.
+    @Test @MainActor
+    func centralizedBreakClockVsCoreSplit() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let suite = "PomodoroughTests.AP82Central.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Central-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        model.reportCentralizedBreakFailure(AppError.invalidLocalClock)
+        #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
+        #expect(recorded.value.isEmpty)
+        SentryCapture.resetForTesting()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        let core = SharedCoreError.core("ap82-central")
+        model.reportCentralizedBreakFailure(core)
+        #expect(model.errorMessage == core.localizedDescription)
+        #expect(recorded.value.count == 1)
+        model.reportCentralizedBreakFailure(SharedCoreError.core("ap82-central-retry"))
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP82: iroh break keeps clock message, captures core once.
+    @Test @MainActor
+    func irohBreakClockVsCoreSplit() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let suite = "PomodoroughTests.AP82Iroh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Iroh-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        model.reportIrohBreakFailure(AppError.invalidLocalClock)
+        #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
+        #expect(recorded.value.isEmpty)
+        SentryCapture.resetForTesting()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        let core = SharedCoreError.core("ap82-iroh")
+        model.reportIrohBreakFailure(core)
+        #expect(model.errorMessage == core.localizedDescription)
+        #expect(recorded.value.count == 1)
+        model.reportIrohBreakFailure(SharedCoreError.core("ap82-iroh-retry"))
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP82: completion deadline keeps clock message, captures core once.
+    @Test @MainActor
+    func completionDeadlineClockVsCoreSplit() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let suite = "PomodoroughTests.AP82Deadline.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Deadline-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        model.reportCompletionDeadlineFailure(AppError.invalidLocalClock)
+        #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
+        #expect(recorded.value.isEmpty)
+        SentryCapture.resetForTesting()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        let core = SharedCoreError.core("ap82-deadline")
+        model.reportCompletionDeadlineFailure(core)
+        #expect(model.errorMessage == core.localizedDescription)
+        #expect(recorded.value.count == 1)
+        model.reportCompletionDeadlineFailure(SharedCoreError.core("ap82-deadline-retry"))
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP83: per-peer sync failures dedupe, Error-only.
+    @Test
+    func peerSyncFailureCapturesOnce() {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        IrohReplicationService.peerSyncFailed(URLError(.notConnectedToInternet))
+        IrohReplicationService.peerSyncFailed(URLError(.timedOut))
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP83: failing peers stay waiting and capture once, Error-only.
+    @Test @MainActor
+    func failingPeersStayWaitingAndCaptureOnce() async throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP83Peers-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let secret = Data(repeating: 9, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let store = IrohRoomStore(fileURL: dir.appendingPathComponent("rooms.json"), secretStore: MemoryIrohRoomSecretStore())
+        _ = try store.createRoom(roomID: roomID, roomSecret: secret, name: nil, returnState: .fresh(), genesis: sentryEmptyGenesis())
+        try store.upsertPeer(IrohPeer(endpointID: "peer-bad-0001", endpointTicket: "not-a-ticket", deviceID: nil, displayName: nil, lastSeenAt: nil), roomID: roomID)
+        try store.upsertPeer(IrohPeer(endpointID: "peer-bad-0002", endpointTicket: "not-a-ticket", deviceID: nil, displayName: nil, lastSeenAt: nil), roomID: roomID)
+        let context = IrohServiceContext(roomID: roomID, roomSecret: secret, deviceID: "device-ap83", displayName: nil, platform: "macos")
+        let service = IrohReplicationService(store: store, keyStore: SentryTestKeyStore(), statusHandler: { _ in }, projectionHandler: { _, _ in })
+        _ = try await service.start(context)
+        await service.syncNow()
+        await service.stop()
+        #expect(recorded.value.count == 1)
+        #expect(!recorded.value[0].contains(roomID))
+        #expect(!recorded.value[0].contains("peer-bad-0001"))
+        #expect(!recorded.value[0].contains("not-a-ticket"))
+    }
+
     // AP80: receipt throw captures, nil/mismatch stays silent.
     // createRoom clears the receipt and capture validates it, so the
     // corrupt receipt is staged via the persisted state file instead.

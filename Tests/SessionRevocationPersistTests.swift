@@ -44,6 +44,32 @@ struct SessionRevocationPersistTests {
         #expect(recorded.value.count == 1)
     }
 
+    // AP84: read failures capture once at threshold, mirroring AP52.
+    @Test
+    func readFailuresCaptureOnceAtThreshold() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let store = FailingReadRevocationStore()
+        let controller = SessionRevocationController(
+            revoker: RevokedRevoker(), store: store
+        )
+        await controller.retryPending()
+        #expect(await controller.storageDiagnostic == nil)
+        #expect(recorded.value.isEmpty)
+        await controller.retryPending()
+        await controller.retryPending()
+        let diagnostic = await controller.storageDiagnostic
+        #expect(diagnostic?.consecutiveFailures == 3)
+        #expect(recorded.value.count == 1)
+        await controller.retryPending()
+        #expect(recorded.value.count == 1)
+    }
+
     private static func obligation() -> LogoutRevocationObligation {
         LogoutRevocationObligation(tokens: TokenPair(
             accessToken: "persist-access", accessTokenExpiresAt: .distantFuture,
@@ -85,4 +111,14 @@ private final class FailingWriteRevocationStore: LogoutRevocationStoring, @unche
         if failRemove { throw CocoaError(.fileWriteNoPermission) }
         lock.withLock { obligations.removeAll { $0.id == id } }
     }
+}
+
+private final class FailingReadRevocationStore: LogoutRevocationStoring, @unchecked Sendable {
+    func load() throws -> [LogoutRevocationObligation] {
+        throw CocoaError(.fileReadNoPermission)
+    }
+
+    func append(_ obligation: LogoutRevocationObligation) throws {}
+    func replace(_ obligation: LogoutRevocationObligation) throws {}
+    func remove(id: UUID) throws {}
 }

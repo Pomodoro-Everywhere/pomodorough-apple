@@ -1384,7 +1384,7 @@ final class AppModel {
                 cancelsAlarm: cancelsAlarm
             )
         } catch {
-            reportInvalidLocalClock()
+            reportFinishPlanFailure(error)
             return false
         }
     }
@@ -1475,7 +1475,7 @@ final class AppModel {
                 finish: preparation
             )
         } catch {
-            reportInvalidLocalClock()
+            reportCentralizedBreakFailure(error)
             return false
         }
         guard commitSynchronizedState(
@@ -1589,7 +1589,7 @@ final class AppModel {
                 state: state
             )
         } catch {
-            reportInvalidLocalClock()
+            reportIrohBreakFailure(error)
             return
         }
         guard let preparation else { return }
@@ -1631,7 +1631,7 @@ final class AppModel {
         do {
             return try timerState.physicalCanonicalTimer(timer)
         } catch {
-            reportInvalidLocalClock()
+            reportCompletionDeadlineFailure(error)
             return nil
         }
     }
@@ -2850,6 +2850,48 @@ final class AppModel {
     private func reportInvalidLocalClock() {
         conflictMessage = String(localized: "Saved sequence or trusted-time state is invalid. No local change was saved.")
         errorMessage = AppError.invalidLocalClock.localizedDescription
+    }
+
+    // AP82: per-site clock vs core split. Internal so SentryCaptureTests
+    // drives each site with SharedCoreError vs invalidLocalClock.
+    func reportFinishPlanFailure(_ error: Error) {
+        if error as? AppError == .invalidLocalClock {
+            reportInvalidLocalClock()
+        } else {
+            Self.logger.error("finish failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "timer-finish-plan", error: error)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func reportCentralizedBreakFailure(_ error: Error) {
+        if error as? AppError == .invalidLocalClock {
+            reportInvalidLocalClock()
+        } else {
+            Self.logger.error("centralized break failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "timer-finish-centralized-break", error: error)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func reportIrohBreakFailure(_ error: Error) {
+        if error as? AppError == .invalidLocalClock {
+            reportInvalidLocalClock()
+        } else {
+            Self.logger.error("iroh break failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "timer-finish-iroh-break", error: error)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func reportCompletionDeadlineFailure(_ error: Error) {
+        if error as? AppError == .invalidLocalClock {
+            reportInvalidLocalClock()
+        } else {
+            Self.logger.error("completion deadline failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "timer-completion-deadline", error: error)
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func reportInvalidPendingOperations() {
