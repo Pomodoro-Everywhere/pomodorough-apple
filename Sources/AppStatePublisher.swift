@@ -96,6 +96,18 @@ struct AppStatePublisher: Sendable {
         forTimerID timerID: String,
         snapshot: Snapshot
     ) -> FocusTask? {
+        // Post-ack retarget is local-only by intent (Apple-parity with
+        // server web): the marker reassigns display and local history
+        // at once, while the server and other devices keep the
+        // core-authoritative taskId. Pre-ack the pending start is
+        // rewritten so synced history converges; post-ack it is not,
+        // so completion on another device still attributes the old
+        // task. Remote selected-task syncs never write the marker, so
+        // they cannot hijack the active timer.
+        if let retargeted = retargetedTaskID(for: timerID, snapshot: snapshot) {
+            return snapshot.tasks.first(where: { $0.id == retargeted })
+                ?? snapshot.state.knownTasks.first(where: { $0.id == retargeted })
+        }
         let taskID = snapshot.canonicalTimer.flatMap { $0.id == timerID ? $0.taskId : nil }
             ?? snapshot.history.first(where: { $0.timerId == timerID })?.taskId
             ?? snapshot.state.pendingCommands.first(where: {
@@ -106,6 +118,17 @@ struct AppStatePublisher: Sendable {
         guard let uuid else { return nil }
         return snapshot.tasks.first(where: { $0.id == uuid })
             ?? snapshot.state.knownTasks.first(where: { $0.id == uuid })
+    }
+
+    private func retargetedTaskID(
+        for timerID: String,
+        snapshot: Snapshot
+    ) -> UUID? {
+        guard let retargeted = snapshot.state.legacyTaskAssignments[timerID],
+              snapshot.tasks.contains(where: { $0.id == retargeted })
+                || snapshot.state.knownTasks.contains(where: { $0.id == retargeted })
+        else { return nil }
+        return retargeted
     }
 
     func displayTask(for timer: CanonicalTimer, snapshot: Snapshot) -> FocusTask? {
@@ -124,7 +147,8 @@ struct AppStatePublisher: Sendable {
                   item.status == "completed",
                   let completedAt = item.completedAt,
                   calendar.isDate(completedAt, inSameDayAs: date),
-                  let uuid = item.taskId.flatMap(UUID.init(uuidString:))
+                  let uuid = retargetedTaskID(for: item.timerId, snapshot: snapshot)
+                    ?? item.taskId.flatMap(UUID.init(uuidString:))
                     ?? snapshot.state.legacyTaskAssignments[item.timerId] else { continue }
             let current = totals[uuid] ?? (0, 0)
             totals[uuid] = (
@@ -174,10 +198,13 @@ struct AppStatePublisher: Sendable {
         return HistoryAnalytics.completedFocusSummaries(
             from: snapshot.history,
             taskIDForItem: { item in
-                item.taskId ?? legacyAssignments[item.timerId]?.uuidString
+                retargetedTaskID(for: item.timerId, snapshot: snapshot)?.uuidString
+                    ?? item.taskId
+                    ?? legacyAssignments[item.timerId]?.uuidString
             },
             taskForItem: { item in
-                let taskID = item.taskId.flatMap(UUID.init(uuidString:))
+                let taskID = retargetedTaskID(for: item.timerId, snapshot: snapshot)
+                    ?? item.taskId.flatMap(UUID.init(uuidString:))
                     ?? legacyAssignments[item.timerId]
                 return taskID.flatMap { taskByID[$0] }
             }
@@ -188,7 +215,8 @@ struct AppStatePublisher: Sendable {
         for item: HistoryItem,
         snapshot: Snapshot
     ) -> String {
-        let taskID = item.taskId.flatMap(UUID.init(uuidString:))
+        let taskID = retargetedTaskID(for: item.timerId, snapshot: snapshot)
+            ?? item.taskId.flatMap(UUID.init(uuidString:))
             ?? snapshot.state.legacyTaskAssignments[item.timerId]
         let taskByID = (snapshot.state.knownTasks + snapshot.tasks).reduce(
             into: [UUID: FocusTask]()

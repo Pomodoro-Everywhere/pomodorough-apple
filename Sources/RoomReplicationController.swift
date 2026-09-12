@@ -285,7 +285,10 @@ final class RoomReplicationController {
             )
             let returnState = dependencies.workspaceSnapshot().state
             let prepared = try prepareJoinedRoom(invite, state: returnState)
-            if prepared.alreadyActive { return .unchanged }
+            if prepared.alreadyActive {
+                if resumesCentralized { resumeCentralized() }
+                return .failed(String(localized: "You're already in this room."))
+            }
             preparation = prepared
             let context = context(roomID: invite.roomID, secret: invite.roomSecret, environment: environment)
             _ = try await service.start(context)
@@ -332,6 +335,7 @@ final class RoomReplicationController {
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationTransition {
         var message = error.localizedDescription
+        Self.reportJoinFailure(error)
         if preparation != nil || mode != .iroh { await service.stop() }
         if let preparation {
             do {
@@ -347,6 +351,20 @@ final class RoomReplicationController {
         if resumesCentralized { resumeCentralized() }
         if mode == .iroh { await startIrohIfNeeded(environment: environment) }
         return .failed(message)
+    }
+
+    // Join failures after invite decode are system failures (transport,
+    // projection including duplicate genesis task IDs, retained-room
+    // validation) and must log + capture like createRoom. User-dark:
+    // cancelled tasks, malformed invites (bad paste), and joining a
+    // second room while one is active ("Leave the current room").
+    private static func reportJoinFailure(_ error: Error) {
+        if error is CancellationError { return }
+        if case IrohProtocolError.invalidInvite = error { return }
+        if case IrohProtocolError.invalidMessage(let reason) = error,
+           reason.contains("Leave the current room") { return }
+        Self.logger.error("joinRoom failed: \(error.localizedDescription, privacy: .public)")
+        SentryCapture.capture(error)
     }
 
     func leaveRoom(

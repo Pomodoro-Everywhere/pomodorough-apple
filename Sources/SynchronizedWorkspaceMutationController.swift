@@ -156,6 +156,39 @@ private extension SynchronizedWorkspaceMutationController {
         var state = snapshot.state
         let occurredAt = try occurrenceDate(snapshot)
         let operationID = try appendSelectedTaskOperation(taskID, at: occurredAt, to: &state)
+        // Retarget the active focus timer when its start command is still
+        // pending: the server has not acked it yet, so rewriting taskId makes
+        // the eventual history follow the newly selected task with no dup id.
+        if let timer = snapshot.canonicalTimer,
+           isActive(timer),
+           timer.phase == .focus {
+            // Local-only retarget marker: display and local history follow the
+            // newly picked task at once (also post-ack). Remote selected-task
+            // syncs never write here, so they cannot hijack the active timer.
+            if let taskID {
+                state.legacyTaskAssignments[timer.id] = taskID
+            } else {
+                state.legacyTaskAssignments.removeValue(forKey: timer.id)
+            }
+            if let startIndex = state.pendingCommands.firstIndex(where: {
+                $0.timerId == timer.id && $0.type == .start
+            }) {
+                let start = state.pendingCommands[startIndex]
+                state.pendingCommands[startIndex] = TimerCommand(
+                    id: start.id,
+                    deviceSequence: start.deviceSequence,
+                    timerId: start.timerId,
+                    taskId: taskID?.uuidString.lowercased(),
+                    type: start.type,
+                    phase: start.phase,
+                    plannedDurationMs: start.plannedDurationMs,
+                    occurredAt: start.occurredAt,
+                    hlcWallMs: start.hlcWallMs,
+                    hlcCounter: start.hlcCounter,
+                    observedElapsedMs: start.observedElapsedMs
+                )
+            }
+        }
         return try synchronized(
             state,
             Requirements(selectedTaskOperationIDs: [operationID]),

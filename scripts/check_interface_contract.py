@@ -15,7 +15,7 @@ VISIBLE_APIS = (
     "Text", "Label", "Button", "Toggle", "Picker", "Section", "TextField", "SecureField",
     "LabeledContent", "Link", "ProgressView", "ContentUnavailableView", "navigationTitle",
     "accessibilityLabel", "accessibilityValue", "accessibilityHint", "help", "alert",
-    "confirmationDialog",
+    "confirmationDialog", "DisclosureGroup",
 )
 VISIBLE_CALL_START_RE = re.compile(
     rf"(?:\b(?:{'|'.join(VISIBLE_APIS)})|\.(?:{'|'.join(VISIBLE_APIS)}))\s*\(\s*"

@@ -12,8 +12,8 @@ enum IrohRoomProjection {
         var deviceByCommand: [String: String] = [:]
         var timerStarters: [String: String] = [:]
 
-        init(genesis: IrohGenesis) {
-            knownTasks = Dictionary(uniqueKeysWithValues: genesis.tasks.map { ($0.id, $0) })
+        init(genesis: IrohGenesis) throws {
+            knownTasks = try IrohRoomProjection.knownTasksByID(genesis.tasks)
         }
 
         mutating func ingest(_ record: IrohOperationRecord) throws {
@@ -62,7 +62,7 @@ enum IrohRoomProjection {
             throw IrohProtocolError.invalidMessage("room genesis is missing or invalid")
         }
         let operations = workspace.records.map(\.record).filter { $0.domain != .genesis }.sorted(by: precedes)
-        var collected = ProjectionOperations(genesis: genesis)
+        var collected = try ProjectionOperations(genesis: genesis)
         for record in operations { try collected.ingest(record) }
         let output = try applySharedProjection(genesis, pending: collected.pending, at: projectionDate)
         var timer = restoreIntentDevice(output.canonicalTimer, devices: collected.deviceByCommand)
@@ -235,6 +235,17 @@ enum IrohRoomProjection {
         state.hlcWallMs = maximum.0
         state.hlcCounter = maximum.1
         return state
+    }
+
+    // AP90: duplicate genesis task IDs would trap in
+    // Dictionary(uniqueKeysWithValues:). Reject with invalidMessage instead.
+    // Internal so tests drive duplicate vs distinct task lists directly.
+    static func knownTasksByID(_ tasks: [FocusTask]) throws -> [UUID: FocusTask] {
+        let ids = tasks.map(\.id)
+        guard Set(ids).count == ids.count else {
+            throw IrohProtocolError.invalidMessage("room genesis contains duplicate task IDs")
+        }
+        return Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
     }
 
     static func precedes(_ lhs: IrohOperationRecord, _ rhs: IrohOperationRecord) -> Bool {

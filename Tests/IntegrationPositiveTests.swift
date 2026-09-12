@@ -1104,6 +1104,39 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func skipFromFocusEarnsLongBreakOnFourthCycleFocus() throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_774_166_400))
+        let now = today.addingTimeInterval(12 * 60 * 60)
+        func skipDestinationAfterTodayFocuses(_ count: Int) throws -> TimerPhase {
+            let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: suiteName))
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            var state = PersistedTimerState.fresh()
+            state.history = (0..<count).map { index in
+                TestFixtures.history(
+                    id: "today-\(index)",
+                    durationMs: 60_000,
+                    date: today.addingTimeInterval(TimeInterval(index + 1))
+                )
+            }
+            defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+            let model = AppModel(
+                defaults: defaults,
+                alarmScheduler: RecordingAlarmScheduler(),
+                now: { now },
+                uptime: { 1_000 }
+            )
+            return model.skipDestinationFromFocus()
+        }
+
+        for count in 0...12 {
+            let expected: TimerPhase = [3, 7, 11].contains(count) ? .longBreak : .shortBreak
+            #expect(try skipDestinationAfterTodayFocuses(count) == expected)
+        }
+    }
+
+    @Test @MainActor
     func automaticBreakIsNotDuplicatedAfterPersistenceReload() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
@@ -2910,7 +2943,7 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
-    func activeTimerEditsApplyOnlyToNextTimer() throws {
+    func activeTimerTaskRetargetsRunningTimer() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -2936,11 +2969,87 @@ struct IntegrationPositiveTests {
         model.autoStartBreaks = true
 
         #expect(model.canonicalTimer == originalTimer)
-        #expect(model.task(forTimerID: originalTimer.id)?.id == activeTask.id)
+        #expect(model.task(forTimerID: originalTimer.id)?.id == nextTask.id)
         #expect(model.selectedTaskID == nextTask.id)
         #expect(model.selectedPhase == .longBreak)
         #expect(model.durationMinutes(for: .focus) == 42)
         #expect(model.autoStartBreaks)
+    }
+
+    @Test @MainActor
+    func retargetRewritesPendingStartPreAck() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let activeTask = try #require(FocusTask(title: "Pre-ack active"))
+        let nextTask = try #require(FocusTask(title: "Pre-ack next"))
+        var state = PersistedTimerState.fresh()
+        state.tasks = [activeTask, nextTask]
+        state.knownTasks = state.tasks
+        state.selectedTaskID = activeTask.id
+        state.canonicalTimer = TestFixtures.timer(
+            status: .running,
+            elapsed: 5_000,
+            timerID: "timer-preack-retarget",
+            taskID: activeTask.id.uuidString.lowercased()
+        )
+        state.pendingCommands = [TestFixtures.command(
+            .start, sequence: 1, elapsed: 0,
+            timerID: "timer-preack-retarget",
+            taskID: activeTask.id.uuidString.lowercased()
+        )]
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+
+        model.selectedTaskID = nextTask.id
+
+        #expect(model.task(forTimerID: "timer-preack-retarget")?.id == nextTask.id)
+        let persisted = try persistedState(defaults)
+        let rewritten = try #require(persisted.pendingCommands.first(where: {
+            $0.timerId == "timer-preack-retarget" && $0.type == .start
+        }))
+        #expect(rewritten.taskId == nextTask.id.uuidString.lowercased())
+    }
+
+    // AP92: finished timers land on Skip with no Dismiss control, so
+    // the next Start must replace a terminal timer of every kind.
+    @Test @MainActor
+    func startReplacesTerminalTimer() throws {
+        for status in [CanonicalTimer.Status.completed, .cancelled, .superseded] as [CanonicalTimer.Status] {
+            let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: suiteName))
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            var state = PersistedTimerState.fresh()
+            state.canonicalTimer = TestFixtures.timer(
+                status: status,
+                elapsed: 60_000,
+                timerID: "timer-terminal"
+            )
+            defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+            let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+            #expect(model.canonicalTimer?.id == "timer-terminal")
+
+            model.start()
+
+            let timer = try #require(model.canonicalTimer)
+            #expect(timer.status == .running, "Start must replace a \(status) timer")
+            #expect(timer.id != "timer-terminal")
+        }
+
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var state = PersistedTimerState.fresh()
+        state.canonicalTimer = TestFixtures.timer(
+            status: .running,
+            elapsed: 10_000,
+            timerID: "timer-running"
+        )
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        model.start()
+        #expect(model.canonicalTimer?.id == "timer-running")
+        #expect(model.canonicalTimer?.status == .running)
     }
 
     @Test @MainActor

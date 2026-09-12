@@ -378,13 +378,15 @@ struct RetainedRoomRejoinTests {
             return
         }
         #expect(message.contains("joined room has no valid genesis. Room join rollback failed: "))
-        #expect(captured.value.count == 1)
+        #expect(captured.value.count == 2)
+        #expect(captured.value.contains(where: { $0.contains("joined room has no valid genesis") }))
+        #expect(captured.value.allSatisfy { !$0.isEmpty })
         #expect(harness.service.stops == 1)
         #expect(fixture.vault.secrets[fixture.roomA] == fixture.secretA)
     }
 
     @Test @MainActor
-    func controllerActiveRejoinIsNoOpWithoutTransportOrReturnReplacement() async throws {
+    func controllerActiveRejoinReportsFeedbackWithoutTransportOrReturnReplacement() async throws {
         let fixture = try RetainedRejoinFixture()
         try fixture.retainRooms()
         let joined = try fixture.store.activateExistingRoom(roomID: fixture.roomA, returnState: fixture.local)
@@ -392,7 +394,7 @@ struct RetainedRoomRejoinTests {
         harness.state = joined
         let before = try Data(contentsOf: fixture.fileURL)
         let result = await harness.controller.joinRoom(inviteText: try harness.invite(), environment: harness.environment)
-        #expect(result == .unchanged)
+        #expect(result == .failed(String(localized: "You're already in this room.")))
         #expect(harness.service.starts == 0)
         #expect(harness.service.joins == 0)
         #expect(harness.service.stops == 0)

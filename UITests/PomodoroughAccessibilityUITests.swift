@@ -24,6 +24,73 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         assertPhaseControls(label: "Long break", value: "15 minutes", in: app)
     }
 
+    func testTimerControlsFitAboveTabsWithoutScrolling() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+        XCTAssertTrue(app.buttons["Timer"].waitForExistence(timeout: 5))
+
+        func assertVisible(_ label: String, aboveTabs: Bool = true) {
+            let button = app.buttons[label]
+            XCTAssertTrue(button.waitForExistence(timeout: 5))
+            waitForHittable(button, timeout: 5)
+            XCTAssertTrue(button.isHittable)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
+            XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
+            if aboveTabs {
+                let tab = app.buttons["Timer"]
+                XCTAssertTrue(tab.waitForExistence(timeout: 5))
+                XCTAssertLessThanOrEqual(button.frame.maxY, tab.frame.minY)
+            } else {
+                XCTAssertLessThanOrEqual(button.frame.maxY, app.frame.height)
+            }
+        }
+
+        assertVisible("Start focus")
+        assertVisible("Skip to Short break")
+        app.buttons["Skip to Short break"].tap()
+        assertVisible("Start short break")
+        assertVisible("Skip to Focus")
+        app.buttons["Skip to Focus"].tap()
+        assertVisible("Start focus")
+        // Breaks return to focus: long break is selectable from Pattern.
+        app.buttons["Pattern"].tap()
+        XCTAssertTrue(app.buttons["Long break"].waitForExistence(timeout: 5))
+        app.buttons["Long break"].tap()
+        app.buttons["Timer"].tap()
+        assertVisible("Start long break")
+        assertVisible("Skip to Focus")
+        app.buttons["Skip to Focus"].tap()
+        assertVisible("Start focus")
+        assertVisible("Skip to Short break")
+        app.buttons["Start focus"].tap()
+        assertVisible("Pause")
+        assertVisible("Finish timer")
+        assertVisible("Cancel timer")
+        let focusTaskPicker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(focusTaskPicker.waitForExistence(timeout: 5))
+        XCTAssertTrue(focusTaskPicker.isHittable)
+        app.buttons["Pause"].tap()
+        assertVisible("Resume")
+        assertVisible("Finish timer")
+        assertVisible("Cancel timer")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        assertVisible("Resume", aboveTabs: false)
+        assertVisible("Finish timer", aboveTabs: false)
+        assertVisible("Cancel timer", aboveTabs: false)
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["Timer"].waitForExistence(timeout: 5))
+        assertVisible("Resume")
+    }
+
     func testAccessibilityExtraExtraExtraLargeKeepsCoreTasksReachable() {
         continueAfterFailure = false
         let app = makeApplication()
@@ -132,6 +199,23 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(largeFace.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(largeFace.frame.height, defaultHeight)
         XCTAssertTrue(app.buttons["Start focus"].exists)
+    }
+
+    func testCompactTaskRowGivesTitleSpaceAboveMetrics() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+
+        let title = "Review release notes before publishing"
+        createTaskForDeletionTest(named: title, in: app)
+        let titleElement = app.staticTexts[title]
+        XCTAssertTrue(titleElement.waitForExistence(timeout: 5))
+        let metric = app.staticTexts["0 finished pomodoros"]
+        XCTAssertTrue(metric.exists)
+        XCTAssertGreaterThan(titleElement.frame.width, 150)
+        XCTAssertGreaterThanOrEqual(metric.frame.minY, titleElement.frame.maxY)
+        XCTAssertTrue(app.buttons["Delete \(title)"].isHittable)
     }
 
     func testTaskDeletionCancelKeepsTask() {

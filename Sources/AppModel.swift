@@ -1503,6 +1503,10 @@ final class AppModel {
         _ = performWorkspaceMutation(.cancelTimer(at: date))
     }
 
+    // AP92: retained although TimerControls no longer offers Dismiss.
+    // Finished timers land on Skip and the next Start replaces them
+    // (see startReplacesTerminalTimer), so this stays only as the
+    // tested planClear API for clearing a terminal timer directly.
     func clear() {
         _ = performWorkspaceMutation(.clearTimer)
     }
@@ -2085,6 +2089,11 @@ final class AppModel {
             SentryCapture.capture(error)
             return timerState.settings.selectedPhase
         }
+    }
+
+    /// Skip offers a long break after 3, 7, 11, ... completed focuses today.
+    func skipDestinationFromFocus() -> TimerPhase {
+        completedFocusCountToday % 4 == 3 ? .longBreak : .shortBreak
     }
 
     private func enqueue(

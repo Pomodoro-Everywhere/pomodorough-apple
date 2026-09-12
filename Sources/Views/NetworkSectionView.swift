@@ -27,8 +27,10 @@ struct NetworkSectionView: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             modeBoard
+                .disabled(isCreating.wrappedValue || model.isLeavingIrohRoom)
             Divider().overlay(PomodoroughTheme.steel.opacity(0.45))
             roomControls
+                .disabled(isCreating.wrappedValue || model.isLeavingIrohRoom)
             privacyNote
         }
         .padding(20)
@@ -203,20 +205,7 @@ struct NetworkSectionView: View {
                     Label("Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair.", systemImage: "exclamationmark.octagon.fill")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(PomodoroughTheme.signal)
-                    TextField("Replacement room name (optional)", text: roomName)
-                        .textFieldStyle(.roundedBorder)
-                        .foregroundStyle(.primary)
-                    Button {
-                        isCreating.wrappedValue = true
-                        Task {
-                            _ = await model.createIrohRoom(name: roomName.wrappedValue)
-                            isCreating.wrappedValue = false
-                        }
-                    } label: {
-                        Label(isCreating.wrappedValue ? "Rotating room" : "Create replacement room", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isCreating.wrappedValue || roomName.wrappedValue.unicodeScalars.count > 64)
+                    roomCreationForm(replacingConflict: true)
                 } else if model.replicationMode == .iroh {
                     Button("Create invite", systemImage: "ticket") {
                         Task { await model.refreshIrohInvite() }
@@ -228,7 +217,16 @@ struct NetworkSectionView: View {
                 if let invite = model.roomInvite {
                     invitePanel(invite)
                 }
-                HStack {
+                if room.conflict == nil {
+                    DisclosureGroup(String(localized: "Create another room")) {
+                        roomCreationForm()
+                    }
+                    .tint(PomodoroughTheme.ticket)
+                }
+                let actionLayout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                    : AnyLayout(HStackLayout())
+                actionLayout {
                     Button("Join another room", systemImage: "arrow.triangle.branch") { join() }
                         .buttonStyle(.bordered)
                     if model.replicationMode == .iroh {
@@ -245,28 +243,46 @@ struct NetworkSectionView: View {
                 Text("OPEN A PEER ROUTE")
                     .font(.caption.monospaced().bold())
                     .foregroundStyle(PomodoroughTheme.ticket)
-                TextField("Room name (optional)", text: roomName)
-                    .textFieldStyle(.roundedBorder)
-                    .foregroundStyle(.primary)
-                    .accessibilityHint("One through 64 characters. Room name is display-only.")
-                Button {
-                    isCreating.wrappedValue = true
-                    Task {
-                        _ = await model.createIrohRoom(name: roomName.wrappedValue)
-                        isCreating.wrappedValue = false
-                    }
-                } label: {
-                    Label(isCreating.wrappedValue ? "Creating room" : "Create Iroh room", systemImage: "plus.circle.fill")
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(PomodoroughTheme.ticket)
-                .foregroundStyle(PomodoroughTheme.platformDeep)
-                .disabled(isCreating.wrappedValue || roomName.wrappedValue.unicodeScalars.count > 64)
+                roomCreationForm()
                 Button("Join with invite", systemImage: "rectangle.and.text.magnifyingglass") { join() }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
             }
+        }
+    }
+
+    private func roomCreationForm(replacingConflict: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField(
+                replacingConflict ? "Replacement room name (optional)" : "Room name (optional)",
+                text: roomName
+            )
+            .textFieldStyle(.roundedBorder)
+            .foregroundStyle(.primary)
+            .accessibilityHint("Optional, up to 64 characters. Room name is display-only.")
+            Button {
+                let name = roomName.wrappedValue
+                isCreating.wrappedValue = true
+                Task {
+                    _ = await model.createIrohRoom(name: name)
+                    isCreating.wrappedValue = false
+                }
+            } label: {
+                Label {
+                    if replacingConflict {
+                        Text(isCreating.wrappedValue ? "Rotating room" : "Create replacement room")
+                    } else {
+                        Text(isCreating.wrappedValue ? "Creating room" : "Create Iroh room")
+                    }
+                } icon: {
+                    Image(systemName: replacingConflict ? "arrow.triangle.2.circlepath" : "plus.circle.fill")
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(PomodoroughTheme.ticket)
+            .foregroundStyle(PomodoroughTheme.platformDeep)
+            .disabled(isCreating.wrappedValue || roomName.wrappedValue.unicodeScalars.count > 64)
         }
     }
 

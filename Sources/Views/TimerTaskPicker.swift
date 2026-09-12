@@ -32,63 +32,21 @@ struct TimerTaskPicker: View {
                 .foregroundStyle(PomodoroughTheme.sky)
                 .labelStyle(.titleAndIcon)
                 .accessibilityHidden(true)
-            if model.isTimerActive, let timer = model.canonicalTimer {
-                if !timer.phase.isBreak {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Active timer task")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(PomodoroughTheme.steel)
-                        Text(model.displayTask(for: timer)?.title ?? "Unassigned")
-                            .font(.callout.weight(.semibold))
-                    }
-                        .font(.callout.weight(.semibold))
-                        .lineLimit(wrappingLineLimit)
-                        .minimumScaleFactor(0.75)
-                        .allowsTightening(true)
-                        .fixedSize(horizontal: false, vertical: wrapsTaskText)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .foregroundStyle(PomodoroughTheme.ticket)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Active timer task")
-                        .accessibilityValue(model.displayTask(for: timer)?.title ?? "Unassigned")
+            Picker("Focus task", selection: $model.selectedTaskID) {
+                Text("Unassigned").tag(UUID?.none)
+                ForEach(model.tasks) { task in
+                    Text(task.title).tag(Optional(task.id))
                 }
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Next focus task")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(PomodoroughTheme.steel)
-                        .accessibilityHidden(true)
-                    Picker("Next focus task", selection: $model.selectedTaskID) {
-                        Text("Unassigned").tag(UUID?.none)
-                        ForEach(model.tasks) { task in
-                            Text(task.title).tag(Optional(task.id))
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .tint(PomodoroughTheme.ticket)
-                    .lineLimit(wrappingLineLimit)
-                    .minimumScaleFactor(0.75)
-                    .allowsTightening(true)
-                    .fixedSize(horizontal: false, vertical: wrapsTaskText)
-                    .accessibilityHint("Applies to the next focus timer and does not reassign the active timer.")
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            } else {
-                Picker("Focus task", selection: $model.selectedTaskID) {
-                    Text("Unassigned").tag(UUID?.none)
-                    ForEach(model.tasks) { task in
-                        Text(task.title).tag(Optional(task.id))
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .tint(PomodoroughTheme.ticket)
-                .lineLimit(wrappingLineLimit)
-                .minimumScaleFactor(0.75)
-                .allowsTightening(true)
-                .fixedSize(horizontal: false, vertical: wrapsTaskText)
-                .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .tint(PomodoroughTheme.ticket)
+            .lineLimit(wrappingLineLimit)
+            .minimumScaleFactor(0.75)
+            .allowsTightening(true)
+            .fixedSize(horizontal: false, vertical: wrapsTaskText)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityHint("Applies to the current running focus timer and the next timer.")
     }
 
     /// At accessibility sizes the menu label wraps instead of clipping.

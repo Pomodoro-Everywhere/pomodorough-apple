@@ -1,4 +1,5 @@
 import Foundation
+import IrohLib
 import Testing
 @testable import Pomodorough
 
@@ -1564,6 +1565,178 @@ struct SentryCaptureTests {
             Issue.record("Duplicate server acks must reject")
         } catch AppError.invalidResponse {
         }
+    }
+
+    // AP90: duplicate task IDs reject instead of trapping in
+    // Dictionary(uniqueKeysWithValues:), both in the local-core
+    // projection validator (false) and the peer-reachable room
+    // projection (invalidMessage).
+    @Test
+    func duplicateProjectedTaskIDsReject() throws {
+        let first = try duplicateIDTask(title: "First task")
+        let second = try duplicateIDTask(title: "Second task")
+        let distinct = try #require(CoreProjectionOutput.projectedTasksByID([first, second]))
+        #expect(distinct.count == 2)
+        #expect(distinct[first.id.uuidString.lowercased()]?.title == "First task")
+        #expect(distinct[second.id.uuidString.lowercased()]?.title == "Second task")
+        #expect(CoreProjectionOutput.projectedTasksByID([])?.isEmpty == true)
+        #expect(CoreProjectionOutput.projectedTasksByID([first, first]) == nil)
+        let renamed = try duplicateIDTask(id: first.id, title: "Renamed task")
+        #expect(CoreProjectionOutput.projectedTasksByID([first, renamed]) == nil)
+    }
+
+    @Test
+    func duplicateGenesisTaskIDsReject() throws {
+        let first = try duplicateIDTask(title: "First task")
+        let second = try duplicateIDTask(title: "Second task")
+        let distinct = try IrohRoomProjection.knownTasksByID([first, second])
+        #expect(distinct.count == 2)
+        #expect(distinct[first.id]?.title == "First task")
+        #expect(try IrohRoomProjection.knownTasksByID([first]).count == 1)
+        #expect(try IrohRoomProjection.knownTasksByID([]).isEmpty)
+        let renamed = try duplicateIDTask(id: first.id, title: "Renamed task")
+        do {
+            _ = try IrohRoomProjection.knownTasksByID([first, renamed])
+            Issue.record("Duplicate genesis task IDs must reject")
+        } catch IrohProtocolError.invalidMessage(let reason) {
+            #expect(reason.contains("duplicate"))
+        } catch {
+            Issue.record("Duplicate genesis IDs must throw invalidMessage, got \(error)")
+        }
+    }
+
+    private func duplicateIDTask(id: UUID = UUID(), title: String) throws -> FocusTask {
+        let payload = ["id": id.uuidString.lowercased(), "title": title]
+        let data = try JSONEncoder.api.encode(payload)
+        return try JSONDecoder.api.decode(FocusTask.self, from: data)
+    }
+
+    // Join failures after invite decode are system failures (transport,
+    // projection including AP90 duplicate genesis IDs) and must capture
+    // Error-only like createRoom. User-dark: bad paste, already in the
+    // same room, and joining a second room while one is active.
+    @Test @MainActor
+    func joinTransportFailureCapturesWithoutSecrets() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .offline)
+        let secret = Data(repeating: 42, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let invite = try sentryJoinInvite(roomID: roomID, secret: secret)
+        await fixture.service.setStartError(.endpointUnavailable)
+        let transition = await fixture.controller.joinRoom(
+            inviteText: invite, environment: sentryRoomEnvironment()
+        )
+        guard case .failed(let message) = transition else {
+            Issue.record("Expected failed, got \(transition)"); return
+        }
+        #expect(message == SentryRoomServiceError.endpointUnavailable.localizedDescription)
+        #expect(recorded.value.count == 1)
+        #expect(recorded.value[0] == SentryRoomServiceError.endpointUnavailable.localizedDescription)
+        #expect(!recorded.value[0].contains(roomID))
+        #expect(!message.contains(roomID))
+        #expect(await fixture.service.startedContexts.count == 1)
+        #expect(fixture.store.activeRoomID == nil)
+    }
+
+    @Test @MainActor
+    func joinInvalidInviteStaysDark() async {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .offline)
+        let transition = await fixture.controller.joinRoom(
+            inviteText: "not-an-iroh-invite", environment: sentryRoomEnvironment()
+        )
+        guard case .failed(let message) = transition else {
+            Issue.record("Expected failed, got \(transition)"); return
+        }
+        #expect(message == IrohProtocolError.invalidInvite("expected pomodorough1. prefix").localizedDescription)
+        #expect(recorded.value.isEmpty)
+        #expect(fixture.store.activeRoomID == nil)
+        #expect(await fixture.service.startedContexts.isEmpty)
+    }
+
+    @Test @MainActor
+    func joinAlreadyActiveStaysDark() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .iroh)
+        let secret = Data(repeating: 43, count: 32)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        var local = PersistedTimerState.fresh()
+        local.deviceId = "device-sentry-join-active"
+        _ = try fixture.store.createRoom(
+            roomID: roomID, roomSecret: secret, name: "Secret Active",
+            returnState: local, genesis: sentryRoomGenesis(from: local)
+        )
+        let roomState = try #require(fixture.store.activeRoomState)
+        fixture.workspace.value = sentryRoomWorkspace(from: roomState)
+        let invite = try sentryJoinInvite(roomID: roomID, secret: secret)
+        let transition = await fixture.controller.joinRoom(
+            inviteText: invite, environment: sentryRoomEnvironment(for: roomState)
+        )
+        #expect(transition == .failed(String(localized: "You're already in this room.")))
+        #expect(recorded.value.isEmpty)
+        #expect(fixture.store.activeRoomID == roomID)
+        #expect(await fixture.service.startedContexts.isEmpty)
+    }
+
+    @Test @MainActor
+    func joinSecondRoomWhileActiveStaysDark() async throws {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let fixture = sentryRoomFixture(mode: .iroh)
+        let secretA = Data(repeating: 44, count: 32)
+        let roomA = try IrohProtocolV1.roomID(for: secretA)
+        var local = PersistedTimerState.fresh()
+        local.deviceId = "device-sentry-join-second"
+        _ = try fixture.store.createRoom(
+            roomID: roomA, roomSecret: secretA, name: "Secret Room A",
+            returnState: local, genesis: sentryRoomGenesis(from: local)
+        )
+        let roomState = try #require(fixture.store.activeRoomState)
+        fixture.workspace.value = sentryRoomWorkspace(from: roomState)
+        let secretB = Data(repeating: 45, count: 32)
+        let roomB = try IrohProtocolV1.roomID(for: secretB)
+        let inviteB = try sentryJoinInvite(roomID: roomB, secret: secretB)
+        let transition = await fixture.controller.joinRoom(
+            inviteText: inviteB, environment: sentryRoomEnvironment(for: roomState)
+        )
+        guard case .failed(let message) = transition else {
+            Issue.record("Expected failed, got \(transition)"); return
+        }
+        let expected = IrohProtocolError.invalidMessage(
+            "Leave the current room before joining another room."
+        ).localizedDescription
+        #expect(message == expected)
+        #expect(message.contains("Leave the current room"))
+        #expect(!message.contains("already in this room"))
+        #expect(recorded.value.isEmpty)
+        #expect(fixture.store.activeRoomID == roomA)
+        let restarted = await fixture.service.startedContexts
+        #expect(restarted.count == 1)
+        #expect(restarted.first?.roomID == roomA)
+    }
+
+    private func sentryJoinInvite(roomID: String, secret: Data) throws -> String {
+        let identity = try SecretKey.fromBytes(bytes: Data(repeating: 41, count: 32))
+        let address = EndpointAddr(id: identity.public(), relayUrl: nil, addresses: [])
+        let ticket = try EndpointTicket.fromAddr(addr: address).description
+        return try IrohRoomInvite(
+            roomID: roomID, roomName: nil, endpointTicket: ticket, roomSecret: secret
+        ).encoded()
     }
 
     // AP80: receipt throw captures, nil/mismatch stays silent.

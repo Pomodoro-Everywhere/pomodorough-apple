@@ -2,6 +2,9 @@ import SwiftUI
 
 struct TaskSummaryRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+#endif
 
     let summary: TaskDailySummary
     let delete: () -> Void
@@ -20,7 +23,7 @@ struct TaskSummaryRow: View {
 
     @ViewBuilder
     private var summaryContent: some View {
-        if dynamicTypeSize.isAccessibilitySize {
+        if usesStackedLayout {
             VStack(alignment: .leading, spacing: 6) {
                 Text(summary.task.title)
                     .font(.body.weight(.semibold))
@@ -33,7 +36,7 @@ struct TaskSummaryRow: View {
                     .font(.body.weight(.semibold))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 4) {
+                HStack(spacing: 10) {
                     Text("\(summary.finishedPomodoros)")
                         .frame(width: 68, alignment: .center)
                     Text(TaskTimeText.compact(summary.timeSpentMs))
@@ -47,6 +50,14 @@ struct TaskSummaryRow: View {
 
     private var summaryAccessibilityLabel: String {
         String(localized: "\(summary.finishedPomodoros) finished pomodoros, \(TaskTimeText.spoken(summary.timeSpentMs)) spent")
+    }
+
+    private var usesStackedLayout: Bool {
+#if os(iOS)
+        dynamicTypeSize.isAccessibilitySize || horizontalSizeClass == .compact
+#else
+        dynamicTypeSize.isAccessibilitySize
+#endif
     }
 
     @ViewBuilder

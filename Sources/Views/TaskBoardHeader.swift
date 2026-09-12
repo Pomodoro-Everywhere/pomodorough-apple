@@ -2,9 +2,12 @@ import SwiftUI
 
 struct TaskBoardHeader: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+#endif
 
     var body: some View {
-        if !dynamicTypeSize.isAccessibilitySize {
+        if showsColumns {
             HStack(spacing: 10) {
                 Text("TASK")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -22,6 +25,14 @@ struct TaskBoardHeader: View {
             .background(PomodoroughTheme.track)
             .accessibilityHidden(true)
         }
+    }
+
+    private var showsColumns: Bool {
+#if os(iOS)
+        !dynamicTypeSize.isAccessibilitySize && horizontalSizeClass != .compact
+#else
+        !dynamicTypeSize.isAccessibilitySize
+#endif
     }
 }
 

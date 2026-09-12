@@ -895,6 +895,16 @@
         }
       }
     },
+    "Create another room": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create another room"
+          }
+        }
+      }
+    },
     "Create invite": {
       "localizations": {
         "en": {

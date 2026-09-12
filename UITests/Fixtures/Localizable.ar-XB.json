@@ -884,6 +884,12 @@
         "value": "‏⟦Create Iroh room⟧"
       }
     },
+    "Create another room": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Create another room⟧"
+      }
+    },
     "Create invite": {
       "stringUnit": {
         "state": "translated",

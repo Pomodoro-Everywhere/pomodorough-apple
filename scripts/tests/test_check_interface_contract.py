@@ -31,6 +31,22 @@ class LocalizationContractTests(unittest.TestCase):
             {"Hello", "%arg tasks", "Computed status"},
         )
 
+    def test_disclosureGroup_visible_literal_requires_catalog(self) -> None:
+        # AP89 gate probe: DisclosureGroup was gate-blind (not in VISIBLE_APIS),
+        # so a bare literal silently bypassed the contract. Removing it from
+        # VISIBLE_APIS must turn this red again.
+        self.assertIn("DisclosureGroup", checker.VISIBLE_APIS)
+        self.assertEqual(
+            checker.extract_localizable_keys('DisclosureGroup("Create another room")\n'),
+            {"Create another room"},
+        )
+        self.assertEqual(
+            checker.extract_localizable_keys(
+                'DisclosureGroup(String(localized: "Create another room"))\n'
+            ),
+            {"Create another room"},
+        )
+
     def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
         source = '''
         Picker("Section", selection: $selectedTab) {

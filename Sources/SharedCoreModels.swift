@@ -592,9 +592,7 @@ struct CoreProjectionOutput: Decodable, Equatable, Sendable {
             target: \.taskId,
             identifier: \.id
         ) else { return false }
-        let projected = Dictionary(uniqueKeysWithValues: tasks.map {
-            ($0.id.uuidString.lowercased(), $0)
-        })
+        guard let projected = Self.projectedTasksByID(tasks) else { return false }
         return winners.allSatisfy { target, operation in
             switch operation.type {
             case .upsert:
@@ -654,6 +652,17 @@ struct CoreProjectionOutput: Decodable, Equatable, Sendable {
             winners[target] = operation
         }
         return winners
+    }
+}
+
+// AP90: duplicate task IDs would trap in
+// Dictionary(uniqueKeysWithValues:). Reject validation as false instead.
+// Internal so tests drive duplicate vs distinct task lists directly.
+extension CoreProjectionOutput {
+    static func projectedTasksByID(_ tasks: [FocusTask]) -> [String: FocusTask]? {
+        let pairs = tasks.map { ($0.id.uuidString.lowercased(), $0) }
+        guard Set(pairs.map(\.0)).count == pairs.count else { return nil }
+        return Dictionary(uniqueKeysWithValues: pairs)
     }
 }
 

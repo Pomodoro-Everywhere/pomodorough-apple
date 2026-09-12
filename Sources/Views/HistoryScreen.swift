@@ -23,11 +23,14 @@ struct HistoryScreen: View {
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.top, 80)
+                    .accessibilityRepresentation {
+                        Text("No arrivals yet")
+                            .accessibilityValue("Your first run appears here.")
+                    }
                 }
                 .refreshable { await model.refreshForPull() }
-                .accessibilityRepresentation {
-                    Text("No arrivals yet")
-                        .accessibilityValue("Your first run appears here.")
+                .accessibilityAction(named: Text("Refresh arrivals")) {
+                    Task { await model.refreshForPull() }
                 }
                 .accessibilityIdentifier("history.empty-scroll")
             } else {

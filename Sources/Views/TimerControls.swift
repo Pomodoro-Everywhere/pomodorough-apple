@@ -4,15 +4,15 @@ struct TimerControls: View {
     private enum GlassControlID: Hashable {
         case primary
         case finish
-        case clear
+        case stopSound
         case cancel
+        case skip
     }
 
     private enum ControlState: Hashable {
         case idle
         case running
         case paused
-        case clearable
     }
 
     let model: AppModel
@@ -31,39 +31,12 @@ struct TimerControls: View {
                 controls(glass: false)
             }
         }
-        .accessibilityRepresentation { accessibilityControls }
-    }
-
-    @ViewBuilder
-    private var accessibilityControls: some View {
-        Button(primaryAccessibilityTitle, action: primaryAccessibilityAction)
-            .accessibilityValue(activeTaskAccessibilityValue)
-        if model.isTimerActive {
-            Button("Finish timer") { model.finish() }
-            Button("Cancel timer") { model.cancel() }
-            if model.hasActiveCompletionAlert {
-                Button(stopSoundTitle, action: model.stopSound)
-            }
-        } else if hasClearableTimer {
-            Button(terminalActionTitle, action: terminalAction)
-        }
     }
 
     private var primaryAccessibilityTitle: String {
         if model.canonicalTimer?.status == .running { return String(localized: "Pause") }
         if model.canonicalTimer?.status == .paused { return String(localized: "Resume") }
         return String(localized: "Start \(model.selectedPhase.title.lowercased())")
-    }
-
-    private var primaryAccessibilityAction: () -> Void {
-        if model.canonicalTimer?.status == .running { return { model.pause() } }
-        if model.canonicalTimer?.status == .paused { return { model.resume() } }
-        return model.start
-    }
-
-    private var activeTaskAccessibilityValue: String {
-        guard let timer = model.canonicalTimer, !timer.phase.isBreak else { return "" }
-        return String(localized: "Focus task: \(model.task(forTimerID: timer.id)?.title ?? String(localized: "No task"))")
     }
 
     @ViewBuilder
@@ -75,47 +48,55 @@ struct TimerControls: View {
                     controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
                     controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
                     if model.hasActiveCompletionAlert {
-                        controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .clear, prominent: false, glass: glass, action: model.stopSound)
+                        controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
                     }
-                } else if hasClearableTimer {
-                    controlButton(terminalActionTitle, symbol: terminalActionSymbol, glassID: .clear, prominent: false, glass: glass, action: terminalAction)
+                } else if model.hasActiveCompletionAlert {
+                    controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
                 }
             }
         } else {
             VStack(spacing: 14) {
                 primaryButton(glass: glass)
                 if model.isTimerActive {
-                    #if os(macOS)
-                    controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-                    controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
-                    #else
                     HStack(spacing: 14) {
                         controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
                         controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
                     }
-                    #endif
                 }
-                if model.hasActiveCompletionAlert || hasClearableTimer {
-                    controlButton(terminalActionTitle, symbol: terminalActionSymbol, glassID: .clear, prominent: false, glass: glass, action: terminalAction)
+                if model.isTimerActive {
+                    if model.hasActiveCompletionAlert {
+                        controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
+                    }
+                } else if model.hasActiveCompletionAlert {
+                    controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
+                } else {
+                    // Idle second row: keeps the button block two lines tall
+                    // in every state so the card never jumps, and offers a
+                    // way past the selected phase without starting it.
+                    // Finished timers land here too: the next Start replaces
+                    // them, so no Dismiss control is needed.
+                    controlButton(skipTitle, symbol: "forward.fill", glassID: .skip, prominent: false, glass: glass) {
+                        model.selectPhase(skipDestination)
+                    }
                 }
             }
         }
     }
 
+    /// Idle Skip follows the same break the current focus would earn
+    /// from the core cycle (long break every fourth completed focus,
+    /// so the 4th/8th/12th focus skips to the long break). Breaks
+    /// return to focus. Nothing starts.
+    private var skipDestination: TimerPhase {
+        model.selectedPhase.isBreak ? .focus : model.skipDestinationFromFocus()
+    }
+
+    private var skipTitle: String {
+        String(localized: "Skip to \(skipDestination.title)")
+    }
+
     private var stopSoundTitle: String {
         TimerAlarmScheduler.stopSoundTitle
-    }
-
-    private var terminalActionTitle: String {
-        model.hasActiveCompletionAlert ? stopSoundTitle : String(localized: "Dismiss")
-    }
-
-    private var terminalActionSymbol: String {
-        model.hasActiveCompletionAlert ? "speaker.slash" : "xmark"
-    }
-
-    private var terminalAction: () -> Void {
-        model.hasActiveCompletionAlert ? model.stopSound : model.clear
     }
 
     @ViewBuilder
@@ -136,19 +117,11 @@ struct TimerControls: View {
         }
     }
 
-    private var hasClearableTimer: Bool {
-        guard let timer = model.canonicalTimer else { return false }
-        guard timer.status != .running && timer.status != .paused else { return false }
-#if os(iOS)
-        return timer.status != .cancelled
-#else
-        return true
-#endif
-    }
-
     private var usesHorizontalControls: Bool {
 #if os(iOS)
-        layout == .landscape
+        // Side-by-side landscape card has a narrow button column; a
+        // three-up row would clip, so iOS always stacks vertically.
+        false
 #else
         layout != .landscape
 #endif
@@ -161,7 +134,7 @@ struct TimerControls: View {
         if model.canonicalTimer?.status == .paused {
             return .paused
         }
-        return hasClearableTimer ? .clearable : .idle
+        return .idle
     }
 
     @ViewBuilder
@@ -178,23 +151,25 @@ struct TimerControls: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .allowsTightening(true)
+                .frame(maxWidth: .infinity, minHeight: 44)
         }
             .font(.headline)
             .frame(maxWidth: .infinity, minHeight: layout == .landscape ? 54 : 58)
             .buttonBorderShape(.capsule)
+            .accessibilityLabel(glassID == .primary ? primaryAccessibilityTitle : glassID == .finish ? String(localized: "Finish timer") : glassID == .cancel ? String(localized: "Cancel timer") : title)
         if #available(iOS 26, macOS 26, *), glass {
             if prominent {
                 button
                     .buttonStyle(.glassProminent)
                     .tint(PomodoroughTheme.signal)
-                    .controlSize(.extraLarge)
+                    .controlSize(.large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
             } else {
                 button
                     .buttonStyle(.glass)
                     .tint(PomodoroughTheme.porcelain.opacity(0.16))
-                    .controlSize(.extraLarge)
+                    .controlSize(.large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
             }

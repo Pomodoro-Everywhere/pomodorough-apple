@@ -1,4 +1,5 @@
 import Foundation
+import IrohLib
 import Testing
 @testable import Pomodorough
 
@@ -102,7 +103,7 @@ struct RoomReplicationControllerTests {
             environment: environment(for: local)
         )
 
-        #expect(transition == .failed("Room name must be 64 characters or fewer."))
+        #expect(transition == .failed(String(localized: "Room name must be 64 characters or fewer.")))
         #expect(await fixture.service.startedContexts.isEmpty)
         #expect(fixture.store.activeRoomID == nil)
     }
@@ -292,6 +293,74 @@ struct RoomReplicationControllerTests {
     }
 
     @Test @MainActor
+    func joiningActiveRoomReportsFeedbackWithoutChangingRoomOrTransport() async throws {
+        let fixture = makeFixture(mode: .iroh)
+        let local = PersistedTimerState.fresh()
+        let roomState = try makeActiveRoom(in: fixture.store, returnState: local)
+        fixture.workspace.value = workspace(from: roomState)
+        let original = try #require(fixture.store.activeSnapshot)
+        let secret = try #require(fixture.store.activeRoomSecret)
+        let identity = try SecretKey.fromBytes(bytes: Data(repeating: 41, count: 32))
+        let address = EndpointAddr(id: identity.public(), relayUrl: nil, addresses: [])
+        let ticket = try EndpointTicket.fromAddr(addr: address).description
+        let invite = try IrohRoomInvite(
+            roomID: original.roomID,
+            roomName: original.roomName,
+            endpointTicket: ticket,
+            roomSecret: secret
+        ).encoded()
+
+        let transition = await fixture.controller.joinRoom(
+            inviteText: invite,
+            environment: environment(for: roomState)
+        )
+
+        #expect(transition == .failed(String(localized: "You're already in this room.")))
+        #expect(fixture.store.activeSnapshot == original)
+        #expect(fixture.store.activeRoomState == roomState)
+        #expect(fixture.store.activeReturnState == local)
+        #expect(fixture.store.activeRoomSecret == secret)
+        #expect(await fixture.service.startedContexts.isEmpty)
+        #expect(await fixture.service.joinCount == 0)
+        #expect(await fixture.service.stopCount == 0)
+        #expect(fixture.events.value.isEmpty)
+        #expect(fixture.operations.value.isEmpty)
+    }
+
+    @Test @MainActor
+    func joiningActiveRoomInCentralizedModeReportsFeedbackAndResumesSync() async throws {
+        let fixture = makeFixture(mode: .centralized)
+        let local = PersistedTimerState.fresh()
+        let roomState = try makeActiveRoom(in: fixture.store, returnState: local)
+        fixture.workspace.value = workspace(from: roomState)
+        let original = try #require(fixture.store.activeSnapshot)
+        let secret = try #require(fixture.store.activeRoomSecret)
+        let identity = try SecretKey.fromBytes(bytes: Data(repeating: 41, count: 32))
+        let address = EndpointAddr(id: identity.public(), relayUrl: nil, addresses: [])
+        let ticket = try EndpointTicket.fromAddr(addr: address).description
+        let invite = try IrohRoomInvite(
+            roomID: original.roomID,
+            roomName: original.roomName,
+            endpointTicket: ticket,
+            roomSecret: secret
+        ).encoded()
+
+        let transition = await fixture.controller.joinRoom(
+            inviteText: invite,
+            environment: environment(for: roomState)
+        )
+
+        #expect(transition == .failed(String(localized: "You're already in this room.")))
+        #expect(fixture.store.activeSnapshot == original)
+        #expect(await fixture.service.startedContexts.isEmpty)
+        #expect(await fixture.service.joinCount == 0)
+        #expect(fixture.events.value.contains(.centralizedQuiesced))
+        await waitUntil {
+            fixture.operations.value.contains(.synchronize(force: true, showsActivity: true))
+        }
+    }
+
+    @Test @MainActor
     func invalidJoinFailsClosedThenResumesCentralizedSynchronization() async {
         let fixture = makeFixture(mode: .centralized)
 
@@ -346,7 +415,7 @@ struct RoomReplicationControllerTests {
             environment: environment()
         )
 
-        #expect(transition == .failed("Create or join an Iroh room before selecting Iroh mode."))
+        #expect(transition == .failed(String(localized: "Create or join an Iroh room before selecting Iroh mode.")))
         #expect(fixture.events.value.contains(.centralizedQuiesced))
         await waitUntil {
             fixture.operations.value.contains(.synchronize(force: true, showsActivity: true))
@@ -888,6 +957,7 @@ private actor RoomReplicationServiceSpy: RoomReplicationServing {
     private(set) var stopCount = 0
     private(set) var syncCount = 0
     private(set) var ticketRequestCount = 0
+    private(set) var joinCount = 0
     private var startHook: (@Sendable () -> Void)?
     private var suspendsStart = false
     private var startContinuation: CheckedContinuation<Void, Never>?
@@ -934,7 +1004,7 @@ private actor RoomReplicationServiceSpy: RoomReplicationServing {
     }
 
     func syncNow() async { syncCount += 1 }
-    func join(invite: IrohRoomInvite) async throws {}
+    func join(invite: IrohRoomInvite) async throws { joinCount += 1 }
 
     func markConflict(roomID: String?) async {
         markedConflictRoomIDs.append(roomID)

@@ -46,7 +46,9 @@ struct PortraitDialFace: View {
             .padding(42)
         }
         .aspectRatio(1, contentMode: .fit)
+        #if !os(macOS)
         .frame(maxWidth: 500)
+        #endif
         .accessibilityRepresentation {
             TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
         }
