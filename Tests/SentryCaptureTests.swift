@@ -1708,6 +1708,11 @@ struct SentryCaptureTests {
         )
         let roomState = try #require(fixture.store.activeRoomState)
         fixture.workspace.value = sentryRoomWorkspace(from: roomState)
+        // iOS only (re)starts Iroh transport while the scene is active: mark it
+        // active so the failed-join restart executes on iOS too. Activation
+        // starts room A once; the failed join below restarts it.
+        fixture.controller.setSceneActive(true, environment: sentryRoomEnvironment(for: roomState))
+        await awaitServiceStarts(fixture.service, count: 1)
         let secretB = Data(repeating: 45, count: 32)
         let roomB = try IrohProtocolV1.roomID(for: secretB)
         let inviteB = try sentryJoinInvite(roomID: roomB, secret: secretB)
@@ -1725,9 +1730,19 @@ struct SentryCaptureTests {
         #expect(!message.contains("already in this room"))
         #expect(recorded.value.isEmpty)
         #expect(fixture.store.activeRoomID == roomA)
+        await awaitServiceStarts(fixture.service, count: 2)
         let restarted = await fixture.service.startedContexts
-        #expect(restarted.count == 1)
-        #expect(restarted.first?.roomID == roomA)
+        #expect(restarted.count == 2)
+        #expect(restarted.allSatisfy { $0.roomID == roomA })
+    }
+
+    /// Scene activation and the failed-join restart race as unstructured work;
+    /// poll until the stub records exactly `count` starts.
+    private func awaitServiceStarts(_ service: SentryRoomServiceStub, count: Int) async {
+        for _ in 0..<200 {
+            if await service.startedContexts.count == count { break }
+            await Task.yield()
+        }
     }
 
     private func sentryJoinInvite(roomID: String, secret: Data) throws -> String {

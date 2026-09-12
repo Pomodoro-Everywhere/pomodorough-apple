@@ -71,6 +71,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         assertVisible("Start focus")
         assertVisible("Skip to Short break")
         app.buttons["Start focus"].tap()
+        dismissAlarmFallbackIfPresent(in: app)
         assertVisible("Pause")
         assertVisible("Finish timer")
         assertVisible("Cancel timer")
@@ -293,6 +294,18 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             object: element
         )
         XCTAssertEqual(XCTWaiter().wait(for: [hittable], timeout: timeout), .completed)
+    }
+
+    private func dismissAlarmFallbackIfPresent(in app: XCUIApplication) {
+        // Fresh sims leave notifications undetermined, so starting a timer
+        // raises the alarm-fallback alert over the controls; sims with a
+        // decided permission never show it.
+        let fallback = app.alerts.containing(
+            NSPredicate(format: "label CONTAINS %@", "system alarm could not be")
+        ).firstMatch
+        if fallback.waitForExistence(timeout: 5) {
+            fallback.buttons["OK"].tap()
+        }
     }
 
     private func makeApplication() -> XCUIApplication {
