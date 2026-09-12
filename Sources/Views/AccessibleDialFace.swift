@@ -5,6 +5,7 @@ struct AccessibleDialFace: View {
     let phase: TimerPhase
     let status: String
     let timeText: String
+    var completedFocusCount = 0
 
     @ScaledMetric(relativeTo: .largeTitle) private var countdownSize: CGFloat = 56
 
@@ -21,6 +22,7 @@ struct AccessibleDialFace: View {
                 .foregroundStyle(PomodoroughTheme.ticket)
             Text(status)
                 .font(.headline)
+            LongBreakProgressIndicator(completedToday: completedFocusCount)
             ProgressView(value: max(0, min(1, progress)))
                 .tint(PomodoroughTheme.danger)
         }
@@ -33,6 +35,7 @@ struct AccessibleDialFace: View {
         }
         .accessibilityRepresentation {
             TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+            LongBreakProgressIndicator(completedToday: completedFocusCount)
         }
     }
 }

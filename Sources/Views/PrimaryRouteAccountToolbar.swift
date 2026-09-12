@@ -1,5 +1,13 @@
 import SwiftUI
 
+struct SyncToolbarBottomPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct PrimaryRouteAccountToolbar: ViewModifier {
     let model: AppModel
     @State private var showsAccount = false
@@ -10,6 +18,15 @@ private struct PrimaryRouteAccountToolbar: ViewModifier {
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     SyncToolbarStatus(model: model)
+                        .background {
+                            GeometryReader { geometry in
+                                // Glass toolbar backgrounds extend four points beyond the button.
+                                Color.clear.preference(
+                                    key: SyncToolbarBottomPreferenceKey.self,
+                                    value: geometry.frame(in: .global).maxY + toolbarBackgroundInset
+                                )
+                            }
+                        }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Account", systemImage: "person.crop.circle") {
@@ -32,6 +49,11 @@ private struct PrimaryRouteAccountToolbar: ViewModifier {
 #else
         content
 #endif
+    }
+
+    private var toolbarBackgroundInset: CGFloat {
+        if #available(iOS 26, *) { return 4 }
+        return 0
     }
 }
 

@@ -17,7 +17,8 @@ struct TimerDial: View {
                 status: timer.status.rawValue.capitalized,
                 timeText: Self.timeText(remaining),
                 layout: layout,
-                minutes: Self.minutes(timer)
+                minutes: Self.minutes(timer),
+                completedFocusCount: model.completedFocusCountToday
             )
         }
     }

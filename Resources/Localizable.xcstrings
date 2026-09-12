@@ -1585,16 +1585,6 @@
         }
       }
     },
-    "NOW TIMING": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NOW TIMING"
-          }
-        }
-      }
-    },
     "Navigate between Timer, Tasks, Arrivals, and Network": {
       "localizations": {
         "en": {

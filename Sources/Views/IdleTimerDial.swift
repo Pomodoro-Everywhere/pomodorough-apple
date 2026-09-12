@@ -5,6 +5,7 @@ struct IdleTimerDial: View {
     let phase: TimerPhase
     let minutes: Int
     let layout: TimerLayout
+    var completedFocusCount = 0
 
     var body: some View {
         DialFace(
@@ -13,7 +14,8 @@ struct IdleTimerDial: View {
             status: "Idle",
             timeText: String(format: "%02d:00", minutes),
             layout: layout,
-            minutes: minutes
+            minutes: minutes,
+            completedFocusCount: completedFocusCount
         )
     }
 }

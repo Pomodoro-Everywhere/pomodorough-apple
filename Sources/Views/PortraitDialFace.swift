@@ -7,8 +7,19 @@ struct PortraitDialFace: View {
     let timeText: String
     /// Minutes of the displayed timer; drives the tick count.
     var minutes: Int = 60
+    var completedFocusCount = 0
 
     var body: some View {
+        GeometryReader { geometry in
+            face(diameter: geometry.size.width)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        #if !os(macOS)
+        .frame(maxWidth: 500)
+        #endif
+    }
+
+    private func face(diameter: CGFloat) -> some View {
         ZStack {
             Circle().fill(PomodoroughTheme.sky)
             Circle().stroke(PomodoroughTheme.porcelain, lineWidth: 3)
@@ -19,38 +30,23 @@ struct PortraitDialFace: View {
                 .padding(16)
             TickMarks(count: minutes).stroke(PomodoroughTheme.track, lineWidth: 1)
             VStack(spacing: 7) {
-                Text("NOW TIMING")
-                    .font(.caption2.monospaced().bold())
-                    .foregroundStyle(PomodoroughTheme.steel)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                Text(phase.title.uppercased())
-                    .font(.caption.monospaced().bold())
-                    .foregroundStyle(PomodoroughTheme.signal)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
+                TimerReadoutHeader(phase: phase, status: status, completedFocusCount: completedFocusCount)
                 Text(timeText)
-                    .font(.system(size: 64, weight: .black, design: .rounded))
+                    .font(.system(size: diameter * 0.27, weight: .black, design: .rounded))
                     .monospacedDigit()
                     .minimumScaleFactor(0.48)
                     .lineLimit(1)
                     .foregroundStyle(PomodoroughTheme.ticket)
-                Text(status.uppercased())
-                    .font(.caption2.monospaced().bold())
-                    .foregroundStyle(PomodoroughTheme.sky)
             }
-            .padding()
-            .frame(maxWidth: .infinity)
+            .padding(diameter * 0.04)
+            .frame(width: diameter * 0.8, height: diameter * 0.42)
             .digitalReadoutPanel(cornerRadius: 18)
             .overlay { RoundedRectangle(cornerRadius: 18).stroke(PomodoroughTheme.porcelain.opacity(0.8), lineWidth: 2) }
-            .padding(42)
         }
         .aspectRatio(1, contentMode: .fit)
-        #if !os(macOS)
-        .frame(maxWidth: 500)
-        #endif
         .accessibilityRepresentation {
             TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+            LongBreakProgressIndicator(completedToday: completedFocusCount)
         }
     }
 }

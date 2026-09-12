@@ -10,15 +10,16 @@ struct DialFace: View {
     let layout: TimerLayout
     /// Minutes of the displayed timer; drives the portrait tick count.
     var minutes: Int = 60
+    var completedFocusCount = 0
 
     @ViewBuilder
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            AccessibleDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
+            AccessibleDialFace(progress: progress, phase: phase, status: status, timeText: timeText, completedFocusCount: completedFocusCount)
         } else if layout == .landscape {
-            LandscapeDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
+            LandscapeDialFace(progress: progress, phase: phase, status: status, timeText: timeText, completedFocusCount: completedFocusCount)
         } else {
-            PortraitDialFace(progress: progress, phase: phase, status: status, timeText: timeText, minutes: minutes)
+            PortraitDialFace(progress: progress, phase: phase, status: status, timeText: timeText, minutes: minutes, completedFocusCount: completedFocusCount)
         }
     }
 }

@@ -1511,7 +1511,7 @@ struct SentryCaptureTests {
         }
         let core = coordinator.syncFailure(SharedCoreError.core("ap85-core"), lease: lease, workspace: workspace, pendingChangeCount: 3)
         #expect(core.action == .blocksFollowUp)
-        #expect(core.effects.contains(.presentError("Sync paused because the server response did not match queued changes. 3 queued changes remain on this device.")))
+        #expect(core.effects.contains(.presentError(String(localized: "Sync paused because the server response did not match queued changes. \(3) queued changes remain on this device."))))
         #expect(recorded.value.count == 1)
         _ = coordinator.syncFailure(AppError.invalidResponse, lease: lease, workspace: workspace, pendingChangeCount: 3)
         #expect(recorded.value.count == 1)
@@ -1530,7 +1530,7 @@ struct SentryCaptureTests {
         let invalid = lifecycle.bootstrapFailure(AppError.invalidResponse, stage: .preflight)
         #expect(invalid.historyResolutionState == .retryable(nil))
         #expect(!invalid.isOffline)
-        #expect(invalid.errorMessage == "History setup paused because the server returned an invalid response. Local data remains on this device.")
+        #expect(invalid.errorMessage == String(localized: "History setup paused because the server returned an invalid response. Local data remains on this device."))
         #expect(invalid.effects.isEmpty)
         #expect(recorded.value.count == 1)
         let core = lifecycle.bootstrapFailure(SharedCoreError.core("ap86-core"), stage: .submission(.keepRemote))
@@ -1801,6 +1801,49 @@ struct SentryCaptureTests {
         #expect(coordinator.containsCommittedLegacyRecords(stored, in: stored) == false)
         #expect(recorded.value.count == 1)
         #expect(!recorded.value[0].contains(roomID))
+    }
+
+    // Sentry sweep: post-rename durability failure blocks with uncertainty
+    // and captures Error-only (persist-side counterpart of the load-side
+    // snapshotLoadFailure capture; the pre-rename write path already captures).
+    @Test @MainActor
+    func persistReplacementFailureReportsUncertaintyAndCapturesOnce() throws {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let suite = "PomodoroughTests.SentryReplacement.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentryReplacement-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AtomicDurableFileStore(
+            fileURL: dir.appendingPathComponent("workspace.json"),
+            afterReplacement: { throw POSIXError(.EIO) }
+        )
+        let coordinator = AppStatePersistenceCoordinator(defaults: defaults, durableLocalStore: store)
+        let proposed = PersistedTimerState.fresh()
+        let result = coordinator.persist(proposed, to: .local)
+        guard case .recoveryRequired = result else {
+            Issue.record("Expected recoveryRequired, got \(result)"); return
+        }
+        #expect(coordinator.snapshotLoadFailure != nil)
+        #expect(recorded.value.count == 1)
+        #expect(recorded.value[0] == POSIXError(.EIO).localizedDescription)
+        #expect(!recorded.value[0].contains(proposed.deviceId))
+        #expect(!recorded.value[0].contains("pendingCommands"))
+        let application = coordinator.application(for: result, current: .fresh(), rebuildsOnFailure: true)
+        #expect(!application.succeeded)
+        #expect(application.conflictMessage != nil)
+        let blocked = coordinator.persist(PersistedTimerState.fresh(), to: .local)
+        guard case .recoveryRequired = blocked else {
+            Issue.record("Expected still blocked, got \(blocked)"); return
+        }
+        #expect(recorded.value.count == 1)
     }
 
     private func sentryStrippedTimerJSON(removing keys: [String]) throws -> Data {

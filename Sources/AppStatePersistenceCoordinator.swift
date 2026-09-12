@@ -433,6 +433,8 @@ final class AppStatePersistenceCoordinator {
         proposed: PersistedTimerState
     ) -> PersistenceTransition {
         snapshotRecoveryState = proposed
+        Self.logger.error("persistLocal replacement failed: \(failure.localizedDescription, privacy: .public)")
+        SentryCapture.capture(failure)
         var reason = failure.reason
         do {
             guard let bytes = try durableLocalStore?.read() else {

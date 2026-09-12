@@ -10,58 +10,16 @@ struct TimerMachineCard: View {
     var landscapeHeight: CGFloat? = nil
 
     var body: some View {
-        Group {
-            #if os(macOS)
-            VStack(spacing: layout == .landscape ? 8 : 18) {
-                if layout == .landscape {
-                    GeometryReader { geometry in
-                        // Leave room for the controls and the progress indicator below the dial.
-                        let diameter = max(0, min(geometry.size.width - 288, geometry.size.height - 48))
-                        HStack(spacing: 28) {
-                            dial(layout: .portrait)
-                                .frame(width: diameter)
-                            VStack(spacing: 14) {
-                                TimerTaskPicker(model: model, layout: layout)
-                                TimerControls(model: model, layout: layout)
-                            }
-                            .frame(width: 260)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else {
-                    dial(layout: layout)
-                    TimerTaskPicker(model: model, layout: layout)
-                    TimerControls(model: model, layout: layout)
-                }
-            }
-            .padding(24)
-            #else
-            if layout == .landscape {
-                HStack(spacing: 14) {
-                    dial(layout: .landscape)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    VStack(spacing: 12) {
-                        TimerTaskPicker(model: model, layout: layout)
-                        TimerControls(model: model, layout: layout)
-                    }
-                    .frame(width: 280)
-                }
-                .frame(height: landscapeHeight)
-                .padding(14)
-            } else {
-                VStack(spacing: usesCompactDial ? 12 : 14) {
-                    dial(layout: layout)
-                    TimerTaskPicker(model: model, layout: layout)
-                    TimerControls(model: model, layout: layout)
-                }
-                .padding(usesCompactDial ? 14 : 16)
-            }
-            #endif
-        }
+        TimerMachineCardContent(
+            model: model,
+            layout: layout,
+            usesCompactDial: usesCompactDial,
+            landscapeHeight: landscapeHeight
+        )
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #else
-        .frame(maxWidth: .infinity, maxHeight: layout == .landscape ? .infinity : nil)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         #endif
         .foregroundStyle(PomodoroughTheme.porcelain)
         .background {
@@ -74,9 +32,40 @@ struct TimerMachineCard: View {
                 .stroke(.white.opacity(0.18), lineWidth: 1)
         }
     }
+}
 
-    @ViewBuilder
-    private func dial(layout: TimerLayout) -> some View {
+private struct TimerMachineCardContent: View {
+    let model: AppModel
+    let layout: TimerLayout
+    var usesCompactDial = false
+    var landscapeHeight: CGFloat? = nil
+
+    var body: some View {
+        Group {
+            #if os(macOS)
+            TimerMachineMacOSCard(model: model, layout: layout, usesCompactDial: usesCompactDial)
+            #else
+            if layout == .landscape {
+                TimerMachineIOSLandscapeCard(
+                    model: model,
+                    layout: layout,
+                    usesCompactDial: usesCompactDial,
+                    landscapeHeight: landscapeHeight
+                )
+            } else {
+                TimerMachineIOSPortraitCard(model: model, layout: layout, usesCompactDial: usesCompactDial)
+            }
+            #endif
+        }
+    }
+}
+
+private struct TimerMachineDialSection: View {
+    let model: AppModel
+    let layout: TimerLayout
+    var usesCompactDial = false
+
+    var body: some View {
         VStack(spacing: 8) {
             Group {
                 if let timer = model.activeTimer {
@@ -85,13 +74,81 @@ struct TimerMachineCard: View {
                     IdleTimerDial(
                         phase: model.selectedPhase,
                         minutes: model.durationMinutes(for: model.selectedPhase),
-                        layout: usesCompactDial ? .landscape : layout
+                        layout: usesCompactDial ? .landscape : layout,
+                        completedFocusCount: model.completedFocusCountToday
                     )
                 }
             }
             .frame(height: usesCompactDial ? 120 : nil)
-            LongBreakProgressIndicator(progress: model.longBreakProgress, completedToday: model.completedFocusCountToday)
         }
+    }
+}
+
+private struct TimerMachineMacOSCard: View {
+    let model: AppModel
+    let layout: TimerLayout
+    var usesCompactDial = false
+
+    var body: some View {
+        VStack(spacing: layout == .landscape ? 8 : 18) {
+            if layout == .landscape {
+                GeometryReader { geometry in
+                    let diameter = max(0, min(geometry.size.width - 288, geometry.size.height))
+                    HStack(spacing: 28) {
+                        TimerMachineDialSection(model: model, layout: .portrait, usesCompactDial: usesCompactDial)
+                            .frame(width: diameter)
+                        VStack(spacing: 14) {
+                            TimerTaskPicker(model: model, layout: layout)
+                            TimerControls(model: model, layout: layout)
+                        }
+                        .frame(width: 260)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                TimerMachineDialSection(model: model, layout: layout, usesCompactDial: usesCompactDial)
+                TimerTaskPicker(model: model, layout: layout)
+                TimerControls(model: model, layout: layout)
+            }
+        }
+        .padding(24)
+    }
+}
+
+private struct TimerMachineIOSLandscapeCard: View {
+    let model: AppModel
+    let layout: TimerLayout
+    var usesCompactDial = false
+    var landscapeHeight: CGFloat? = nil
+
+    var body: some View {
+        HStack(spacing: 14) {
+            TimerMachineDialSection(model: model, layout: .landscape, usesCompactDial: usesCompactDial)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 12) {
+                TimerTaskPicker(model: model, layout: layout)
+                TimerControls(model: model, layout: layout)
+            }
+            .frame(width: 280)
+        }
+        .frame(height: landscapeHeight)
+        .padding(14)
+    }
+}
+
+private struct TimerMachineIOSPortraitCard: View {
+    let model: AppModel
+    let layout: TimerLayout
+    var usesCompactDial = false
+
+    var body: some View {
+        VStack(spacing: usesCompactDial ? 8 : 14) {
+            TimerMachineDialSection(model: model, layout: layout)
+                .frame(width: usesCompactDial ? 270 : nil)
+            TimerTaskPicker(model: model, layout: layout)
+            TimerControls(model: model, layout: layout, compact: usesCompactDial)
+        }
+        .padding(usesCompactDial ? 14 : 16)
     }
 }
 

@@ -157,7 +157,7 @@ struct AppModelDecompositionTests {
         )
         #expect(invalid.historyResolutionState == .retryable(nil))
         #expect(!invalid.isOffline)
-        #expect(invalid.errorMessage == "History setup paused because the server returned an invalid response. Local data remains on this device.")
+        #expect(invalid.errorMessage == String(localized: "History setup paused because the server returned an invalid response. Local data remains on this device."))
         #expect(invalid.effects.isEmpty)
 
         let unavailable = lifecycle.bootstrapFailure(

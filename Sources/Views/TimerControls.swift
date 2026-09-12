@@ -17,6 +17,7 @@ struct TimerControls: View {
 
     let model: AppModel
     let layout: TimerLayout
+    var compact = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var glassNamespace
 
@@ -151,10 +152,10 @@ struct TimerControls: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .allowsTightening(true)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: compact ? 28 : 44)
         }
             .font(.headline)
-            .frame(maxWidth: .infinity, minHeight: layout == .landscape ? 54 : 58)
+            .frame(maxWidth: .infinity, minHeight: compact ? 44 : layout == .landscape ? 54 : 58)
             .buttonBorderShape(.capsule)
             .accessibilityLabel(glassID == .primary ? primaryAccessibilityTitle : glassID == .finish ? String(localized: "Finish timer") : glassID == .cancel ? String(localized: "Cancel timer") : title)
         if #available(iOS 26, macOS 26, *), glass {
@@ -162,14 +163,14 @@ struct TimerControls: View {
                 button
                     .buttonStyle(.glassProminent)
                     .tint(PomodoroughTheme.signal)
-                    .controlSize(.large)
+                    .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
             } else {
                 button
                     .buttonStyle(.glass)
                     .tint(PomodoroughTheme.porcelain.opacity(0.16))
-                    .controlSize(.large)
+                    .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
             }
@@ -178,7 +179,7 @@ struct TimerControls: View {
                 .buttonStyle(.borderedProminent)
                 .tint(prominent ? PomodoroughTheme.ticket : PomodoroughTheme.sky)
                 .foregroundStyle(PomodoroughTheme.track)
-                .controlSize(.large)
+                .controlSize(compact ? .regular : .large)
         }
     }
 }

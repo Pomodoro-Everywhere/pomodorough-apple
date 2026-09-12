@@ -5,20 +5,12 @@ struct LandscapeDialFace: View {
     let phase: TimerPhase
     let status: String
     let timeText: String
+    var completedFocusCount = 0
 
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 2) {
-                HStack {
-                    Text(phase.routeLabel.uppercased())
-                    Text(phase.title.uppercased())
-                        .foregroundStyle(PomodoroughTheme.signal)
-                    Spacer()
-                    Text(status.uppercased())
-                        .foregroundStyle(PomodoroughTheme.sky)
-                }
-                .font(.caption.monospaced().bold())
-                .tracking(1.5)
+                TimerReadoutHeader(phase: phase, status: status, completedFocusCount: completedFocusCount)
 
                 Text(timeText)
                     .font(.system(
@@ -49,6 +41,7 @@ struct LandscapeDialFace: View {
         }
         .accessibilityRepresentation {
             TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+            LongBreakProgressIndicator(completedToday: completedFocusCount)
         }
     }
 }
