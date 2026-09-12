@@ -376,6 +376,9 @@ final class AccountLifecycleController {
         }
         switch error {
         case AppError.invalidResponse, is SharedCoreError:
+            // AP86: core/invalidResponse keeps retryable shape, logs + captures.
+            Self.logger.error("bootstrap failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "bootstrap-invalid-response", error: error)
             return BootstrapFailureTransition(
                 historyResolutionState: .retryable(strategy),
                 isOffline: false,

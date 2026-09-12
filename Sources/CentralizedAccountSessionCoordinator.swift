@@ -653,8 +653,21 @@ extension CentralizedAccountSessionCoordinator {
         guard ownsCentralizedReplication(
             lease.operation, modeGeneration: lease.modeGeneration, workspace: workspace
         ), signedInUser != nil else { return transition(.stale) }
-        if error is SharedCoreError || error as? AppError == .invalidResponse
-            || error as? AppError == .invalidLocalClock {
+        // AP85: clock keeps its message and stays Sentry-dark (AP82 precedent);
+        // core/invalidResponse logs + captures with the server-mismatch message.
+        if error as? AppError == .invalidLocalClock {
+            publication.isOffline = false
+            return transition(
+                .blocksFollowUp,
+                effects: [
+                    .presentError(AppError.invalidLocalClock.localizedDescription),
+                    .cancelCentralizedStreams
+                ]
+            )
+        }
+        if error is SharedCoreError || error as? AppError == .invalidResponse {
+            Self.logger.error("sync failed: \(error.localizedDescription, privacy: .public)")
+            SentryCapture.captureOnce(key: "centralized-sync-invalid-response", error: error)
             publication.isOffline = false
             let message = String(localized: "Sync paused because the server response did not match queued changes. \(pendingChangeCount) queued changes remain on this device.")
             return transition(

@@ -106,13 +106,13 @@ final class AccountSynchronization {
         // Core represents terminal timers in history only. Retain server duplicate
         // terminal object strictly as Apple presentation state.
         updated.canonicalTimer = response.canonicalTimer
-        resolveProvisionalPhaseAdvances(
+        try resolveProvisionalPhaseAdvances(
             in: &updated,
             acknowledgements: response.acknowledgements,
             canonicalHistory: response.history,
             canonicalTimer: response.canonicalTimer
         )
-        updateLocalTimerOwnership(
+        try updateLocalTimerOwnership(
             in: &updated,
             sentCommands: plan.batch.commands,
             acknowledgements: response.acknowledgements,
@@ -238,7 +238,7 @@ extension AccountSynchronization {
             sent: sent,
             state: state
         )
-        return assembleBootstrapResolutionTransition(
+        return try assembleBootstrapResolutionTransition(
             from: reconciled,
             response: response,
             request: request,
@@ -315,16 +315,16 @@ private extension AccountSynchronization {
         response: BootstrapResponse,
         request: BootstrapResolveRequest,
         user: User
-    ) -> BootstrapResolutionTransition {
+    ) throws -> BootstrapResolutionTransition {
         var resolved = reconciledState
         if request.strategy != .keepRemote {
-            resolveProvisionalPhaseAdvances(
+            try resolveProvisionalPhaseAdvances(
                 in: &resolved,
                 acknowledgements: response.acknowledgements,
                 canonicalHistory: response.history,
                 canonicalTimer: response.canonicalTimer
             )
-            updateLocalTimerOwnership(
+            try updateLocalTimerOwnership(
                 in: &resolved,
                 sentCommands: request.commands,
                 acknowledgements: response.acknowledgements,
@@ -458,10 +458,8 @@ private extension AccountSynchronization {
         acknowledgements: [Acknowledgement],
         canonicalHistory: [HistoryItem],
         canonicalTimer: CanonicalTimer?
-    ) {
-        let acknowledgementsByID = Dictionary(
-            uniqueKeysWithValues: acknowledgements.map { ($0.commandId, $0) }
-        )
+    ) throws {
+        let acknowledgementsByID = try Self.acknowledgementsByID(acknowledgements)
         let advances = state.provisionalPhaseAdvances
         let earliestInvalidIndex = advances.indices.first { index in
             let provisional = advances[index]
@@ -519,10 +517,8 @@ private extension AccountSynchronization {
         acknowledgements: [Acknowledgement],
         canonicalTimer: CanonicalTimer?,
         canonicalHistory: [HistoryItem]
-    ) {
-        let acknowledgementsByID = Dictionary(
-            uniqueKeysWithValues: acknowledgements.map { ($0.commandId, $0) }
-        )
+    ) throws {
+        let acknowledgementsByID = try Self.acknowledgementsByID(acknowledgements)
         for command in sentCommands where command.type == .start {
             guard let acknowledgement = acknowledgementsByID[command.id] else { continue }
             let canonicallyAccepted = canonicalTimer?.id == command.timerId
@@ -616,5 +612,18 @@ private extension AccountSynchronization {
         let core = try sharedCoreProvider()
         sharedCore = core
         return core
+    }
+}
+
+// AP88: duplicate server acks would trap in
+// Dictionary(uniqueKeysWithValues:). Reject with invalidResponse instead.
+// Internal so tests drive duplicate vs distinct acks directly.
+extension AccountSynchronization {
+    nonisolated static func acknowledgementsByID(
+        _ acknowledgements: [Acknowledgement]
+    ) throws -> [String: Acknowledgement] {
+        let ids = acknowledgements.map(\.commandId)
+        guard Set(ids).count == ids.count else { throw AppError.invalidResponse }
+        return Dictionary(uniqueKeysWithValues: acknowledgements.map { ($0.commandId, $0) })
     }
 }

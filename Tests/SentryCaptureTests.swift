@@ -1480,6 +1480,92 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains("not-a-ticket"))
     }
 
+    // AP85: syncFailure keeps clock message Sentry-dark, captures core once.
+    @Test @MainActor
+    func syncFailureClockVsCoreSplit() {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let user = User(id: "ap85", email: "ap85@example.com", name: "ap85", avatarUrl: "")
+        let api = APIClient(keychain: StaticTokenStore())
+        let coordinator = CentralizedAccountSessionCoordinator(
+            lifecycle: AccountLifecycleController(api: api, googleIdentityProvider: RecordingGoogleIdentityProvider()),
+            synchronization: AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() }),
+            initialPublication: .init(sessionState: .signedIn(user))
+        )
+        let operation = coordinator.currentOperation
+        let lease = CentralizedAccountSessionCoordinator.SyncLease(id: UUID(), operation: operation, modeGeneration: 0, showsActivity: false)
+        let workspace = CentralizedAccountSessionCoordinator.Workspace(state: .fresh(), replicationMode: .centralized, modeGeneration: 0, isMutationBlocked: false)
+        let clock = coordinator.syncFailure(AppError.invalidLocalClock, lease: lease, workspace: workspace, pendingChangeCount: 3)
+        #expect(clock.action == .blocksFollowUp)
+        #expect(!clock.publication.isOffline)
+        #expect(clock.effects.contains(.presentError(AppError.invalidLocalClock.localizedDescription)))
+        #expect(recorded.value.isEmpty)
+        SentryCapture.resetForTesting()
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        let core = coordinator.syncFailure(SharedCoreError.core("ap85-core"), lease: lease, workspace: workspace, pendingChangeCount: 3)
+        #expect(core.action == .blocksFollowUp)
+        #expect(core.effects.contains(.presentError("Sync paused because the server response did not match queued changes. 3 queued changes remain on this device.")))
+        #expect(recorded.value.count == 1)
+        _ = coordinator.syncFailure(AppError.invalidResponse, lease: lease, workspace: workspace, pendingChangeCount: 3)
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP86: bootstrapFailure core branch keeps retryable shape, captures once.
+    @Test @MainActor
+    func bootstrapFailureCoreCapturesOnce() {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var c = recorded.value; c.append(error.localizedDescription); recorded.value = c
+        }
+        defer { SentryCapture.resetForTesting() }
+        let lifecycle = AccountLifecycleController(api: APIClient(), googleIdentityProvider: RecordingGoogleIdentityProvider())
+        let invalid = lifecycle.bootstrapFailure(AppError.invalidResponse, stage: .preflight)
+        #expect(invalid.historyResolutionState == .retryable(nil))
+        #expect(!invalid.isOffline)
+        #expect(invalid.errorMessage == "History setup paused because the server returned an invalid response. Local data remains on this device.")
+        #expect(invalid.effects.isEmpty)
+        #expect(recorded.value.count == 1)
+        let core = lifecycle.bootstrapFailure(SharedCoreError.core("ap86-core"), stage: .submission(.keepRemote))
+        #expect(core.historyResolutionState == .retryable(.keepRemote))
+        #expect(!core.isOffline)
+        #expect(core.effects.isEmpty)
+        #expect(recorded.value.count == 1)
+    }
+
+    // AP87: duplicate inventory references reject with invalidMessage.
+    @Test
+    func duplicateInventoryEntriesReject() throws {
+        let first = IrohInventoryEntry(domain: .timer, id: "op-1", digest: "d1")
+        let second = IrohInventoryEntry(domain: .timer, id: "op-2", digest: "d2")
+        #expect(try IrohReplicationService.advertisedDigests(for: [first, second]).count == 2)
+        do {
+            _ = try IrohReplicationService.advertisedDigests(for: [first, first])
+            Issue.record("Duplicate inventory entries must reject")
+        } catch IrohProtocolError.invalidMessage(let reason) {
+            #expect(reason.contains("duplicate"))
+        }
+    }
+
+    // AP88: duplicate server acks reject with invalidResponse.
+    @Test
+    func duplicateServerAcksReject() throws {
+        let first = Acknowledgement(commandId: "cmd-1", outcome: .applied, reason: "")
+        let second = Acknowledgement(commandId: "cmd-2", outcome: .applied, reason: "")
+        #expect(try AccountSynchronization.acknowledgementsByID([first, second]).count == 2)
+        do {
+            _ = try AccountSynchronization.acknowledgementsByID([first, first])
+            Issue.record("Duplicate server acks must reject")
+        } catch AppError.invalidResponse {
+        }
+    }
+
     // AP80: receipt throw captures, nil/mismatch stays silent.
     // createRoom clears the receipt and capture validates it, so the
     // corrupt receipt is staged via the persisted state file instead.

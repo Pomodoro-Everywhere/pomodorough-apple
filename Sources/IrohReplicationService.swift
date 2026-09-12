@@ -502,6 +502,19 @@ actor IrohReplicationService {
         SentryCapture.captureOnce(key: "iroh-peer-sync", error: error)
     }
 
+    // AP87: duplicate inventory references would trap in
+    // Dictionary(uniqueKeysWithValues:). Reject with invalidMessage instead.
+    // Internal so tests drive duplicate vs distinct entries directly.
+    nonisolated static func advertisedDigests(
+        for entries: [IrohInventoryEntry]
+    ) throws -> [IrohInventoryReference: String] {
+        let references = entries.map(\.reference)
+        guard Set(references).count == references.count else {
+            throw IrohProtocolError.invalidMessage("peer returned duplicate inventory entries")
+        }
+        return Dictionary(uniqueKeysWithValues: entries.map { ($0.reference, $0.digest) })
+    }
+
     private func syncKnownPeers(context: IrohServiceContext, generation owner: Int) async -> Bool {
         guard owns(owner, roomID: context.roomID), syncOwner == nil, let endpoint else { return false }
         let syncID = UUID()
@@ -690,9 +703,7 @@ actor IrohReplicationService {
             roomID: context.roomID,
             remoteEntries: inventory.entries
         )
-        let digests = Dictionary(uniqueKeysWithValues: inventory.entries.map {
-            ($0.reference, $0.digest)
-        })
+        let digests = try Self.advertisedDigests(for: inventory.entries)
         for start in stride(from: 0, to: missing.count, by: IrohProtocolV1.maxOperationReferences) {
             let end = min(missing.count, start + IrohProtocolV1.maxOperationReferences)
             let references = Array(missing[start..<end])
