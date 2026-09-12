@@ -16,9 +16,16 @@ struct TimerDial: View {
                 phase: timer.phase,
                 status: timer.status.rawValue.capitalized,
                 timeText: Self.timeText(remaining),
-                layout: layout
+                layout: layout,
+                minutes: Self.minutes(timer)
             )
         }
+    }
+
+    /// Whole minutes of the running timer, ceiling-rounded like history
+    /// display so the dial shows one tick per minute.
+    private static func minutes(_ timer: CanonicalTimer) -> Int {
+        max(1, Int((timer.plannedDurationMs + 59_999) / 60_000))
     }
 
     private static func timeText(_ duration: TimeInterval) -> String {

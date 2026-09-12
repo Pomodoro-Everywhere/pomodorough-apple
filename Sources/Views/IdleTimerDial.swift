@@ -12,7 +12,8 @@ struct IdleTimerDial: View {
             phase: phase,
             status: "Idle",
             timeText: String(format: "%02d:00", minutes),
-            layout: layout
+            layout: layout,
+            minutes: minutes
         )
     }
 }

@@ -388,7 +388,7 @@ struct IntegrationNegativeTests {
     }
 
     @Test @MainActor
-    func activeTimerKeepsItsTaskWhenFutureSelectionChanges() async throws {
+    func activeTimerRetargetsWhenSelectionChanges() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -404,7 +404,7 @@ struct IntegrationNegativeTests {
         model.selectedTaskID = review.id
 
         #expect(model.selectedTaskID == review.id)
-        #expect(model.task(forTimerID: timer.id) == build)
+        #expect(model.task(forTimerID: timer.id) == review)
     }
 
     @Test @MainActor

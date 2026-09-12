@@ -8,6 +8,8 @@ struct DialFace: View {
     let status: String
     let timeText: String
     let layout: TimerLayout
+    /// Minutes of the displayed timer; drives the portrait tick count.
+    var minutes: Int = 60
 
     @ViewBuilder
     var body: some View {
@@ -16,7 +18,7 @@ struct DialFace: View {
         } else if layout == .landscape {
             LandscapeDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
         } else {
-            PortraitDialFace(progress: progress, phase: phase, status: status, timeText: timeText)
+            PortraitDialFace(progress: progress, phase: phase, status: status, timeText: timeText, minutes: minutes)
         }
     }
 }

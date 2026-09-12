@@ -438,8 +438,9 @@ def main() -> int:
     permission = read("Sources/Views/PermissionIntroductionView.swift")
     account = read("Sources/Views/AccountView.swift")
     require('Label("Duration changes apply to next timer"' in pattern, "active pattern edits lack next-timer disclosure", failures)
-    require('Picker("Next focus task"' in task_picker, "active task picker lacks next-focus semantics", failures)
-    require('Text("Active timer task")' in task_picker, "active task assignment is not separately announced", failures)
+    require('Picker("Focus task"' in task_picker, "focus task picker missing", failures)
+    require('Picker("Next focus task"' not in task_picker, "focus task picker must not split active/next", failures)
+    require('Text("Active timer task")' not in task_picker, "focus task must not duplicate the active assignment label", failures)
     guarantee = "subject to the operating system's delivery policy"
     require(guarantee in permission, "pre-permission completion guarantee disclosure missing", failures)
     require(guarantee in account, "persistent completion guarantee disclosure missing", failures)

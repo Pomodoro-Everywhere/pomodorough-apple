@@ -5,6 +5,8 @@ struct PortraitDialFace: View {
     let phase: TimerPhase
     let status: String
     let timeText: String
+    /// Minutes of the displayed timer; drives the tick count.
+    var minutes: Int = 60
 
     var body: some View {
         ZStack {
@@ -15,7 +17,7 @@ struct PortraitDialFace: View {
                 .stroke(PomodoroughTheme.danger, style: StrokeStyle(lineWidth: 12, lineCap: .butt))
                 .rotationEffect(.degrees(-90))
                 .padding(16)
-            TickMarks().stroke(PomodoroughTheme.track, lineWidth: 1)
+            TickMarks(count: minutes).stroke(PomodoroughTheme.track, lineWidth: 1)
             VStack(spacing: 7) {
                 Text("NOW TIMING")
                     .font(.caption2.monospaced().bold())

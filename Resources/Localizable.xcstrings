@@ -605,6 +605,16 @@
         }
       }
     },
+    "Applies to the current running focus timer and the next timer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to the current running focus timer and the next timer."
+          }
+        }
+      }
+    },
     "Arrivals": {
       "localizations": {
         "en": {
@@ -1855,6 +1865,16 @@
         }
       }
     },
+    "Optional, up to 64 characters. Room name is display-only.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional, up to 64 characters. Room name is display-only."
+          }
+        }
+      }
+    },
     "P": {
       "localizations": {
         "en": {
@@ -2111,6 +2131,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Recover"
+          }
+        }
+      }
+    },
+    "Refresh arrivals": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh arrivals"
           }
         }
       }
@@ -2665,6 +2695,16 @@
         }
       }
     },
+    "Skip to %arg": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip to %arg"
+          }
+        }
+      }
+    },
     "Start %@": {
       "localizations": {
         "en": {
@@ -3155,6 +3195,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "You appear offline. Reconnect, then retry."
+          }
+        }
+      }
+    },
+    "You're already in this room.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You're already in this room."
           }
         }
       }

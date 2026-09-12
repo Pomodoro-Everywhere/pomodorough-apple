@@ -710,6 +710,12 @@
         "value": "‏⟦Applies to the next focus timer and does not reassign the active timer.⟧"
       }
     },
+    "Applies to the current running focus timer and the next timer.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Applies to the current running focus timer and the next timer.⟧"
+      }
+    },
     "Arrivals": {
       "stringUnit": {
         "state": "translated",
@@ -1460,6 +1466,12 @@
         "value": "‏⟦Opens system settings to re-enable timer alerts after denial.⟧"
       }
     },
+    "Optional, up to 64 characters. Room name is display-only.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Optional, up to 64 characters. Room name is display-only.⟧"
+      }
+    },
     "P": {
       "stringUnit": {
         "state": "translated",
@@ -1614,6 +1626,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Recover⟧"
+      }
+    },
+    "Refresh arrivals": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Refresh arrivals⟧"
       }
     },
     "Remote history could not be checked. Local data remains unchanged.": {
@@ -1944,6 +1962,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Signs in to sync your timer across devices⟧"
+      }
+    },
+    "Skip to %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Skip to %arg⟧"
       }
     },
     "Start %@": {
@@ -2298,6 +2322,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦You appear offline. Reconnect, then retry.⟧"
+      }
+    },
+    "You're already in this room.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦You're already in this room.⟧"
       }
     },
     "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe.": {
