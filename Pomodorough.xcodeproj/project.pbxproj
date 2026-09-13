@@ -141,6 +141,7 @@
 		59506BF928A75020FE18BF31 /* AccountLifecycleTransitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3325B223134EBC2103C1C3F /* AccountLifecycleTransitions.swift */; };
 		5989F2AB63E0CA03B54F672E /* IrohRoomProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA070B31BB3538D64FE60C7 /* IrohRoomProjection.swift */; };
 		59D6F412C4DCC2152CFD9E51 /* TaskBoardHero.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3E9897B5BCD498F85742F6 /* TaskBoardHero.swift */; };
+		5A714EAD93BE36D6A60C9E05 /* TimerCardLayoutPinningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5751B4BD7B2A251AE34EDD7 /* TimerCardLayoutPinningTests.swift */; };
 		5BE49EF9AF2F90897303FBBB /* RPCMessageCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CBFFA1E9D9565B804B08961 /* RPCMessageCodec.swift */; };
 		5C333AB5EA1A01C470B1A7FF /* MainContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8F4B9B9BCCA8F2070D63D3 /* MainContainer.swift */; };
 		5C41726962F3A0597FBD951C /* IrohRoomStoreRollbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */; };
@@ -334,6 +335,7 @@
 		E02BA4F724BE067CCB19B55E /* WireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BB423CB3E1BA12419562FC /* WireModels.swift */; };
 		E03A6391EEDF0F2986209C89 /* RoomReplicationTransitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E07295C5A8844F45C157C394 /* RoomReplicationTransitions.swift */; };
 		E07F159A47806F5FD2494D5A /* pomodorough_core.wasm in Resources */ = {isa = PBXBuildFile; fileRef = 83402C8BC26381491CFC050B /* pomodorough_core.wasm */; };
+		E08C776CBAA4D81325F3A8A5 /* TimerCardLayoutPinningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5751B4BD7B2A251AE34EDD7 /* TimerCardLayoutPinningTests.swift */; };
 		E0B6D4E3EBAC3CBC4DA9E7C3 /* APIDateCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E7C2D3341B804E5936AF7B /* APIDateCodecTests.swift */; };
 		E17F90F0BF10DFED8753E3DB /* PomodoroughWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E70ABFB780690269C33E577 /* PomodoroughWatchApp.swift */; };
 		E18951533779205398B8BDC2 /* MenuBarTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */; };
@@ -585,6 +587,7 @@
 		9D8CEED1A0DDDDB34746C46D /* TaskHistoryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskHistoryModels.swift; sourceTree = "<group>"; };
 		A07D519989D4A2F8C108C3BE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A3325B223134EBC2103C1C3F /* AccountLifecycleTransitions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountLifecycleTransitions.swift; sourceTree = "<group>"; };
+		A5751B4BD7B2A251AE34EDD7 /* TimerCardLayoutPinningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerCardLayoutPinningTests.swift; sourceTree = "<group>"; };
 		A8AB09E46A90764AA003DFF9 /* AccountDeletionRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountDeletionRetryTests.swift; sourceTree = "<group>"; };
 		A9CFD328BAB1D26FBBC212D4 /* TimerCompletionScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerCompletionScheduler.swift; sourceTree = "<group>"; };
 		AA5A77AB25CA8D2BEBC52E4E /* IrohProtocolCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohProtocolCompatibilityTests.swift; sourceTree = "<group>"; };
@@ -794,6 +797,7 @@
 				95459C448D13FAA06E6007CD /* SnapshotReplacementRecoveryTests.swift */,
 				645DF6461B89E328FD8FDD43 /* SSERevisionStreamLimitsTests.swift */,
 				6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */,
+				A5751B4BD7B2A251AE34EDD7 /* TimerCardLayoutPinningTests.swift */,
 				7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */,
 				4523E76A7FE2206BCC8B9B56 /* TimerLiveActivityTests.swift */,
 				DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */,
@@ -1330,6 +1334,7 @@
 				D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */,
 				3EE87C877D0FA149A2EE210E /* SnapshotReplacementRecoveryTests.swift in Sources */,
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
+				5A714EAD93BE36D6A60C9E05 /* TimerCardLayoutPinningTests.swift in Sources */,
 				BD513CCC19FD160067E8A585 /* TimerCompletionSchedulingTests.swift in Sources */,
 				7F438BB37C5BC3DA06CCCA24 /* TimerLiveActivityTests.swift in Sources */,
 				4255112A51D66FBEC7FFA25E /* UnitNegativeTests.swift in Sources */,
@@ -1400,6 +1405,7 @@
 				99EFFE32E536E90D52596E0D /* SharedCoreWASMTests.swift in Sources */,
 				C4619B3E2C2FF52F2A6D85DF /* SnapshotReplacementRecoveryTests.swift in Sources */,
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
+				E08C776CBAA4D81325F3A8A5 /* TimerCardLayoutPinningTests.swift in Sources */,
 				CC8A04E89886DFA189F17026 /* TimerCompletionSchedulingTests.swift in Sources */,
 				E7FEE5738E33452D9CA3EA19 /* TimerLiveActivityTests.swift in Sources */,
 				25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */,
@@ -1956,7 +1962,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 47;
+				CURRENT_PROJECT_VERSION = 48;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -1978,7 +1984,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.33.0;
+				MARKETING_VERSION = 0.34.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -2098,7 +2104,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 47;
+				CURRENT_PROJECT_VERSION = 48;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2114,7 +2120,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.33.0;
+				MARKETING_VERSION = 0.34.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
