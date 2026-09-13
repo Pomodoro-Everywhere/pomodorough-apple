@@ -45,7 +45,14 @@ struct AtomicDurableFileStore: Sendable {
         let replacement = directory.appendingPathComponent(".snapshot-\(UUID().uuidString).tmp")
         defer { try? FileManager.default.removeItem(at: replacement) }
 #if os(iOS)
-        try data.write(to: replacement, options: [.withoutOverwriting, .completeFileProtection])
+        // Timer snapshots must remain writable while the device is locked:
+        // completions and ticks persist from the background. Complete
+        // protection denies those writes with EPERM (Sentry POMODOROUGH-BN),
+        // which bricks persistence into "Local change could not be saved".
+        // Until-first-authentication matches the container default and stays
+        // available after first unlock. No secrets live here (tokens are in
+        // the Keychain).
+        try data.write(to: replacement, options: [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication])
 #else
         try data.write(to: replacement, options: .withoutOverwriting)
 #endif
