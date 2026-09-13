@@ -1285,6 +1285,16 @@
         }
       }
     },
+    "Idle": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idle"
+          }
+        }
+      }
+    },
     "Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair.": {
       "localizations": {
         "en": {

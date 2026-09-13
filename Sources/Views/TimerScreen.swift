@@ -29,7 +29,7 @@ struct TimerScreen: View {
                         portraitContent(
                             compactDial: usesCompactDial(for: geometry.size),
                             availableHeight: geometry.size.height,
-                            topGap: syncStatusBottom > 0 ? max(0, syncStatusBottom + 16 - geometry.frame(in: .global).minY) : 16
+                            topGap: Self.portraitTopGap(syncStatusBottom: syncStatusBottom, globalMinY: geometry.frame(in: .global).minY)
                         )
                     }
                     .timerChromeHidden(false)
@@ -44,6 +44,16 @@ struct TimerScreen: View {
         .refreshable { await model.refreshForPull() }
         .primaryRouteAccountToolbar(model: model)
         .onPreferenceChange(SyncToolbarBottomPreferenceKey.self) { syncStatusBottom = $0 }
+    }
+
+    /// Top gap keeps the portrait card clear of the sync-status toolbar row.
+    /// Both inputs share global space: syncStatusBottom is the toolbar row's
+    /// bottom edge via SyncToolbarBottomPreferenceKey, globalMinY is this
+    /// GeometryReader's origin. GeometryReader re-evaluates on
+    /// rotation/multitask/toolbar changes, so the gap tracks layout; zero
+    /// means no toolbar row reported and the resting 16pt gap applies.
+    static func portraitTopGap(syncStatusBottom: CGFloat, globalMinY: CGFloat) -> CGFloat {
+        syncStatusBottom > 0 ? max(0, syncStatusBottom + 16 - globalMinY) : 16
     }
 
     private func portraitContent(compactDial: Bool, availableHeight: CGFloat, topGap: CGFloat) -> some View {

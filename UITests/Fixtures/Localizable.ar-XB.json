@@ -1118,6 +1118,12 @@
         "value": "‏⟦History setup paused because the server returned an invalid response. Your saved choice and local data were preserved.⟧"
       }
     },
+    "Idle": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Idle⟧"
+      }
+    },
     "Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair.": {
       "stringUnit": {
         "state": "translated",

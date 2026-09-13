@@ -11,7 +11,7 @@ struct IdleTimerDial: View {
         DialFace(
             progress: 0,
             phase: phase,
-            status: "Idle",
+            status: String(localized: "Idle"),
             timeText: String(format: "%02d:00", minutes),
             layout: layout,
             minutes: minutes,

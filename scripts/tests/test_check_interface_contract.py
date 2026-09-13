@@ -47,6 +47,24 @@ class LocalizationContractTests(unittest.TestCase):
             {"Create another room"},
         )
 
+    def test_accessibilityLabel_visible_literal_requires_catalog(self) -> None:
+        # AP96 gate probe: accessibilityLabel is user-visible, so a bare
+        # literal must surface as a catalog key. Removing it from
+        # VISIBLE_APIS must turn this red again.
+        self.assertIn("accessibilityLabel", checker.VISIBLE_APIS)
+        self.assertEqual(
+            checker.extract_localizable_keys('.accessibilityLabel("Pomodoro progress")\n'),
+            {"Pomodoro progress"},
+        )
+
+    def test_idle_status_localized_key_requires_catalog(self) -> None:
+        # AP97 probe: the idle dial status flows into readout text + a11y,
+        # so String(localized:) must surface it as a catalog key.
+        self.assertEqual(
+            checker.extract_localizable_keys('status: String(localized: "Idle")\n'),
+            {"Idle"},
+        )
+
     def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
         source = '''
         Picker("Section", selection: $selectedTab) {

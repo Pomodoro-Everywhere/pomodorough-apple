@@ -18,7 +18,7 @@ struct LongBreakProgressIndicator: View {
         .font(.caption.monospaced().bold())
         .foregroundStyle(PomodoroughTheme.ticket)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Pomodoro progress")
+        .accessibilityLabel(String(localized: "Pomodoro progress"))
         .accessibilityValue(String(localized: "\(progress) of 4 toward the next long break, \(completedToday) completed today"))
     }
 }
@@ -30,10 +30,10 @@ struct TimerReadoutHeader: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(phase.title.uppercased())
+            Text(phase.title.localizedUppercase)
                 .foregroundStyle(PomodoroughTheme.signal)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(status.uppercased())
+            Text(status.localizedUppercase)
                 .foregroundStyle(PomodoroughTheme.sky)
                 .frame(maxWidth: .infinity)
             LongBreakProgressIndicator(completedToday: completedFocusCount)

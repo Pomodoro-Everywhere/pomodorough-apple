@@ -9,6 +9,13 @@ struct TimerMachineCard: View {
     /// height; inside a vertical ScrollView they collapse to zero.
     var landscapeHeight: CGFloat? = nil
 
+    /// iOS stretch rule: landscape fills the parent-measured bounded height;
+    /// portrait sizes to content inside the vertical ScrollView, where an
+    /// unconstrained .infinity would claim the whole scroll extent.
+    static func iOSCardMaxHeight(for layout: TimerLayout) -> CGFloat? {
+        layout == .landscape ? .infinity : nil
+    }
+
     var body: some View {
         TimerMachineCardContent(
             model: model,
@@ -19,7 +26,7 @@ struct TimerMachineCard: View {
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #else
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: Self.iOSCardMaxHeight(for: layout))
         #endif
         .foregroundStyle(PomodoroughTheme.porcelain)
         .background {
