@@ -14,6 +14,9 @@ struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
 
     var date: Date? { completedAt ?? endedAt }
     var minutes: Int { max(1, Int((plannedDurationMs + 59_999) / 60_000)) }
+    var statusText: String {
+        CanonicalTimer.Status(rawValue: status)?.localizedText ?? status.capitalized
+    }
 
     var isValid: Bool {
         let validTerminalDate: Bool

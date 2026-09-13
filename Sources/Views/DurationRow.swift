@@ -53,8 +53,8 @@ struct DurationRow: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityHint(
             disabled
-                ? "Stop the current timer to change this setting."
-                : "Double tap to select this phase."
+                ? String(localized: "Stop the current timer to change this setting.")
+                : String(localized: "Double tap to select this phase.")
         )
     }
 

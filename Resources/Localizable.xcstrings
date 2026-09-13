@@ -685,6 +685,16 @@
         }
       }
     },
+    "Cancelled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelled"
+          }
+        }
+      }
+    },
     "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified.": {
       "localizations": {
         "en": {
@@ -751,6 +761,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Choose synchronized state"
+          }
+        }
+      }
+    },
+    "Completed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed"
           }
         }
       }
@@ -1001,6 +1021,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Done"
+          }
+        }
+      }
+    },
+    "Double tap to select this phase.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Double tap to select this phase."
           }
         }
       }
@@ -1935,6 +1965,16 @@
         }
       }
     },
+    "Paused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused"
+          }
+        }
+      }
+    },
     "Peer requested a different room.": {
       "localizations": {
         "en": {
@@ -2365,6 +2405,16 @@
         }
       }
     },
+    "Running": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running"
+          }
+        }
+      }
+    },
     "Synchronized State": {
       "localizations": {
         "en": {
@@ -2755,6 +2805,16 @@
         }
       }
     },
+    "Superseded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Superseded"
+          }
+        }
+      }
+    },
     "Switch and remove local data": {
       "localizations": {
         "en": {
@@ -3045,6 +3105,16 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "Time not recorded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time not recorded"
           }
         }
       }

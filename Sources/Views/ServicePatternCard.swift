@@ -26,8 +26,8 @@ struct ServicePatternCard: View {
             Toggle("Auto-start breaks", isOn: $model.autoStartBreaks)
                 .font(.headline)
                 .accessibilityHint(model.isTimerActive
-                    ? "Controls the break after the current focus. Short after focus. Long every fourth completed focus."
-                    : "Short after focus. Long every fourth completed focus.")
+                    ? String(localized: "Controls the break after the current focus. Short after focus. Long every fourth completed focus.")
+                    : String(localized: "Short after focus. Long every fourth completed focus."))
             Text(model.isTimerActive
                 ? "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus."
                 : "Short after focus. Long every fourth completed focus.")

@@ -14,7 +14,7 @@ struct TimerDial: View {
             DialFace(
                 progress: progress,
                 phase: timer.phase,
-                status: timer.status.rawValue.capitalized,
+                status: timer.status.localizedText,
                 timeText: Self.timeText(remaining),
                 layout: layout,
                 minutes: Self.minutes(timer),

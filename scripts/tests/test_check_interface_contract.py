@@ -151,6 +151,41 @@ class LocalizationContractTests(unittest.TestCase):
             [],
         )
 
+    def test_raw_a11y_conditional_literal_is_rejected(self) -> None:
+        # AP110-AP114 gate probe: a ternary/?? branch handing a bare
+        # literal to an a11y/.help position stays English at runtime,
+        # even when the string is catalogued elsewhere. Removing the
+        # probe must turn these red again.
+        bad = [
+            '.accessibilityValue(item.date?.formatted(date: .abbreviated, time: .shortened) ?? "Time not recorded")\n',
+            '.accessibilityHint(model.isSignedIn ? "Sync now" : "Sign in to sync across devices")\n',
+            '.accessibilityHint(disabled ? "Stop the current timer to change this setting." : "Double tap to select this phase.")\n',
+            '.accessibilityHint(\n    disabled\n        ? "Stop the current timer to change this setting."\n        : "Double tap to select this phase."\n    )\n',
+            '.help(model.isSignedIn ? model.syncLabel : "Sign in")\n',
+            '.accessibilityValue(selected ? "Selected" : "Not selected")\n',
+        ]
+        for snippet in bad:
+            self.assertTrue(
+                any(
+                    "raw a11y conditional literal" in failure
+                    for failure in checker.find_raw_a11y_conditional_literals(snippet, "Probe.swift")
+                ),
+                snippet,
+            )
+        good = [
+            '.accessibilityValue(item.date?.formatted(date: .abbreviated, time: .shortened) ?? String(localized: "Time not recorded"))\n',
+            '.accessibilityHint(model.isSignedIn ? String(localized: "Sync now") : String(localized: "Sign in to sync across devices"))\n',
+            '.accessibilityHint(disabled ? String(localized: "Stop the current timer to change this setting.") : String(localized: "Double tap to select this phase."))\n',
+            '.help(model.isSignedIn ? String(localized: "\\(model.syncLabel)") : String(localized: "Sign in"))\n',
+            '.accessibilityLabel(glassID == .primary ? primaryAccessibilityTitle : title)\n',
+        ]
+        for snippet in good:
+            self.assertEqual(
+                checker.find_raw_a11y_conditional_literals(snippet, "Probe.swift"),
+                [],
+                snippet,
+            )
+
     def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
         source = '''
         Picker("Section", selection: $selectedTab) {

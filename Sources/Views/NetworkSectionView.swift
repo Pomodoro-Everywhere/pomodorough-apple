@@ -165,7 +165,7 @@ struct NetworkSectionView: View {
         .buttonStyle(.plain)
         .disabled(mode == .iroh && !model.hasIrohRoom)
         .accessibilityLabel(mode.title)
-        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .accessibilityValue(selected ? String(localized: "Selected") : String(localized: "Not selected"))
         .accessibilityHint(detail)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: selected)
     }

@@ -21,7 +21,7 @@ struct SyncToolbarStatus: View {
             }
         }
         .accessibilityLabel(String(localized: "Sync status, \(model.syncLabel)"))
-        .accessibilityHint(model.isSignedIn ? "Sync now" : "Sign in to sync across devices")
+        .accessibilityHint(model.isSignedIn ? String(localized: "Sync now") : String(localized: "Sign in to sync across devices"))
         .disabled(!model.isSignedIn || model.isSyncing || model.isHistoryResolutionBlocking)
     }
 }

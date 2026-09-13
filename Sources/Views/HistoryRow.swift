@@ -18,7 +18,7 @@ struct HistoryRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack {
-                    Text(item.status.capitalized)
+                    Text(item.statusText)
                     if let date = item.date { Text(date, format: .dateTime.month(.abbreviated).day().hour().minute()) }
                 }
                 .font(.caption)
@@ -32,9 +32,9 @@ struct HistoryRow: View {
                 .background(PomodoroughTheme.platform, in: .rect(cornerRadius: 7))
         }
         .accessibilityRepresentation {
-            Text("\(item.phase.title), \(taskContext), \(item.status), \(item.minutes) minutes")
+            Text("\(item.phase.title), \(taskContext), \(item.statusText), \(item.minutes) minutes")
                 .accessibilityValue(
-                    item.date?.formatted(date: .abbreviated, time: .shortened) ?? "Time not recorded"
+                    item.date?.formatted(date: .abbreviated, time: .shortened) ?? String(localized: "Time not recorded")
                 )
         }
     }

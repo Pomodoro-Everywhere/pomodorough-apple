@@ -267,3 +267,15 @@ struct CanonicalTimer: Codable, Equatable, Sendable {
         max(0, plannedDuration - elapsed(at: date))
     }
 }
+
+extension CanonicalTimer.Status {
+    var localizedText: String {
+        switch self {
+        case .running: String(localized: "Running")
+        case .paused: String(localized: "Paused")
+        case .completed: String(localized: "Completed")
+        case .cancelled: String(localized: "Cancelled")
+        case .superseded: String(localized: "Superseded")
+        }
+    }
+}

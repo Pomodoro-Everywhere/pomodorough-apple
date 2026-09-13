@@ -27,6 +27,16 @@ LOCALIZED_RE = re.compile(
 )
 SWIFT_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"', re.DOTALL)
 CONTROL_BUTTON_RAW_RE = re.compile(r'controlButton\(\s*"', re.DOTALL)
+A11Y_CONDITIONAL_CALL_RE = re.compile(
+    r"\.(?:accessibilityLabel|accessibilityHint|accessibilityValue|help)\s*\("
+)
+LOCALIZED_LITERAL_STRIP_RE = re.compile(
+    r'(?:String|LocalizedStringResource)\s*\(\s*localized\s*:\s*"(?:\\.|[^"\\])*"'
+)
+DEFAULTVALUE_LITERAL_STRIP_RE = re.compile(
+    r'defaultValue\s*:\s*"(?:\\.|[^"\\])*"'
+)
+RAW_A11Y_BRANCH_RE = re.compile(r'[?:]\s*"')
 RAW_SYNC_A11Y_RES = (
     re.compile(r'\.accessibilityLabel\(\s*"Sync status,'),
     re.compile(r'\.accessibilityLabel\(\s*"Sync needs attention\.'),
@@ -396,6 +406,52 @@ def find_raw_control_button_literals(source: str, relative_path: str) -> list[st
     return failures
 
 
+def find_raw_a11y_conditional_literals(source: str, relative_path: str) -> list[str]:
+    """AP110-AP114: runtime ternary/?? branches bypass LocalizedStringKey lookup.
+
+    A call-site `? "Static" : "Static"` or `?? "Fallback"` hands the
+    accessibility/.help position a runtime String, so the contract
+    extractor sees no key and VoiceOver stays English even when each
+    branch is catalogued elsewhere. `String(localized:)` branches start
+    with `String(`, not `"`, so stripping them first leaves only bare
+    `? "` / `: "` branches to flag.
+    """
+    stripped = strip_debug_regions(source)
+    failures: list[str] = []
+    for match in A11Y_CONDITIONAL_CALL_RE.finditer(stripped):
+        depth = 1
+        index = match.end()
+        in_string = False
+        escaped = False
+        while index < len(stripped) and depth:
+            character = stripped[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_string = False
+            elif character == '"':
+                in_string = True
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        inner = stripped[match.end():index]
+        if "?" not in inner:
+            continue
+        scrubbed = LOCALIZED_LITERAL_STRIP_RE.sub("__LOCALIZED__", inner)
+        scrubbed = DEFAULTVALUE_LITERAL_STRIP_RE.sub("__DEFAULT__", scrubbed)
+        if RAW_A11Y_BRANCH_RE.search(scrubbed):
+            line = stripped.count("\n", 0, match.start()) + 1
+            failures.append(f"raw a11y conditional literal: {relative_path}:{line}")
+    return failures
+
+
 def find_raw_sync_a11y_literals(source: str, relative_path: str) -> list[str]:
     """AP109: sync a11y wrappers interpolate without String(localized:).
 
@@ -427,6 +483,7 @@ def validate_source_coverage(root: Path, catalog: dict[str, Any]) -> list[str]:
         failures.extend(find_uncatalogued_computed_literals(source, relative))
         failures.extend(find_raw_control_button_literals(source, relative))
         failures.extend(find_raw_sync_a11y_literals(source, relative))
+        failures.extend(find_raw_a11y_conditional_literals(source, relative))
     return failures
 
 
