@@ -65,6 +65,22 @@ class LocalizationContractTests(unittest.TestCase):
             {"Idle"},
         )
 
+    def test_controlButton_raw_literal_is_rejected(self) -> None:
+        # AP101 gate probe: controlButton titles are user-visible but bypass
+        # VISIBLE_APIS, so a bare literal must fail even when catalogued.
+        # Removing CONTROL_BUTTON_RAW_RE must turn this red again.
+        failures = checker.find_raw_control_button_literals(
+            'controlButton("Finish", symbol: "checkmark")\n', "TimerControls.swift"
+        )
+        self.assertTrue(any("raw controlButton literal" in failure for failure in failures))
+        self.assertEqual(
+            checker.find_raw_control_button_literals(
+                'controlButton(String(localized: "Finish"), symbol: "checkmark")\n',
+                "TimerControls.swift",
+            ),
+            [],
+        )
+
     def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
         source = '''
         Picker("Section", selection: $selectedTab) {

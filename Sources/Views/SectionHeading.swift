@@ -27,7 +27,7 @@ struct SectionHeading: View {
                 .frame(minHeight: 36)
                 .background(PomodoroughTheme.platform, in: .capsule)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title.uppercased()).font(.headline)
+                Text(title.localizedUppercase).font(.headline)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
     }

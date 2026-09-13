@@ -56,13 +56,26 @@ struct TimerScreen: View {
         syncStatusBottom > 0 ? max(0, syncStatusBottom + 16 - globalMinY) : 16
     }
 
+    /// Minimum portrait card height fills the visible content area below
+    /// the toolbar gap, minus the 23pt bottom shadow allowance that
+    /// portraitContent reserves. Floors at zero on short screens. The
+    /// caller passes nil while a conflict banner is shown so the card
+    /// sizes to content instead of stretching past the banner.
+    static func portraitMinimumHeight(availableHeight: CGFloat, topGap: CGFloat) -> CGFloat {
+        max(0, availableHeight - topGap - 23)
+    }
+
     private func portraitContent(compactDial: Bool, availableHeight: CGFloat, topGap: CGFloat) -> some View {
         VStack(spacing: 20) {
             if let conflict = model.conflictMessage {
                 ConflictBanner(message: conflict, dismiss: model.dismissConflict)
             }
-            TimerMachineCard(model: model, layout: .portrait, usesCompactDial: compactDial)
-                .frame(minHeight: model.conflictMessage == nil ? max(0, availableHeight - topGap - 23) : nil)
+            TimerMachineCard(
+                model: model,
+                layout: .portrait,
+                usesCompactDial: compactDial,
+                minimumHeight: model.conflictMessage == nil ? Self.portraitMinimumHeight(availableHeight: availableHeight, topGap: topGap) : nil
+            )
         }
         .padding(.horizontal, 16)
         .padding(.top, topGap)

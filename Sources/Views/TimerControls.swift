@@ -46,8 +46,8 @@ struct TimerControls: View {
             HStack(spacing: 14) {
                 primaryButton(glass: glass)
                 if model.isTimerActive {
-                    controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-                    controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+                    controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
+                    controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
                     if model.hasActiveCompletionAlert {
                         controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
                     }
@@ -60,8 +60,8 @@ struct TimerControls: View {
                 primaryButton(glass: glass)
                 if model.isTimerActive {
                     HStack(spacing: 14) {
-                        controlButton("Finish", symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-                        controlButton("Cancel", symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+                        controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
+                        controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
                     }
                 }
                 if model.isTimerActive {
@@ -103,12 +103,12 @@ struct TimerControls: View {
     @ViewBuilder
     private func primaryButton(glass: Bool) -> some View {
         if model.canonicalTimer?.status == .running {
-            controlButton("Pause", symbol: "pause.fill", glassID: .primary, prominent: true, glass: glass) { model.pause() }
+            controlButton(String(localized: "Pause"), symbol: "pause.fill", glassID: .primary, prominent: true, glass: glass) { model.pause() }
         } else if model.canonicalTimer?.status == .paused {
-            controlButton("Resume", symbol: "play.fill", glassID: .primary, prominent: true, glass: glass) { model.resume() }
+            controlButton(String(localized: "Resume"), symbol: "play.fill", glassID: .primary, prominent: true, glass: glass) { model.resume() }
         } else {
             controlButton(
-                "Start \(model.selectedPhase.title.lowercased())",
+                String(localized: "Start \(model.selectedPhase.title.lowercased())"),
                 symbol: "play.fill",
                 glassID: .primary,
                 prominent: true,

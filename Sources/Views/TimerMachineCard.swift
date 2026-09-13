@@ -4,6 +4,7 @@ struct TimerMachineCard: View {
     let model: AppModel
     let layout: TimerLayout
     var usesCompactDial = false
+    var minimumHeight: CGFloat? = nil
     /// Fixed content height for the iOS landscape card, measured by the
     /// parent from available geometry. GeometryReader dials need a bounded
     /// height; inside a vertical ScrollView they collapse to zero.
@@ -26,7 +27,7 @@ struct TimerMachineCard: View {
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #else
-        .frame(maxWidth: .infinity, maxHeight: Self.iOSCardMaxHeight(for: layout))
+        .frame(maxWidth: .infinity, minHeight: minimumHeight, maxHeight: Self.iOSCardMaxHeight(for: layout))
         #endif
         .foregroundStyle(PomodoroughTheme.porcelain)
         .background {
@@ -149,11 +150,14 @@ private struct TimerMachineIOSPortraitCard: View {
     var usesCompactDial = false
 
     var body: some View {
-        VStack(spacing: usesCompactDial ? 8 : 14) {
+        VStack(spacing: 0) {
             TimerMachineDialSection(model: model, layout: layout)
                 .frame(width: usesCompactDial ? 270 : nil)
-            TimerTaskPicker(model: model, layout: layout)
-            TimerControls(model: model, layout: layout, compact: usesCompactDial)
+            Spacer(minLength: usesCompactDial ? 8 : 14)
+            VStack(spacing: usesCompactDial ? 8 : 14) {
+                TimerTaskPicker(model: model, layout: layout)
+                TimerControls(model: model, layout: layout, compact: usesCompactDial)
+            }
         }
         .padding(usesCompactDial ? 14 : 16)
     }

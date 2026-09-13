@@ -15,7 +15,7 @@ struct SyncToolbarStatus: View {
                         .foregroundStyle(model.conflictMessage == nil && !model.isHistoryResolutionBlocking ? PomodoroughTheme.platform : PomodoroughTheme.signal)
                         .accessibilityHidden(true)
                 }
-                Text(model.syncLabel.uppercased())
+                Text(model.syncLabel.localizedUppercase)
                     .font(.caption2.monospaced().bold())
                     .lineLimit(1)
             }
@@ -23,7 +23,6 @@ struct SyncToolbarStatus: View {
         .accessibilityLabel("Sync status, \(model.syncLabel)")
         .accessibilityHint(model.isSignedIn ? "Sync now" : "Sign in to sync across devices")
         .disabled(!model.isSignedIn || model.isSyncing || model.isHistoryResolutionBlocking)
-        .accessibilityHidden(true)
     }
 }
 

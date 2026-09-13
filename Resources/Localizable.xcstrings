@@ -1095,6 +1095,16 @@
         }
       }
     },
+    "Finish": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish"
+          }
+        }
+      }
+    },
     "Finish a focus timer to see its time here.": {
       "localizations": {
         "en": {

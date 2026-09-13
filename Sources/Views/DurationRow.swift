@@ -34,7 +34,7 @@ struct DurationRow: View {
                     .fill(selected ? PomodoroughTheme.signal : PomodoroughTheme.steel)
                     .frame(width: 5)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(phase.routeLabel.uppercased())
+                    Text(phase.routeLabel.localizedUppercase)
                         .font(.caption2.monospaced().bold())
                         .foregroundStyle(selected ? PomodoroughTheme.ticket : .secondary)
                     Text(phase.title).font(.headline)

@@ -26,6 +26,7 @@ LOCALIZED_RE = re.compile(
     re.DOTALL,
 )
 SWIFT_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"', re.DOTALL)
+CONTROL_BUTTON_RAW_RE = re.compile(r'controlButton\(\s*"')
 PRINTF_RE = re.compile(r"%(?:(\d+)\$)?(?:[-+#0 ']*\d*(?:\.\d+)?)?(?:hh|h|ll|l|q|z|t|j)?(arg|[@diuoxXfFeEgGaAcCsSp])")
 USER_VISIBLE_NAME_RE = re.compile(
     r"(?:title|label|message|description|detail|hint|status|summary|accessibility|spoken|compact|text)$",
@@ -380,6 +381,15 @@ def find_uncatalogued_computed_literals(source: str, relative_path: str) -> list
     return failures
 
 
+def find_raw_control_button_literals(source: str, relative_path: str) -> list[str]:
+    """AP101: controlButton titles are user-visible but bypass VISIBLE_APIS."""
+    failures: list[str] = []
+    for index, line in enumerate(strip_debug_regions(source).splitlines(), start=1):
+        if CONTROL_BUTTON_RAW_RE.search(line):
+            failures.append(f"raw controlButton literal: {relative_path}:{index}")
+    return failures
+
+
 def validate_source_coverage(root: Path, catalog: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     strings = catalog.get("strings", {})
@@ -391,6 +401,7 @@ def validate_source_coverage(root: Path, catalog: dict[str, Any]) -> list[str]:
         for key in sorted(extract_localizable_keys(source) - catalog_keys):
             failures.append(f"uncatalogued production-visible key: {relative}: {key}")
         failures.extend(find_uncatalogued_computed_literals(source, relative))
+        failures.extend(find_raw_control_button_literals(source, relative))
     return failures
 
 

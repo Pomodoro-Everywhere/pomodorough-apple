@@ -1004,6 +1004,12 @@
         "value": "‏⟦FOCUS TASK⟧"
       }
     },
+    "Finish": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Finish⟧"
+      }
+    },
     "Finish a focus timer to see its time here.": {
       "stringUnit": {
         "state": "translated",
