@@ -1,6 +1,10 @@
 import Foundation
 
 enum TaskTimeText {
+    static func shortMinutes(_ minutes: Int) -> String {
+        String(localized: "\(minutes) min")
+    }
+
     static func compact(_ milliseconds: Int64) -> String {
         let minutes = Int(milliseconds / 60_000)
         guard minutes >= 60 else {

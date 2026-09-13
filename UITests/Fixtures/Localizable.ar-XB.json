@@ -74,12 +74,6 @@
         "value": "‏⟦%lld⟧"
       }
     },
-    "%lld MIN": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%lld MIN⟧"
-      }
-    },
     "%lld completed": {
       "variations": {
         "plural": {
@@ -1616,10 +1610,10 @@
         "value": "‏⟦Queued local changes will be merged into account data. Conflicts or rejected changes are possible.⟧"
       }
     },
-    "ROOM %@": {
+    "Room %@": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦ROOM %@⟧"
+        "value": "‏⟦Room %@⟧"
       }
     },
     "ROOM INVITE": {
@@ -1772,10 +1766,10 @@
         "value": "‏⟦Rotating room⟧"
       }
     },
-    "SYNCHRONIZED STATE": {
+    "Synchronized State": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦SYNCHRONIZED STATE⟧"
+        "value": "‏⟦Synchronized State⟧"
       }
     },
     "Saved Iroh room data could not be decoded. Original file was left unchanged.": {

@@ -73,16 +73,6 @@
         }
       }
     },
-    "%lld MIN": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld MIN"
-          }
-        }
-      }
-    },
     "%lld completed": {
       "localizations": {
         "en": {
@@ -2115,12 +2105,12 @@
         }
       }
     },
-    "ROOM %@": {
+    "Room %@": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "ROOM %@"
+            "value": "Room %@"
           }
         }
       }
@@ -2375,12 +2365,12 @@
         }
       }
     },
-    "SYNCHRONIZED STATE": {
+    "Synchronized State": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "SYNCHRONIZED STATE"
+            "value": "Synchronized State"
           }
         }
       }

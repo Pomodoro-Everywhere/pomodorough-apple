@@ -49,7 +49,7 @@ struct HistoryResolutionView: View {
     private var chooser: some View {
         VStack(alignment: .leading, spacing: 16) {
             Group {
-                Text("SYNCHRONIZED STATE")
+                Text(String(localized: "Synchronized State").localizedUppercase)
                     .font(.caption.monospaced().bold())
                     .tracking(1.4)
                     .foregroundStyle(PomodoroughTheme.ticket)

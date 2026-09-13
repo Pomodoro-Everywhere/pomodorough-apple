@@ -97,6 +97,60 @@ class LocalizationContractTests(unittest.TestCase):
             [],
         )
 
+    def test_raw_sync_a11y_literal_is_rejected(self) -> None:
+        # AP109 gate probe: sync a11y wrappers interpolate without
+        # String(localized:), so the spoken wrapper stays English even
+        # when the inner label is localized. Removing the probe must
+        # turn these red again.
+        self.assertEqual(
+            checker.find_raw_sync_a11y_literals(
+                '.accessibilityLabel(String(localized: "Sync status, \\(label)"))\n',
+                "SyncToolbarStatus.swift",
+            ),
+            [],
+        )
+        self.assertTrue(
+            any(
+                "raw sync a11y literal" in failure
+                for failure in checker.find_raw_sync_a11y_literals(
+                    '.accessibilityLabel("Sync status, \\(label)")\n',
+                    "SyncToolbarStatus.swift",
+                )
+            )
+        )
+        self.assertTrue(
+            any(
+                "raw sync a11y literal" in failure
+                for failure in checker.find_raw_sync_a11y_literals(
+                    '.accessibilityLabel("Sync needs attention. \\(message). Dismiss")\n',
+                    "ConflictBanner.swift",
+                )
+            )
+        )
+        self.assertEqual(
+            checker.find_raw_sync_a11y_literals(
+                '.accessibilityLabel(String(localized: "Sync needs attention. \\(message). Dismiss"))\n',
+                "ConflictBanner.swift",
+            ),
+            [],
+        )
+        self.assertTrue(
+            any(
+                "raw sync a11y literal" in failure
+                for failure in checker.find_raw_sync_a11y_literals(
+                    '.accessibilityLabel(model.isSignedIn ? "Account, \\(label)" : "Sign in")\n',
+                    "AccountSyncToolbarButton.swift",
+                )
+            )
+        )
+        self.assertEqual(
+            checker.find_raw_sync_a11y_literals(
+                '.accessibilityLabel(model.isSignedIn ? String(localized: "Account, \\(label)") : String(localized: "Sign in"))\n',
+                "AccountSyncToolbarButton.swift",
+            ),
+            [],
+        )
+
     def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
         source = '''
         Picker("Section", selection: $selectedTab) {

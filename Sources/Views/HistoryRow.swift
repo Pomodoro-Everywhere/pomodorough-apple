@@ -25,7 +25,7 @@ struct HistoryRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("\(item.minutes) MIN")
+            Text(TaskTimeText.shortMinutes(item.minutes).localizedUppercase)
                 .font(.caption.monospaced().bold())
                 .foregroundStyle(PomodoroughTheme.porcelain)
                 .padding(8)

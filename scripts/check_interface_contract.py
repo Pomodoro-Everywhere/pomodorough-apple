@@ -27,6 +27,11 @@ LOCALIZED_RE = re.compile(
 )
 SWIFT_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"', re.DOTALL)
 CONTROL_BUTTON_RAW_RE = re.compile(r'controlButton\(\s*"', re.DOTALL)
+RAW_SYNC_A11Y_RES = (
+    re.compile(r'\.accessibilityLabel\(\s*"Sync status,'),
+    re.compile(r'\.accessibilityLabel\(\s*"Sync needs attention\.'),
+    re.compile(r'\?\s*"Account,'),
+)
 PRINTF_RE = re.compile(r"%(?:(\d+)\$)?(?:[-+#0 ']*\d*(?:\.\d+)?)?(?:hh|h|ll|l|q|z|t|j)?(arg|[@diuoxXfFeEgGaAcCsSp])")
 USER_VISIBLE_NAME_RE = re.compile(
     r"(?:title|label|message|description|detail|hint|status|summary|accessibility|spoken|compact|text)$",
@@ -391,6 +396,24 @@ def find_raw_control_button_literals(source: str, relative_path: str) -> list[st
     return failures
 
 
+def find_raw_sync_a11y_literals(source: str, relative_path: str) -> list[str]:
+    """AP109: sync a11y wrappers interpolate without String(localized:).
+
+    Bare `.accessibilityLabel("Sync status, \\(...")`,
+    `.accessibilityLabel("Sync needs attention. \\(...")`, and ternary
+    `? "Account, \\(...` stay English at runtime even when the inner label
+    is localized. String(localized:) forms start with `String(`, not `"`,
+    so they do not match.
+    """
+    stripped = strip_debug_regions(source)
+    failures: list[str] = []
+    for pattern in RAW_SYNC_A11Y_RES:
+        for match in pattern.finditer(stripped):
+            line = stripped.count("\n", 0, match.start()) + 1
+            failures.append(f"raw sync a11y literal: {relative_path}:{line}")
+    return failures
+
+
 def validate_source_coverage(root: Path, catalog: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     strings = catalog.get("strings", {})
@@ -403,6 +426,7 @@ def validate_source_coverage(root: Path, catalog: dict[str, Any]) -> list[str]:
             failures.append(f"uncatalogued production-visible key: {relative}: {key}")
         failures.extend(find_uncatalogued_computed_literals(source, relative))
         failures.extend(find_raw_control_button_literals(source, relative))
+        failures.extend(find_raw_sync_a11y_literals(source, relative))
     return failures
 
 

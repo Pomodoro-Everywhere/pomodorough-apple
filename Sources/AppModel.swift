@@ -596,7 +596,8 @@ final class AppModel {
     var longBreakProgress: Int {
         completedFocusCountToday == 0 ? 0 : ((completedFocusCountToday - 1) % 4) + 1
     }
-    var deviceMark: String { String(timerState.deviceId.suffix(4)).uppercased() }
+    // Hex device suffix; localizedUppercase keeps hex casing locale-aware.
+    var deviceMark: String { String(timerState.deviceId.suffix(4)).localizedUppercase }
 
     var syncLabel: String {
         if replicationMode == .iroh {

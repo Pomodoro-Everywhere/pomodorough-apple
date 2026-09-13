@@ -61,7 +61,7 @@ struct DurationRow: View {
     private var durationControls: some View {
         HStack(spacing: 0) {
             StepButton(title: "Reduce \(phase.title) duration", symbol: "minus") { changeMinutes(minutes - 1) }
-            Text("\(minutes) min")
+            Text(TaskTimeText.shortMinutes(minutes))
                 .font(.callout.monospaced().bold())
                 .frame(minWidth: 66)
                 .accessibilityLabel("\(phase.title) duration")

@@ -20,7 +20,7 @@ struct AccountSyncToolbarButton: View {
             }
         }
         .help(model.isSignedIn ? model.syncLabel : "Sign in")
-        .accessibilityLabel(model.isSignedIn ? "Account, \(model.syncLabel)" : "Sign in")
+        .accessibilityLabel(model.isSignedIn ? String(localized: "Account, \(model.syncLabel)") : String(localized: "Sign in"))
     }
 
     private var statusSymbol: String {

@@ -186,7 +186,7 @@ struct NetworkSectionView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(room.roomName ?? "Unnamed room")
                             .font(.headline)
-                        Text("ROOM \(String(room.roomID.prefix(8)).uppercased())")
+                        Text(String(localized: "Room \(room.roomID.prefix(8))").localizedUppercase)
                             .font(.caption2.monospaced().bold())
                             .foregroundStyle(PomodoroughTheme.steel)
                     }

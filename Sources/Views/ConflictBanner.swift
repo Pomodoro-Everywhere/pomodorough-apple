@@ -16,7 +16,7 @@ struct ConflictBanner: View {
             Spacer()
             Button("Dismiss", systemImage: "xmark", action: dismiss)
                 .labelStyle(.iconOnly)
-                .accessibilityLabel("Sync needs attention. \(message). Dismiss")
+                .accessibilityLabel(String(localized: "Sync needs attention. \(message). Dismiss"))
         }
         .padding()
         .foregroundStyle(.white)
