@@ -81,6 +81,22 @@ class LocalizationContractTests(unittest.TestCase):
             [],
         )
 
+    def test_controlButton_multiline_raw_literal_is_rejected(self) -> None:
+        # AP101 follow-up: the per-line gate missed controlButton(\n"..."
+        # (parent Start button). The DOTALL full-source search must flag it.
+        failures = checker.find_raw_control_button_literals(
+            'controlButton(\n                "Start foo",\n                symbol: "play.fill",\n',
+            "TimerControls.swift",
+        )
+        self.assertTrue(any("raw controlButton literal" in failure for failure in failures))
+        self.assertEqual(
+            checker.find_raw_control_button_literals(
+                'controlButton(\n                String(localized: "Start foo"),\n                symbol: "play.fill",\n',
+                "TimerControls.swift",
+            ),
+            [],
+        )
+
     def test_tagged_primary_destination_requires_matching_text_and_tab(self) -> None:
         source = '''
         Picker("Section", selection: $selectedTab) {

@@ -26,7 +26,7 @@ LOCALIZED_RE = re.compile(
     re.DOTALL,
 )
 SWIFT_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"', re.DOTALL)
-CONTROL_BUTTON_RAW_RE = re.compile(r'controlButton\(\s*"')
+CONTROL_BUTTON_RAW_RE = re.compile(r'controlButton\(\s*"', re.DOTALL)
 PRINTF_RE = re.compile(r"%(?:(\d+)\$)?(?:[-+#0 ']*\d*(?:\.\d+)?)?(?:hh|h|ll|l|q|z|t|j)?(arg|[@diuoxXfFeEgGaAcCsSp])")
 USER_VISIBLE_NAME_RE = re.compile(
     r"(?:title|label|message|description|detail|hint|status|summary|accessibility|spoken|compact|text)$",
@@ -383,10 +383,11 @@ def find_uncatalogued_computed_literals(source: str, relative_path: str) -> list
 
 def find_raw_control_button_literals(source: str, relative_path: str) -> list[str]:
     """AP101: controlButton titles are user-visible but bypass VISIBLE_APIS."""
+    stripped = strip_debug_regions(source)
     failures: list[str] = []
-    for index, line in enumerate(strip_debug_regions(source).splitlines(), start=1):
-        if CONTROL_BUTTON_RAW_RE.search(line):
-            failures.append(f"raw controlButton literal: {relative_path}:{index}")
+    for match in CONTROL_BUTTON_RAW_RE.finditer(stripped):
+        line = stripped.count("\n", 0, match.start()) + 1
+        failures.append(f"raw controlButton literal: {relative_path}:{line}")
     return failures
 
 
@@ -457,6 +458,17 @@ def main() -> int:
     require(guarantee in account, "persistent completion guarantee disclosure missing", failures)
     require("https://pomodorough.egigoka.me/privacy" in account,
             "contractual privacy policy link missing", failures)
+
+    timer_screen = read("Sources/Views/TimerScreen.swift")
+    timer_card = read("Sources/Views/TimerMachineCard.swift")
+    require(
+        "model.conflictMessage == nil ? Self.portraitMinimumHeight" in timer_screen,
+        "portrait conflict banner must defer to a content-sized card", failures,
+    )
+    require(
+        "minHeight: minimumHeight" in timer_card,
+        "portrait card must plumb minimumHeight", failures,
+    )
 
     pbx = read("Pomodorough.xcodeproj/project.pbxproj")
     require("Localizable.xcstrings" in pbx, "localization catalog is not in the generated project", failures)

@@ -32,12 +32,8 @@ struct TimerCardLayoutPinningTests {
     @Test func portraitMinimumHeightDefersToConflictBanner() {
         // Caller contract: portraitContent passes nil while a conflict
         // banner is shown so the card sizes to content; the helper covers
-        // the stretch branch only.
-        let conflict: String? = "Immutable-ID conflict"
-        let minimum: CGFloat? = conflict == nil
-            ? TimerScreen.portraitMinimumHeight(availableHeight: 800, topGap: 16)
-            : nil
-        #expect(minimum == nil)
+        // the stretch branch only (caller mapping is pinned by
+        // check_interface_contract.py).
         #expect(TimerScreen.portraitMinimumHeight(availableHeight: 800, topGap: 16) == 761)
     }
 
