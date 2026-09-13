@@ -37,6 +37,8 @@ DEFAULTVALUE_LITERAL_STRIP_RE = re.compile(
     r'defaultValue\s*:\s*"(?:\\.|[^"\\])*"'
 )
 RAW_A11Y_BRANCH_RE = re.compile(r'[?:]\s*"')
+TEXT_CONDITIONAL_CALL_RE = re.compile(r"\bText\s*\(")
+RAW_TEXT_BRANCH_RE = re.compile(r'[?:]\s*"[^"]')
 RAW_SYNC_A11Y_RES = (
     re.compile(r'\.accessibilityLabel\(\s*"Sync status,'),
     re.compile(r'\.accessibilityLabel\(\s*"Sync needs attention\.'),
@@ -406,19 +408,9 @@ def find_raw_control_button_literals(source: str, relative_path: str) -> list[st
     return failures
 
 
-def find_raw_a11y_conditional_literals(source: str, relative_path: str) -> list[str]:
-    """AP110-AP114: runtime ternary/?? branches bypass LocalizedStringKey lookup.
-
-    A call-site `? "Static" : "Static"` or `?? "Fallback"` hands the
-    accessibility/.help position a runtime String, so the contract
-    extractor sees no key and VoiceOver stays English even when each
-    branch is catalogued elsewhere. `String(localized:)` branches start
-    with `String(`, not `"`, so stripping them first leaves only bare
-    `? "` / `: "` branches to flag.
-    """
-    stripped = strip_debug_regions(source)
-    failures: list[str] = []
-    for match in A11Y_CONDITIONAL_CALL_RE.finditer(stripped):
+def iter_conditional_inners(stripped: str, call_re: Any) -> Any:
+    """Yield (line, inner) for each call matched by call_re."""
+    for match in call_re.finditer(stripped):
         depth = 1
         index = match.end()
         in_string = False
@@ -442,13 +434,49 @@ def find_raw_a11y_conditional_literals(source: str, relative_path: str) -> list[
                     break
             index += 1
         inner = stripped[match.end():index]
+        line = stripped.count("\n", 0, match.start()) + 1
+        yield line, inner
+
+
+def find_raw_a11y_conditional_literals(source: str, relative_path: str) -> list[str]:
+    """AP110-AP114: runtime ternary/?? branches bypass LocalizedStringKey lookup.
+
+    A call-site `? "Static" : "Static"` or `?? "Fallback"` hands the
+    accessibility/.help position a runtime String, so the contract
+    extractor sees no key and VoiceOver stays English even when each
+    branch is catalogued elsewhere. `String(localized:)` branches start
+    with `String(`, not `"`, so stripping them first leaves only bare
+    `? "` / `: "` branches to flag.
+    """
+    stripped = strip_debug_regions(source)
+    failures: list[str] = []
+    for line, inner in iter_conditional_inners(stripped, A11Y_CONDITIONAL_CALL_RE):
         if "?" not in inner:
             continue
         scrubbed = LOCALIZED_LITERAL_STRIP_RE.sub("__LOCALIZED__", inner)
         scrubbed = DEFAULTVALUE_LITERAL_STRIP_RE.sub("__DEFAULT__", scrubbed)
         if RAW_A11Y_BRANCH_RE.search(scrubbed):
-            line = stripped.count("\n", 0, match.start()) + 1
             failures.append(f"raw a11y conditional literal: {relative_path}:{line}")
+    return failures
+
+
+def find_raw_text_conditional_literals(source: str, relative_path: str) -> list[str]:
+    """AP115: visible Text ternary/?? branches bypass catalog extraction.
+
+    `Text(cond ? "A" : "B")` hands SwiftUI a runtime String, so the
+    extractor sees no key and on-device text stays English even when
+    each branch is catalogued elsewhere. Empty `?? ""` fallbacks are
+    layout placeholders, not user-visible copy, so require non-empty.
+    """
+    stripped = strip_debug_regions(source)
+    failures: list[str] = []
+    for line, inner in iter_conditional_inners(stripped, TEXT_CONDITIONAL_CALL_RE):
+        if "?" not in inner:
+            continue
+        scrubbed = LOCALIZED_LITERAL_STRIP_RE.sub("__LOCALIZED__", inner)
+        scrubbed = DEFAULTVALUE_LITERAL_STRIP_RE.sub("__DEFAULT__", scrubbed)
+        if RAW_TEXT_BRANCH_RE.search(scrubbed):
+            failures.append(f"raw Text conditional literal: {relative_path}:{line}")
     return failures
 
 
@@ -484,6 +512,7 @@ def validate_source_coverage(root: Path, catalog: dict[str, Any]) -> list[str]:
         failures.extend(find_raw_control_button_literals(source, relative))
         failures.extend(find_raw_sync_a11y_literals(source, relative))
         failures.extend(find_raw_a11y_conditional_literals(source, relative))
+        failures.extend(find_raw_text_conditional_literals(source, relative))
     return failures
 
 

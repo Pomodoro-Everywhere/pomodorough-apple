@@ -1796,6 +1796,12 @@
         "value": "‏⟦Running⟧"
       }
     },
+    "Saved": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Saved⟧"
+      }
+    },
     "Synchronized State": {
       "stringUnit": {
         "state": "translated",
@@ -2328,6 +2334,18 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Unavailable⟧"
+      }
+    },
+    "Unknown error": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Unknown error⟧"
+      }
+    },
+    "Unnamed room": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Unnamed room⟧"
       }
     },
     "Validate and join": {

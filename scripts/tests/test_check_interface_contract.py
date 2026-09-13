@@ -176,12 +176,45 @@ class LocalizationContractTests(unittest.TestCase):
             '.accessibilityValue(item.date?.formatted(date: .abbreviated, time: .shortened) ?? String(localized: "Time not recorded"))\n',
             '.accessibilityHint(model.isSignedIn ? String(localized: "Sync now") : String(localized: "Sign in to sync across devices"))\n',
             '.accessibilityHint(disabled ? String(localized: "Stop the current timer to change this setting.") : String(localized: "Double tap to select this phase."))\n',
-            '.help(model.isSignedIn ? String(localized: "\\(model.syncLabel)") : String(localized: "Sign in"))\n',
+            '.help(model.isSignedIn ? model.syncLabel : String(localized: "Sign in"))\n',
             '.accessibilityLabel(glassID == .primary ? primaryAccessibilityTitle : title)\n',
         ]
         for snippet in good:
             self.assertEqual(
                 checker.find_raw_a11y_conditional_literals(snippet, "Probe.swift"),
+                [],
+                snippet,
+            )
+
+    def test_raw_text_conditional_literal_is_rejected(self) -> None:
+        # AP115 gate probe: a ternary/?? branch handing a bare
+        # literal to Text stays English at runtime, even when the
+        # string is catalogued elsewhere. Removing the probe must
+        # turn these red again.
+        bad = [
+            'Text(model.isTimerActive ? "Starts the break." : "Short after focus.")\n',
+            'Text(room.roomName ?? "Unnamed room")\n',
+            'Text(model.replicationMode == .iroh ? model.irohStatusLabel : "Saved")\n',
+            'Text(isCreating.wrappedValue ? "Rotating room" : "Create replacement room")\n',
+            'Text(model.errorMessage ?? "Unknown error")\n',
+        ]
+        for snippet in bad:
+            self.assertTrue(
+                any(
+                    "raw Text conditional literal" in failure
+                    for failure in checker.find_raw_text_conditional_literals(snippet, "Probe.swift")
+                ),
+                snippet,
+            )
+        good = [
+            'Text(model.isTimerActive ? String(localized: "Starts the break.") : String(localized: "Short after focus."))\n',
+            'Text(room.roomName ?? String(localized: "Unnamed room"))\n',
+            'Text(model.snapshotLoadFailure?.localizedDescription ?? "")\n',
+            'Text("Static title")\n',
+        ]
+        for snippet in good:
+            self.assertEqual(
+                checker.find_raw_text_conditional_literals(snippet, "Probe.swift"),
                 [],
                 snippet,
             )

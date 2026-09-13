@@ -184,14 +184,14 @@ struct NetworkSectionView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(room.roomName ?? "Unnamed room")
+                        Text(room.roomName ?? String(localized: "Unnamed room"))
                             .font(.headline)
                         Text(String(localized: "Room \(room.roomID.prefix(8))").localizedUppercase)
                             .font(.caption2.monospaced().bold())
                             .foregroundStyle(PomodoroughTheme.steel)
                     }
                     Spacer()
-                    Text(model.replicationMode == .iroh ? model.irohStatusLabel : "Saved")
+                    Text(model.replicationMode == .iroh ? model.irohStatusLabel : String(localized: "Saved"))
                         .font(.caption.monospaced().bold())
                         .foregroundStyle(room.conflict == nil ? PomodoroughTheme.mint : PomodoroughTheme.signal)
                 }
@@ -270,9 +270,9 @@ struct NetworkSectionView: View {
             } label: {
                 Label {
                     if replacingConflict {
-                        Text(isCreating.wrappedValue ? "Rotating room" : "Create replacement room")
+                        Text(isCreating.wrappedValue ? String(localized: "Rotating room") : String(localized: "Create replacement room"))
                     } else {
-                        Text(isCreating.wrappedValue ? "Creating room" : "Create Iroh room")
+                        Text(isCreating.wrappedValue ? String(localized: "Creating room") : String(localized: "Create Iroh room"))
                     }
                 } icon: {
                     Image(systemName: replacingConflict ? "arrow.triangle.2.circlepath" : "plus.circle.fill")

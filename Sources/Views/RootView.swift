@@ -29,7 +29,7 @@ struct RootView: View {
         .alert("Pomodorough", isPresented: errorPresented) {
             Button("OK") { model.errorMessage = nil }
         } message: {
-            Text(model.errorMessage ?? "Unknown error")
+            Text(model.errorMessage ?? String(localized: "Unknown error"))
         }
         .sheet(isPresented: historyResolutionPresented) {
             HistoryResolutionView(model: model)

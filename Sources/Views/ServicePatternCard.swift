@@ -29,8 +29,8 @@ struct ServicePatternCard: View {
                     ? String(localized: "Controls the break after the current focus. Short after focus. Long every fourth completed focus.")
                     : String(localized: "Short after focus. Long every fourth completed focus."))
             Text(model.isTimerActive
-                ? "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus."
-                : "Short after focus. Long every fourth completed focus.")
+                ? String(localized: "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus.")
+                : String(localized: "Short after focus. Long every fourth completed focus."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
