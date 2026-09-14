@@ -141,14 +141,11 @@ struct TimerStandByWidget: Widget {
         .supportedFamilies(TimerStandByWidget.families)
     }
 
-    /// iOS 27 adds the tall portrait `.systemExtraLargePortrait` family;
-    /// older systems keep the four classic families.
+    /// `.systemExtraLargePortrait` is unavailable in iOS in the current
+    /// SDK, so only the four classic families ship. `portraitLayout`
+    /// below is kept for a future SDK that vends the tall portrait family.
     static var families: [WidgetFamily] {
-        if #available(iOS 27, *) {
-            [.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge, .systemExtraLargePortrait]
-        } else {
-            [.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge]
-        }
+        [.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge]
     }
 }
 
@@ -162,20 +159,16 @@ private struct TimerWidgetView: View {
 
     var body: some View {
         Group {
-            if #available(iOS 27, *), family == .systemExtraLargePortrait {
-                portraitLayout
-            } else {
-                switch family {
-                case .systemMedium:
-                    mediumLayout
-                case .systemLarge:
-                    // Same full-tile circular dial as the 2x2 small widget.
-                    smallLayout
-                case .systemExtraLarge:
-                    extraLargeLayout
-                default:
-                    smallLayout
-                }
+            switch family {
+            case .systemMedium:
+                mediumLayout
+            case .systemLarge:
+                // Same full-tile circular dial as the 2x2 small widget.
+                smallLayout
+            case .systemExtraLarge:
+                extraLargeLayout
+            default:
+                smallLayout
             }
         }
     }
@@ -244,8 +237,9 @@ private struct TimerWidgetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Tall 4x6 portrait tile (iOS 27+): full circular dial up top taking
+    /// Tall 4x6 portrait tile: full circular dial up top taking
     /// all leftover height, status lines plus full-width toggle below.
+    /// Unused until an iOS SDK vends the tall portrait family.
     private var portraitLayout: some View {
         VStack {
             TimerDialView(display: display)
@@ -580,13 +574,6 @@ private func widgetPreviewEntry(
 }
 
 #Preview(as: .systemExtraLarge) {
-    TimerStandByWidget()
-} timeline: {
-    widgetPreviewEntry()
-}
-
-@available(iOS 27, *)
-#Preview(as: .systemExtraLargePortrait) {
     TimerStandByWidget()
 } timeline: {
     widgetPreviewEntry()
