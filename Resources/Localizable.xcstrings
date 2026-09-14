@@ -2,13 +2,34 @@
   "sourceLanguage" : "en",
   "strings" : {
     "%@" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@"
+          }
+        }
+      }
     },
     "%@ arrivals" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ arrivals"
+          }
+        }
+      }
     },
     "%@ completed" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ completed"
+          }
+        }
+      }
     },
     "%@ duration" : {
       "localizations" : {
@@ -21,7 +42,14 @@
       }
     },
     "%@ finished pomodoros" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ finished pomodoros"
+          }
+        }
+      }
     },
     "%@ remaining, %@" : {
       "localizations" : {
@@ -915,7 +943,14 @@
       }
     },
     "Completed focus: %@" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus: %@"
+          }
+        }
+      }
     },
     "Completed focus: %arg" : {
       "localizations" : {
@@ -3401,7 +3436,14 @@
       }
     },
     "This will discard %@ changes still waiting to sync." : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This will discard %@ changes still waiting to sync."
+          }
+        }
+      }
     },
     "This will discard %lld changes still waiting to sync." : {
       "localizations" : {

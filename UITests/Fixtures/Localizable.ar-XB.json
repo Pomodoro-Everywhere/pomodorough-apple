@@ -2719,6 +2719,54 @@
         "state": "translated",
         "value": "‏⟦Room secret cleanup failed: %@⟧"
       }
+    },
+    "%@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@⟧"
+      }
+    },
+    "%@ arrivals": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ arrivals⟧"
+      }
+    },
+    "%@ completed": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ completed⟧"
+      }
+    },
+    "%@ finished pomodoros": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ finished pomodoros⟧"
+      }
+    },
+    "%@, %@, %@, %@ minutes": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@, %@, %@, %@ minutes⟧"
+      }
+    },
+    "Completed focus: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Completed focus: %@⟧"
+      }
+    },
+    "This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ.⟧"
+      }
+    },
+    "This will discard %@ changes still waiting to sync.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This will discard %@ changes still waiting to sync.⟧"
+      }
     }
   },
   "version": 1
