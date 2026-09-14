@@ -88,7 +88,6 @@ final class AppModel {
     private var projectedSelectedTaskID: UUID?
     @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private var foregroundSyncPending = false
-    @ObservationIgnored private var lastForegroundSyncAt: Date?
     @ObservationIgnored private lazy var roomReplicationController = makeRoomReplicationController()
     @ObservationIgnored let watchSync = WatchSyncService()
 
@@ -548,9 +547,12 @@ final class AppModel {
         return isSignedIn || timerState.cachedUser != nil || timerState.bootstrapUser != nil
     }
 
-    // Test seam for background stale-alarm regressions.
+    // Test seam for background stale-alarm regressions. DEBUG-only so the
+    // production API does not widen for tests (AP121).
+#if DEBUG
     var testForegroundSyncPending: Bool { foregroundSyncPending }
     var testNeedsForegroundSync: Bool { needsForegroundSync }
+#endif
 
     var hasActiveCompletionAlert: Bool { completionAlertTimerID != nil }
 
@@ -1390,7 +1392,9 @@ final class AppModel {
     func finish(at explicitDate: Date? = nil) {
         guard !isWorkspaceMutationBlocked else { return }
         if foregroundSyncPending, needsForegroundSync {
-            errorMessage = String(localized: "Timer changed on another device. Syncing before finish.")
+            // AP120: no sync result exists yet, so the copy must not claim
+            // another device changed the timer — only that a sync gates finish.
+            errorMessage = String(localized: "Syncing latest state before finish.")
             return
         }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
@@ -1917,7 +1921,6 @@ final class AppModel {
         applyCoordinatorPublication(accountSessionCoordinator.markSyncSucceeded())
         errorMessage = nil
         foregroundSyncPending = false
-        lastForegroundSyncAt = receivedAt
     }
 
     private func handleSyncFailure(
@@ -1953,7 +1956,6 @@ final class AppModel {
             )
             if action == .synchronize { await sync(force: true) }
             foregroundSyncPending = false
-            lastForegroundSyncAt = now()
             reconcileTimerCompletion()
             return
         }

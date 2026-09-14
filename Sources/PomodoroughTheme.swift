@@ -9,13 +9,18 @@ import AppKit
 enum PomodoroughTheme {
     static let platform = Color(red: 20 / 255, green: 44 / 255, blue: 92 / 255)
     static let platformDeep = Color(red: 12 / 255, green: 27 / 255, blue: 57 / 255)
-    static let signal = Color(red: 255 / 255, green: 96 / 255, blue: 79 / 255)
-    static let ticket = Color(red: 245 / 255, green: 208 / 255, blue: 91 / 255)
+    // sRGB components double as the AP116 contrast-audit source, so the
+    // shipped Colors below cannot drift from the pinned values.
+    static let signalSRGB = (red: 255.0 / 255, green: 96.0 / 255, blue: 79.0 / 255)
+    static let mintSRGB = (red: 168.0 / 255, green: 217.0 / 255, blue: 203.0 / 255)
+    static let ticketSRGB = (red: 245.0 / 255, green: 208.0 / 255, blue: 91.0 / 255)
+    static let signal = Color(red: signalSRGB.red, green: signalSRGB.green, blue: signalSRGB.blue)
+    static let ticket = Color(red: ticketSRGB.red, green: ticketSRGB.green, blue: ticketSRGB.blue)
     static let sky = Color(red: 220 / 255, green: 234 / 255, blue: 241 / 255)
     static let porcelain = Color(red: 247 / 255, green: 248 / 255, blue: 242 / 255)
     static let track = Color(red: 17 / 255, green: 25 / 255, blue: 35 / 255)
     static let steel = Color(red: 143 / 255, green: 168 / 255, blue: 184 / 255)
-    static let mint = Color(red: 168 / 255, green: 217 / 255, blue: 203 / 255)
+    static let mint = Color(red: mintSRGB.red, green: mintSRGB.green, blue: mintSRGB.blue)
     static let danger = Color(red: 195 / 255, green: 61 / 255, blue: 56 / 255)
     static let night = Color(red: 13 / 255, green: 23 / 255, blue: 34 / 255)
     static let nightSurface = Color(red: 23 / 255, green: 36 / 255, blue: 48 / 255)
@@ -28,6 +33,34 @@ enum PomodoroughTheme {
         case .focus: signal
         case .shortBreak: mint
         case .longBreak: ticket
+        }
+    }
+
+    /// Appearance bucket for scheme-dependent foreground choices. Foundation
+    /// only, so unit tests can pin contrast without importing SwiftUI.
+    enum Appearance {
+        case light
+        case dark
+    }
+
+    /// sRGB components of the per-phase prominent tint, sourced from the
+    /// same tuples as the shipped Colors so the AP116 contrast pins audit
+    /// the values on screen.
+    static func accentSRGB(for phase: TimerPhase) -> (red: Double, green: Double, blue: Double) {
+        switch phase {
+        case .focus: signalSRGB
+        case .shortBreak: mintSRGB
+        case .longBreak: ticketSRGB
+        }
+    }
+
+    /// Prominent-button label sRGB (AP116): black in both appearances. White
+    /// reaches only ~2.9:1 on signal red and ~1.5-1.6:1 on mint/ticket in
+    /// dark mode; black clears WCAG AA 4.5:1 on all three tints in both
+    /// schemes (signal 7.0, mint 13.5, ticket 14.1).
+    static func prominentLabelSRGB(for appearance: Appearance) -> (red: Double, green: Double, blue: Double) {
+        switch appearance {
+        case .light, .dark: (red: 0, green: 0, blue: 0)
         }
     }
 

@@ -42,3 +42,31 @@ struct TimerCardLayoutPinningTests {
         #expect(TimerScreen.portraitMinimumHeight(availableHeight: 1366, topGap: 16) == 1327)
     }
 }
+
+// Pins the AP116 decision: the prominent Start/Pause/Resume label must
+// clear WCAG AA 4.5:1 on every phase tint in both appearances. White
+// reached only ~2.9:1 on signal red and ~1.5-1.6:1 on mint/ticket in dark
+// mode, so the shipped label is black (7.0/13.5/14.1:1).
+@Suite("Prominent button contrast")
+struct ProminentButtonContrastTests {
+    @Test(arguments: [TimerPhase.focus, .shortBreak, .longBreak])
+    func prominentLabelClearsAAOnPhaseTintInBothAppearances(phase: TimerPhase) {
+        for appearance in [PomodoroughTheme.Appearance.light, .dark] {
+            let label = PomodoroughTheme.prominentLabelSRGB(for: appearance)
+            let tint = PomodoroughTheme.accentSRGB(for: phase)
+            let labelLuminance = PomodoroughTheme.relativeLuminance(red: label.red, green: label.green, blue: label.blue)
+            let tintLuminance = PomodoroughTheme.relativeLuminance(red: tint.red, green: tint.green, blue: tint.blue)
+            let ratio = PomodoroughTheme.contrastRatio(
+                lighter: max(labelLuminance, tintLuminance),
+                darker: min(labelLuminance, tintLuminance)
+            )
+            #expect(ratio >= 4.5)
+        }
+    }
+
+    @Test func auditSourceMatchesShippedAccentColors() {
+        #expect(PomodoroughTheme.accentSRGB(for: .focus) == PomodoroughTheme.signalSRGB)
+        #expect(PomodoroughTheme.accentSRGB(for: .shortBreak) == PomodoroughTheme.mintSRGB)
+        #expect(PomodoroughTheme.accentSRGB(for: .longBreak) == PomodoroughTheme.ticketSRGB)
+    }
+}

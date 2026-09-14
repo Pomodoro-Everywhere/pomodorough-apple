@@ -126,6 +126,14 @@ extension TimerLiveActivityCoordinator {
     nonisolated static func startFailed(_ error: Error) {
         SentryCapture.captureOnce(key: "live-activity-start", error: error)
     }
+
+    /// AP122: reports the widget extension's drained decode-failure count.
+    /// The count is the whole payload — no snapshot, title, or error text.
+    /// Once per launch; the magnitude of each batch is preserved in `count`.
+    nonisolated static func reportWidgetDecodeFailures(_ count: Int) {
+        guard count > 0 else { return }
+        SentryCapture.captureOnce(key: "widget-snapshot-decode", error: WidgetSnapshotDecodeError(count: count))
+    }
 }
 
 struct TimerLiveActivityModifier: ViewModifier {
@@ -176,6 +184,9 @@ struct TimerLiveActivityModifier: ViewModifier {
         do {
             let data = try JSONEncoder().encode(TimerWidgetSnapshot(timer: timer))
             guard let defaults = UserDefaults(suiteName: TimerWidgetSnapshot.appGroup) else { return }
+            // AP122: drain the extension-side decode-failure counter even
+            // when the snapshot is unchanged, so an idle timer still reports.
+            TimerLiveActivityCoordinator.reportWidgetDecodeFailures(TimerWidgetSnapshot.takeDecodeFailures(from: defaults))
             guard defaults.data(forKey: TimerWidgetSnapshot.storageKey) != data else { return }
             defaults.set(data, forKey: TimerWidgetSnapshot.storageKey)
             WidgetCenter.shared.reloadTimelines(ofKind: TimerWidgetSnapshot.kind)

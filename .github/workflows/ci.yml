@@ -376,6 +376,137 @@ jobs:
       - name: Review dependency changes
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
 
+  # AP118: the deployment target is iOS 18, but every other job targets the
+  # latest runtime — the borderedProminent fallback and the compact layout
+  # shipped untested. This job runs the UI bundle on an iPhone SE (2nd
+  # generation) iOS 18 simulator in dark appearance (doubling as the AP116
+  # dark-mode evidence). It sits before retain-completed-native-log so that
+  # job keeps its pinned successor position at the end of the file.
+  test-ios-18-se:
+    needs: candidate-source
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DERIVED_DATA_PATH: /tmp/PomodoroughDerivedDataSE18
+      SE_RESULT_BUNDLE: /tmp/PomodoroughTestResultsSE/Pomodorough-iOS-SE18.xcresult
+      SE_TEST_DIAGNOSTICS: /tmp/PomodoroughTestResultsSE/diagnostics
+      SE_TEST_LOG: /tmp/PomodoroughTestResultsSE/xcodebuild.log
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify checked out source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Resolve latest shared core release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/fetch_shared_core.sh
+
+      - name: Provision iPhone SE iOS 18 simulator
+        id: se-sim
+        run: |
+          set -euo pipefail
+          runtime_id="$(xcrun simctl list runtimes --json | python3 -c '
+          import json
+          import sys
+          runtimes = json.load(sys.stdin)["runtimes"]
+          ios18 = [
+              runtime for runtime in runtimes
+              if runtime["name"].startswith("iOS 18.")
+              and runtime.get("isAvailable", True)
+          ]
+          print(sorted(ios18, key=lambda runtime: runtime["version"])[-1]["identifier"] if ios18 else "")
+          ')"
+          if [[ -z "$runtime_id" ]]; then
+            echo "No installed iOS 18 simulator runtime on this runner; install one via Xcode -> Settings -> Platforms, then rerun." >&2
+            exit 1
+          fi
+          echo "Using simulator runtime $runtime_id"
+          udid="$(xcrun simctl list devices --json | python3 -c '
+          import json
+          import sys
+          devices = json.load(sys.stdin)["devices"]
+          for device in devices.get(sys.argv[1], []):
+              if device["name"] == "iPhone SE (2nd generation)" and device.get("isAvailable", True):
+                  print(device["udid"])
+                  break
+          ' "$runtime_id")"
+          if [[ -z "$udid" ]]; then
+            udid="$(xcrun simctl create "Pomodorough-SE-iOS18" "iPhone SE (2nd generation)" "$runtime_id")"
+          fi
+          xcrun simctl boot "$udid" 2>/dev/null || true
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl ui "$udid" appearance dark
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Swift packages without trusting a broken sandbox
+        run: >-
+          python3 scripts/resolve_swift_packages.py
+          --checkouts-dir "$DERIVED_DATA_PATH/SourcePackages/checkouts"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resolvePackageDependencies
+
+      - name: Build iOS for testing
+        run: >-
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -destination "platform=iOS Simulator,id=${{ steps.se-sim.outputs.udid }}"
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -disableAutomaticPackageResolution
+          CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
+          build-for-testing
+
+      - name: Test UI bundle on SE iOS 18 with bounded finalization
+        run: >-
+          python3 scripts/run_xcode_tests.py
+          --idle-timeout 300
+          --wall-timeout 1800
+          --log-path "$SE_TEST_LOG"
+          --diagnostics-dir "$SE_TEST_DIAGNOSTICS"
+          --completion-marker "Test Suite 'PomodoroughUITests.xctest' passed"
+          --
+          xcodebuild
+          -project Pomodorough.xcodeproj
+          -scheme Pomodorough-iOS
+          -destination "platform=iOS Simulator,id=${{ steps.se-sim.outputs.udid }}"
+          -derivedDataPath "$DERIVED_DATA_PATH"
+          -resultBundlePath "$SE_RESULT_BUNDLE"
+          -disableAutomaticPackageResolution
+          CODE_SIGNING_ALLOWED=NO
+          SWIFT_SUPPRESS_WARNINGS=NO
+          -only-testing:PomodoroughUITests
+          test-without-building
+
+      - name: Verify SE result bundle presence
+        if: ${{ always() }}
+        run: test -d "$SE_RESULT_BUNDLE"
+
+      - name: Export verified SE evidence
+        run: >-
+          python3 scripts/export_native_evidence.py
+          --root /tmp/PomodoroughTestResultsSE --name ios-test-evidence
+          --scheme Pomodorough-iOS
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Pomodorough.app"
+
+      - name: Retain SE test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-se18-test-evidence
+          path: /tmp/PomodoroughTestResultsSE/
+          if-no-files-found: error
+          retention-days: 14
+
   retain-completed-native-log:
     name: Retain completed native job log
     if: github.event_name == 'workflow_dispatch' && needs.build-and-test.result == 'success'

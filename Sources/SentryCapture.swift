@@ -10,6 +10,7 @@ enum SentryCapture {
         let lock = NSLock()
         var backend: (@Sendable (Error) -> Void)?
         var seenOnceKeys = Set<String>()
+        var recurringCounts = [String: Int]()
     }
 
     private static let state = State()
@@ -33,6 +34,24 @@ enum SentryCapture {
         capture(error)
     }
 
+    /// Capped counting for recurring errors (AP123): captureOnce collapses
+    /// distinct recurrences to the first per launch, losing the recurrence
+    /// signal on hot loops (revision-stream reconnects, unavailable-widget
+    /// snapshots). captureRecurring keeps the first `limit` occurrences per
+    /// key per launch, then stays silent. The counter saturates at the limit
+    /// so a never-quiet loop cannot grow state.
+    static func captureRecurring(key: String, limit: Int = 5, error: Error) {
+        precondition(limit > 0, "captureRecurring limit must be positive")
+        let shouldCapture = state.lock.withLock {
+            let count = state.recurringCounts[key, default: 0]
+            guard count < limit else { return false }
+            state.recurringCounts[key] = count + 1
+            return true
+        }
+        guard shouldCapture else { return }
+        capture(error)
+    }
+
     static func setTestBackend(_ backend: (@Sendable (Error) -> Void)?) {
         state.lock.withLock { state.backend = backend }
     }
@@ -41,6 +60,7 @@ enum SentryCapture {
         state.lock.withLock {
             state.backend = nil
             state.seenOnceKeys.removeAll()
+            state.recurringCounts.removeAll()
         }
     }
 }

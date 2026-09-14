@@ -43,8 +43,8 @@ struct TimerControls: View {
         return String(localized: "Start \(model.selectedPhase.title.lowercased())")
     }
 
-    /// One button row only where there is room for it: iPad and mac.
-    /// Phones always stack the primary control full-width on its own
+    /// One button row where it fits (mac, iPad, regular-width phones);
+    /// phones otherwise stack the primary control full-width on its own
     /// first row with the rest on the second, so Finish/Cancel never
     /// share the primary row or get squeezed into a "..." truncation.
     private var singleRow: Bool {
@@ -206,7 +206,12 @@ struct TimerControls: View {
     ) -> some View {
         let button = Button(action: action) {
             controlLabel(title: title, symbol: symbol)
-                .frame(maxWidth: .infinity, minHeight: compact ? 28 : 44)
+                // AP117: this inner floor is what the glass style sizes from
+                // (.regular padding contributes ~14pt: 28 + 14 measured 42 on
+                // SE2, below the 44pt floor), so compact carries 32 to land
+                // ~46 with raster margin. The post-style floor below still
+                // guards the fallback path and the reported control frame.
+                .frame(maxWidth: .infinity, minHeight: compact ? 32 : 44)
         }
             .font(.headline)
         let accessibilityTitle = glassID == .primary ? primaryAccessibilityTitle : glassID == .finish ? String(localized: "Finish timer") : glassID == .cancel ? String(localized: "Cancel timer") : title
@@ -231,7 +236,7 @@ struct TimerControls: View {
                 button
                     .buttonStyle(.glassProminent)
                     .tint(phaseAccent)
-                    .foregroundStyle(buttonText)
+                    .foregroundStyle(prominentText)
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     // Materialize, not matched geometry: morphing the
@@ -252,22 +257,33 @@ struct TimerControls: View {
             button
                 .buttonStyle(.borderedProminent)
                 .tint(prominent ? phaseAccent : PomodoroughTheme.sky)
-                .foregroundStyle(buttonText)
+                .foregroundStyle(prominent ? prominentText : buttonText)
                 .controlSize(compact ? .regular : .large)
         }
     }
 
-    /// Button labels follow the system scheme explicitly: white on dark,
-    /// black on light. (.primary stays white in both here because the
-    /// glass styles resolve it against their own tint, not the screen.)
+    /// Secondary-button labels follow the system scheme explicitly: white
+    /// on dark, black on light. (The prominent label is always black — see
+    /// prominentText — because white fails contrast on the phase tints.)
     private var buttonText: Color {
         colorScheme == .dark ? .white : .black
     }
 
-    /// Frame after the style: the iOS 26 glass style imposes its own
-    /// content sizing and discards an earlier minHeight, shrinking the
-    /// hittable frame below the 44pt touch target. Enforcing here keeps
-    /// every control reachable on every glass release.
+    /// Prominent-button label (AP116): dark-mode-aware via the theme's
+    /// audited pair, black in both appearances so focus and both break
+    /// tints clear WCAG AA 4.5:1. Previous white-on-dark reached only
+    /// ~2.9:1 on signal red and ~1.5:1 on mint/ticket.
+    private var prominentText: Color {
+        let label = PomodoroughTheme.prominentLabelSRGB(
+            for: colorScheme == .dark ? .dark : .light
+        )
+        return Color(red: label.red, green: label.green, blue: label.blue)
+    }
+
+    /// Floor after the style: the iOS 26 glass style imposes its own
+    /// content sizing on the label it exposes, so the inner floor above is
+    /// what survives the morph on glass; this outer floor keeps the
+    /// fallback control and every reported frame at the 44pt touch target.
     private var rowMinHeight: CGFloat {
         compact ? 44 : layout == .landscape ? 54 : 58
     }

@@ -2300,6 +2300,12 @@
         "value": "‏⟦Timer alerts⟧"
       }
     },
+    "Syncing latest state before finish.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Syncing latest state before finish.⟧"
+      }
+    },
     "Timer changed on another device. Syncing before finish.": {
       "stringUnit": {
         "state": "translated",

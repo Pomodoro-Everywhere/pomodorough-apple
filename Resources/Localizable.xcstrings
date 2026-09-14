@@ -3507,7 +3507,18 @@
         }
       }
     },
+    "Syncing latest state before finish." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Syncing latest state before finish."
+          }
+        }
+      }
+    },
     "Timer changed on another device. Syncing before finish." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

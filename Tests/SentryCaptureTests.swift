@@ -46,6 +46,46 @@ struct SentryCaptureTests {
         #expect(recorded.value.count == 2)
     }
 
+    // AP123: recurring errors keep a capped count instead of collapsing to
+    // the first occurrence per launch.
+    @Test
+    func recurringCapturesUpToLimitThenStaysSilent() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        for _ in 0..<10 {
+            SentryCapture.captureRecurring(key: "sentry-recurring", limit: 3, error: RecordingTokenStoreFailure.load)
+        }
+        #expect(recorded.value.count == 3)
+    }
+
+    @Test
+    func recurringCountsArePerKeyAndResetClearsThem() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        SentryCapture.captureRecurring(key: "sentry-recurring-a", limit: 1, error: RecordingTokenStoreFailure.load)
+        SentryCapture.captureRecurring(key: "sentry-recurring-a", limit: 1, error: RecordingTokenStoreFailure.load)
+        SentryCapture.captureRecurring(key: "sentry-recurring-b", limit: 1, error: RecordingTokenStoreFailure.save)
+        #expect(recorded.value.count == 2)
+        SentryCapture.resetForTesting()
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        SentryCapture.captureRecurring(key: "sentry-recurring-a", limit: 1, error: RecordingTokenStoreFailure.load)
+        #expect(recorded.value.count == 3)
+    }
+
     @Test
     func deleteDetachedCredentialFailureReturnsFalseAndCaptures() async {
         let recorded = LockedTestValue<[String]>([])

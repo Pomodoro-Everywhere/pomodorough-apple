@@ -54,6 +54,9 @@ struct BackgroundStaleAlarmTests {
         model.finish()
         #expect(model.completedFocusCount == 0)
         #expect(model.errorMessage != nil)
+        // AP120: the gate fires before any sync result exists, so the copy
+        // must describe the pending sync, not an unverified remote change.
+        #expect(model.errorMessage == String(localized: "Syncing latest state before finish."))
         await model.restore()
         await model.refreshAfterForeground()
         #expect(model.completedFocusCount == 0)

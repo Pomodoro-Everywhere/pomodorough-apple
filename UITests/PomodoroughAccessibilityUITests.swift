@@ -55,10 +55,17 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             //
             // iOS 26's glass container exposes the inner label (label-sized)
             // instead of the control no matter the SwiftUI composition, so
-            // the measurement gate only runs where the engine reports the
-            // control (iOS 27+). The product minHeight, hittability, and
-            // position gates below hold on every version.
-            if #available(iOS 27, *) {
+            // the measurement gate only runs where the engine reports a
+            // style-sized element: iOS 27+, or the pre-26 fallback where
+            // borderedProminent reports the control itself. The product
+            // minHeight, hittability, and position gates below hold on
+            // every version.
+            let measuresStyleSizedElement: Bool = {
+                if #available(iOS 27, *) { return true }
+                if #available(iOS 26, *) { return false }
+                return true
+            }()
+            if measuresStyleSizedElement {
                 let tallEnough = XCTNSPredicateExpectation(
                     predicate: NSPredicate { _, _ in button.frame.height >= 43.5 },
                     object: app
@@ -127,6 +134,61 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         XCTAssertTrue(app.buttons["Timer"].waitForExistence(timeout: 5))
         assertVisible("Resume")
+    }
+
+    /// AP116 review surface: the 4.5:1 contrast guarantee itself is pinned
+    /// by ProminentButtonContrastTests (AX cannot read colors), while this
+    /// walk keeps every focus/break control hittable and attaches a
+    /// screenshot per phase for visual review. The iOS-18/SE2 CI job sets
+    /// the simulator to dark appearance via simctl first, so its
+    /// attachments are the dark-mode evidence; assertions hold anywhere.
+    func testFocusAndBreakButtonsStayHittableForContrastReview() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+
+        func shot(_ name: String) {
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.lifetime = .keepAlways
+            attachment.name = "contrast-\(name)"
+            add(attachment)
+        }
+
+        func assertHittable(_ label: String) {
+            let button = app.buttons[label]
+            XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing \(label)")
+            XCTAssertTrue(button.isHittable, "Not hittable: \(label)")
+        }
+
+        assertHittable("Start focus")
+        assertHittable("Skip to Short break")
+        shot("focus-idle")
+        app.buttons["Skip to Short break"].tap()
+        assertHittable("Start short break")
+        shot("short-break-idle")
+        app.buttons["Pattern"].tap()
+        if !app.buttons["Long break"].waitForExistence(timeout: 10) {
+            app.buttons["Pattern"].tap()
+        }
+        XCTAssertTrue(app.buttons["Long break"].waitForExistence(timeout: 10))
+        app.buttons["Long break"].tap()
+        app.buttons["Timer"].tap()
+        assertHittable("Start long break")
+        shot("long-break-idle")
+        app.buttons["Skip to Focus"].tap()
+        app.buttons["Start focus"].tap()
+        assertHittable("Pause")
+        assertHittable("Finish timer")
+        assertHittable("Cancel timer")
+        shot("focus-running")
+        app.buttons["Pause"].tap()
+        assertHittable("Resume")
+        shot("focus-paused")
     }
 
     func testPadLandscapeFillsReadoutAboveBottomButtons() throws {

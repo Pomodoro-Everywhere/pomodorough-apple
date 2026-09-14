@@ -696,7 +696,9 @@ final class RoomReplicationController {
         } catch {
             guard ownsCurrent(owner, streamID: streamID), !Task.isCancelled else { return .stop }
             Self.logger.error("revision stream failed, reconnecting: \(error.localizedDescription, privacy: .public)")
-            SentryCapture.captureOnce(key: "revision-stream", error: error)
+            // AP123: this loop recurs, so capped counting keeps distinct
+            // recurrences visible instead of collapsing to the first.
+            SentryCapture.captureRecurring(key: "revision-stream", error: error)
             return .reconnect(after: nextDelay)
         }
     }

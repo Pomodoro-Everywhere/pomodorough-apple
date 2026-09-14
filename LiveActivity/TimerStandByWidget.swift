@@ -40,6 +40,10 @@ struct TimerWidgetProvider: TimelineProvider {
                 snapshot = try JSONDecoder().decode(TimerWidgetSnapshot.self, from: data)
             } catch {
                 Logger(subsystem: "me.egigoka.pomodorough", category: "Widget").error("Invalid timer snapshot: \(error.localizedDescription, privacy: .public)")
+                // AP122: the extension cannot reach Sentry — count only, no payload.
+                if let defaults = UserDefaults(suiteName: TimerWidgetSnapshot.appGroup) {
+                    TimerWidgetSnapshot.recordDecodeFailure(in: defaults)
+                }
             }
         }
         return TimerWidgetEntry(date: .now, snapshot: snapshot)
