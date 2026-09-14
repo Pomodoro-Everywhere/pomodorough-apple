@@ -251,15 +251,19 @@ jobs:
         if: ${{ always() }}
         run: test -d "$IOS_RESULT_BUNDLE"
 
+      - name: Export verified iOS evidence
+        run: >-
+          python3 scripts/export_native_evidence.py
+          --root /tmp/PomodoroughTestResults --name ios-test-evidence
+          --scheme Pomodorough-iOS
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Pomodorough.app"
+
       - name: Retain iOS test evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-test-evidence
-          path: |
-            ${{ env.IOS_RESULT_BUNDLE }}
-            ${{ env.IOS_TEST_LOG }}
-            ${{ env.IOS_TEST_DIAGNOSTICS }}
+          path: /tmp/PomodoroughTestResults/
           if-no-files-found: error
           retention-days: 14
 
@@ -339,6 +343,15 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
+
+      - name: Export verified native evidence
+        run: >-
+          python3 scripts/export_native_evidence.py
+          --root /tmp/PomodoroughTestResults --name native-test-evidence
+          --scheme Pomodorough-iOS --scheme Pomodorough-macOS
+          --scheme PersistedStateCompatibility-iOS --scheme PersistedStateCompatibility-macOS
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Pomodorough.app"
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug/Pomodorough.app"
 
       - name: Retain full native test evidence
         if: ${{ always() }}

@@ -24,7 +24,8 @@ TOKEN = "fake-secret-never-retained"
 BASE = "https://api.github.com/repos/example/apple"
 SIGNED = "https://production.blob.core.windows.net/logs/job?signature=fake"
 SUCCESSOR_BOUNDARY = "\n  retain-completed-native-log:\n"
-WORKFLOW_PREFIX_SHA256 = "becd25b33f77ef22fc563808e01b281faf407f0afd073fc6aea5ca41f8f80d21"
+# Reviewed additions: xcresult/Core exports before both native artifact uploads.
+WORKFLOW_PREFIX_SHA256 = "e844fbf652ab5f621f1dd7198227b3bd6869f389441c7e12ca2cfe6c171616c2"
 SUCCESSOR_SOURCE = '''    name: <name>
     if: <condition>
     needs: <needs>

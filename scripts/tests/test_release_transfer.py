@@ -31,7 +31,7 @@ class ReleaseTransferTests(unittest.TestCase):
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)",
                                workflow, re.MULTILINE | re.DOTALL))
         package, publish = jobs["package"], jobs["package-and-release"]
-        for body, expected in ((package, GATES - {"preflight", "selftest", "test-ios", "test-macos", "package"}),
+        for body, expected in ((package, GATES - {"preflight", "selftest", "package"}),
                                (publish, GATES)):
             needs = body.split("    needs:\n", 1)[1].split("    runs-on:", 1)[0]
             self.assertEqual(set(re.findall(r"^      - ([\w-]+)$", needs, re.MULTILINE)), expected)

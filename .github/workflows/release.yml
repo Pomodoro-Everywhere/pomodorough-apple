@@ -258,6 +258,20 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           test
 
+      - name: Export tested Core provenance
+        run: >-
+          python3 scripts/verify_shared_core_provenance.py --shard test-ios
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Pomodorough.app"
+          --output "$RUNNER_TEMP/core-provenance"
+
+      - name: Upload tested Core provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shared-core-provenance-test-ios
+          path: ${{ runner.temp }}/core-provenance
+          if-no-files-found: error
+          retention-days: 7
+
   test-macos:
     runs-on: macos-26
     timeout-minutes: 60
@@ -336,6 +350,20 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           SWIFT_SUPPRESS_WARNINGS=NO
           test
+
+      - name: Export tested Core provenance
+        run: >-
+          python3 scripts/verify_shared_core_provenance.py --shard test-macos
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug/Pomodorough.app"
+          --output "$RUNNER_TEMP/core-provenance"
+
+      - name: Upload tested Core provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shared-core-provenance-test-macos
+          path: ${{ runner.temp }}/core-provenance
+          if-no-files-found: error
+          retention-days: 7
 
   build-ios-simulator:
     runs-on: macos-26
@@ -418,21 +446,10 @@ jobs:
           build
 
       - name: Verify shared core in built iOS simulator app
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_sha="$(cat Resources/SharedCore/CORE_SHA256)"
-          [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
-          wasm="$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator/Pomodorough.app/pomodorough_core.wasm"
-          if [[ -f "$wasm" ]]; then
-            actual_sha=$(shasum -a 256 "$wasm" | awk '{print $1}')
-            test "$actual_sha" = "$expected_sha"
-          else
-            while IFS= read -r found; do
-              actual_sha=$(shasum -a 256 "$found" | awk '{print $1}')
-              test "$actual_sha" = "$expected_sha"
-            done < <(find "$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator" -type f -name 'pomodorough_core.wasm' -print)
-          fi
+        run: >-
+          python3 scripts/verify_shared_core_provenance.py --shard ios-simulator
+          --product "$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator/Pomodorough.app"
+          --output "$RUNNER_TEMP/core-provenance"
 
       - name: Upload iOS simulator app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -446,7 +463,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: shared-core-provenance-ios-simulator
-          path: Resources/SharedCore/CORE_*
+          path: ${{ runner.temp }}/core-provenance
           if-no-files-found: error
           retention-days: 7
 
@@ -531,15 +548,10 @@ jobs:
           build
 
       - name: Verify shared core in built iOS device app
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_sha="$(cat Resources/SharedCore/CORE_SHA256)"
-          [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
-          while IFS= read -r found; do
-            actual_sha=$(shasum -a 256 "$found" | awk '{print $1}')
-            test "$actual_sha" = "$expected_sha"
-          done < <(find "$DERIVED_DATA_PATH/Build/Products/Release-iphoneos" -type f -name 'pomodorough_core.wasm' -print)
+        run: >-
+          python3 scripts/verify_shared_core_provenance.py --shard ios-device
+          --product "$DERIVED_DATA_PATH/Build/Products/Release-iphoneos/Pomodorough.app"
+          --output "$RUNNER_TEMP/core-provenance"
 
       - name: Upload iOS device app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -553,7 +565,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: shared-core-provenance-ios-device
-          path: Resources/SharedCore/CORE_*
+          path: ${{ runner.temp }}/core-provenance
           if-no-files-found: error
           retention-days: 7
 
@@ -639,15 +651,10 @@ jobs:
           build
 
       - name: Verify shared core in built macOS app
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_sha="$(cat Resources/SharedCore/CORE_SHA256)"
-          [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
-          while IFS= read -r found; do
-            actual_sha=$(shasum -a 256 "$found" | awk '{print $1}')
-            test "$actual_sha" = "$expected_sha"
-          done < <(find "$DERIVED_DATA_PATH/Build/Products/Release" -maxdepth 2 -type f -name 'pomodorough_core.wasm' -print)
+        run: >-
+          python3 scripts/verify_shared_core_provenance.py --shard macos
+          --product "$DERIVED_DATA_PATH/Build/Products/Release/Pomodorough.app"
+          --output "$RUNNER_TEMP/core-provenance"
 
       - name: Upload macOS app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -661,12 +668,14 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: shared-core-provenance-macos
-          path: Resources/SharedCore/CORE_*
+          path: ${{ runner.temp }}/core-provenance
           if-no-files-found: error
           retention-days: 7
 
   package:
     needs:
+      - test-ios
+      - test-macos
       - build-ios-simulator
       - build-ios-device
       - build-macos
@@ -722,6 +731,21 @@ jobs:
         with:
           name: shared-core-provenance-macos
           path: ${{ runner.temp }}/core-provenance-macos
+
+      - name: Download tested Core provenance (iOS)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-test-ios
+          path: ${{ runner.temp }}/core-provenance-test-ios
+
+      - name: Download tested Core provenance (macOS)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-test-macos
+          path: ${{ runner.temp }}/core-provenance-test-macos
+
+      - name: Compare all tested and built Core provenance
+        run: python3 scripts/verify_shared_core_provenance.py --compare "$RUNNER_TEMP"
 
       - name: Package simulator and unsigned non-notarized apps
         shell: bash
@@ -779,37 +803,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Every build shard resolves the latest core release independently at
-          # build time. Fail closed on shard skew: all shards must agree.
-          for provenance in \
-            "$RUNNER_TEMP/core-provenance-ios-simulator" \
-            "$RUNNER_TEMP/core-provenance-ios-device" \
-            "$RUNNER_TEMP/core-provenance-macos"; do
-            test -f "$provenance/CORE_RELEASE_TAG"
-            test -f "$provenance/CORE_COMMIT"
-            test -f "$provenance/CORE_SHA256"
-          done
-          cmp "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_RELEASE_TAG" \
-            "$RUNNER_TEMP/core-provenance-ios-device/CORE_RELEASE_TAG"
-          cmp "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_RELEASE_TAG" \
-            "$RUNNER_TEMP/core-provenance-macos/CORE_RELEASE_TAG"
-          cmp "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_SHA256" \
-            "$RUNNER_TEMP/core-provenance-ios-device/CORE_SHA256"
-          cmp "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_SHA256" \
-            "$RUNNER_TEMP/core-provenance-macos/CORE_SHA256"
+          python3 scripts/verify_shared_core_provenance.py \
+            --core "$RUNNER_TEMP/core-provenance-ios-simulator" \
+            --product "$RUNNER_TEMP/Pomodorough-iOS-Simulator/Pomodorough.app" \
+            --product "$RUNNER_TEMP/Pomodorough-iOS-Device/Payload/Pomodorough.app" \
+            --product "$RUNNER_TEMP/Pomodorough-macOS/Pomodorough.app"
           expected_sha="$(cat "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_SHA256")"
-          [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]
-          verified_apps=0
-          while IFS= read -r wasm; do
-            actual_sha=$(shasum -a 256 "$wasm" | awk '{print $1}')
-            test "$actual_sha" = "$expected_sha"
-            verified_apps=$((verified_apps + 1))
-          done < <(find \
-            "$RUNNER_TEMP/Pomodorough-iOS-Simulator" \
-            "$RUNNER_TEMP/Pomodorough-iOS-Device" \
-            "$RUNNER_TEMP/Pomodorough-macOS" \
-            -type f -name 'pomodorough_core.wasm' -print)
-          test "$verified_apps" -eq 3
           {
             printf 'CORE_RELEASE_TAG=%s\n' "$(cat "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_RELEASE_TAG")"
             printf 'CORE_COMMIT=%s\n' "$(cat "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_COMMIT")"

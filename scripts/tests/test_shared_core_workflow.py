@@ -106,10 +106,12 @@ class SharedCoreWorkflowTests(unittest.TestCase):
                 self.assertNotIn(clause, script.replace(clause, "", 1))
 
     def test_built_apps_are_checked_against_resolved_provenance(self) -> None:
-        for workflow in (WORKFLOW.read_text(encoding="utf-8"), RELEASE_WORKFLOW.read_text(encoding="utf-8")):
-            self.assertIn('expected_sha="$(cat Resources/SharedCore/CORE_SHA256)"', workflow)
-            self.assertIn('test "$actual_sha" = "$expected_sha"', workflow)
-            self.assertIn("-name 'pomodorough_core.wasm'", workflow)
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('expected_sha="$(cat Resources/SharedCore/CORE_SHA256)"', workflow)
+        self.assertIn('test "$actual_sha" = "$expected_sha"', workflow)
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(release.count('--output "$RUNNER_TEMP/core-provenance"'), 5)
+        self.assertIn('verify_shared_core_provenance.py --compare "$RUNNER_TEMP"', release)
 
     def test_release_rejects_shard_skew_and_checks_packaged_apps(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -119,7 +121,8 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn("shared-core-provenance-macos", workflow)
         self.assertIn("core-provenance-ios-simulator/CORE_RELEASE_TAG", workflow)
         self.assertIn("Verify shared core in staged release applications", workflow)
-        self.assertIn('test "$verified_apps" -eq 3', workflow)
+        staged = workflow.split("- name: Verify shared core in staged release applications")[1].split("- name:")[0]
+        self.assertEqual(staged.count("--product "), 3)
         self.assertIn("SWIFT_SUPPRESS_WARNINGS=NO", workflow)
 
     def test_release_packages_ad_hoc_signed_simulator_app_and_smokes_exact_archive(self) -> None:
