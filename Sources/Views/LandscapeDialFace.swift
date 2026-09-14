@@ -22,7 +22,7 @@ struct LandscapeDialFace: View {
                 RoundedRectangle(cornerRadius: max(0, 24 - inset))
                     .trim(from: 0, to: max(0, min(1, progress)))
                     .stroke(
-                        PomodoroughTheme.danger, style: StrokeStyle(lineWidth: min(12, inset), lineCap: .butt)
+                        PomodoroughTheme.accent(for: phase), style: StrokeStyle(lineWidth: min(12, inset), lineCap: .butt)
                     )
                     .padding(inset)
             }
@@ -42,7 +42,7 @@ struct LandscapeDialFace: View {
             Spacer(minLength: 0)
             Text(phase.title.localizedUppercase)
                 .font(labelFont)
-                .foregroundStyle(PomodoroughTheme.signal)
+                .foregroundStyle(PomodoroughTheme.accent(for: phase))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
 

@@ -377,6 +377,25 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
+    func widgetToggleCyclesStartPauseResume() throws {
+        let suiteName = "PomodoroughTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { Date(timeIntervalSince1970: 1_000) }
+        )
+
+        model.toggleTimer()
+        #expect(model.canonicalTimer?.status == .running)
+        model.toggleTimer()
+        #expect(model.canonicalTimer?.status == .paused)
+        model.toggleTimer()
+        #expect(model.canonicalTimer?.status == .running)
+    }
+
+    @Test @MainActor
     func automaticFinishAndBreakCanAtomicallyConsumeLastTwoSequences() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(RecordingUserDefaults(suiteName: suiteName))

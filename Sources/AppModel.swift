@@ -1349,6 +1349,18 @@ final class AppModel {
         _ = performWorkspaceMutation(.resumeTimer(at: date))
     }
 
+    /// Widget deep-link entry point: mirrors the main Start/Pause/Resume button.
+    func toggleTimer() {
+        switch canonicalTimer?.status {
+        case .running:
+            pause()
+        case .paused:
+            resume()
+        default:
+            start()
+        }
+    }
+
     func finish(at explicitDate: Date? = nil) {
         guard !isWorkspaceMutationBlocked else { return }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()

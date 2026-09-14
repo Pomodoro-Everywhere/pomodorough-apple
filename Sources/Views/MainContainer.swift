@@ -33,6 +33,11 @@ struct MainContainer: View {
             .onOpenURL { url in
                 if url.scheme == "pomodorough", url.host == "timer" {
                     selectedTab = .timer
+                    let wantsToggle = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                        .queryItems?.contains(where: { $0.name == "toggle" }) == true
+                    if wantsToggle {
+                        model.toggleTimer()
+                    }
                 }
             }
 #endif

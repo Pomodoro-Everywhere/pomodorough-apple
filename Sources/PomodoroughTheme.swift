@@ -20,6 +20,17 @@ enum PomodoroughTheme {
     static let night = Color(red: 13 / 255, green: 23 / 255, blue: 34 / 255)
     static let nightSurface = Color(red: 23 / 255, green: 36 / 255, blue: 48 / 255)
 
+    /// Ring and primary-button accent per phase: focus keeps signal red,
+    /// short break goes mint, long break goes ticket gold. Nothing stays
+    /// red across phases.
+    static func accent(for phase: TimerPhase) -> Color {
+        switch phase {
+        case .focus: signal
+        case .shortBreak: mint
+        case .longBreak: ticket
+        }
+    }
+
     /// sRGB components of the darkened signal red used for small text on light
     /// surfaces. Kept separate so the vivid accent stays for decoration only.
     static let signalTextLightRGB = (red: 172.0 / 255, green: 32.0 / 255, blue: 28.0 / 255)

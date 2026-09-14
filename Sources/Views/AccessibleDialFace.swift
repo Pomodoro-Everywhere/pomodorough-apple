@@ -13,7 +13,7 @@ struct AccessibleDialFace: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(phase.title)
                 .font(.title2.bold())
-                .foregroundStyle(PomodoroughTheme.signal)
+                .foregroundStyle(PomodoroughTheme.accent(for: phase))
             Text(timeText)
                 .font(.system(size: countdownSize, weight: .black, design: .rounded))
                 .monospacedDigit()
@@ -24,7 +24,7 @@ struct AccessibleDialFace: View {
                 .font(.headline)
             LongBreakProgressIndicator(completedToday: completedFocusCount)
             ProgressView(value: max(0, min(1, progress)))
-                .tint(PomodoroughTheme.danger)
+                .tint(PomodoroughTheme.accent(for: phase))
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -25,7 +25,7 @@ struct PortraitDialFace: View {
             Circle().stroke(PomodoroughTheme.porcelain, lineWidth: 3)
             Circle()
                 .trim(from: 0, to: max(0.001, min(1, progress)))
-                .stroke(PomodoroughTheme.danger, style: StrokeStyle(lineWidth: 12, lineCap: .butt))
+                .stroke(PomodoroughTheme.accent(for: phase), style: StrokeStyle(lineWidth: 12, lineCap: .butt))
                 .rotationEffect(.degrees(-90))
                 .padding(16)
             TickMarks(count: minutes).stroke(PomodoroughTheme.track, lineWidth: 1)
