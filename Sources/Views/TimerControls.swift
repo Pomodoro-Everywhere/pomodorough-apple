@@ -177,9 +177,20 @@ struct TimerControls: View {
                 .frame(maxWidth: .infinity, minHeight: compact ? 28 : 44)
         }
             .font(.headline)
-            .frame(maxWidth: .infinity, minHeight: compact ? 44 : layout == .landscape ? 54 : 58)
-            .buttonBorderShape(.capsule)
-            .accessibilityLabel(glassID == .primary ? primaryAccessibilityTitle : glassID == .finish ? String(localized: "Finish timer") : glassID == .cancel ? String(localized: "Cancel timer") : title)
+        let accessibilityTitle = glassID == .primary ? primaryAccessibilityTitle : glassID == .finish ? String(localized: "Finish timer") : glassID == .cancel ? String(localized: "Cancel timer") : title
+        return sizedButton(
+            styledButton(button, prominent: prominent, glass: glass, glassID: glassID),
+            accessibilityTitle: accessibilityTitle
+        )
+    }
+
+    @ViewBuilder
+    private func styledButton<Content: View>(
+        _ button: Content,
+        prominent: Bool,
+        glass: Bool,
+        glassID: GlassControlID
+    ) -> some View {
         if #available(iOS 26, macOS 26, *), glass {
             if prominent {
                 button
@@ -188,7 +199,11 @@ struct TimerControls: View {
                     .glassEffect(.regular.tint(PomodoroughTheme.signal).interactive(), in: Capsule())
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
-                    .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
+                    // Materialize, not matched geometry: morphing the
+                    // primary button across Pause/Resume identities can
+                    // stall mid-flight on the glass engine, freezing the
+                    // hittable frame below the 44pt touch target.
+                    .glassEffectTransition(.materialize)
             } else {
                 button
                     .buttonStyle(.glass)
@@ -196,7 +211,7 @@ struct TimerControls: View {
                     .foregroundStyle(Color.black)
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
-                    .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
+                    .glassEffectTransition(.materialize)
             }
         } else {
             button
@@ -205,6 +220,17 @@ struct TimerControls: View {
                 .foregroundStyle(Color.black)
                 .controlSize(compact ? .regular : .large)
         }
+    }
+
+    /// Frame after the style: the iOS 26 glass style imposes its own
+    /// content sizing and discards an earlier minHeight, shrinking the
+    /// hittable frame below the 44pt touch target. Enforcing here keeps
+    /// every control reachable on every glass release.
+    private func sizedButton<Styled: View>(_ styled: Styled, accessibilityTitle: String) -> some View {
+        styled
+            .frame(maxWidth: .infinity, minHeight: compact ? 44 : layout == .landscape ? 54 : 58)
+            .buttonBorderShape(.capsule)
+            .accessibilityLabel(accessibilityTitle)
     }
 }
 
