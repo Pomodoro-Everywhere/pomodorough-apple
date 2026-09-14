@@ -80,13 +80,16 @@ final class TimerSessionController {
         try updated.advanceClock(at: request.occurredAt) { input in
             try core.tickHLC(input)
         }
+        if request.type == .retarget {
+            try validateRetargetRequest(request, state: updated)
+        }
         let sequence = try updated.reserveDeviceSequence()
         let commandID = try updated.reserveUuidV7()[0]
         let command = TimerCommand(
             id: "command-\(commandID.uuidString.lowercased())",
             deviceSequence: sequence,
             timerId: request.timerID,
-            taskId: request.type == .start ? request.taskID : nil,
+            taskId: request.type == .start || request.type == .retarget ? request.taskID : nil,
             type: request.type,
             phase: request.phase,
             plannedDurationMs: Int64(request.duration * 1_000),
@@ -95,12 +98,24 @@ final class TimerSessionController {
             hlcCounter: updated.hlcCounter,
             observedElapsedMs: Int64(max(0, request.elapsed) * 1_000)
         )
+        guard command.isValid else { throw AppError.invalidLocalClock }
         updated.pendingCommands.append(command)
+        updated.recordNeverSentCommand(id: command.id)
         updated.localCommandDates[command.id] = request.localDate
         if request.type == .start {
             updated.localTimerOwners[request.timerID] = updated.deviceId
         }
         return CommandTransition(state: updated, command: command)
+    }
+
+    private func validateRetargetRequest(
+        _ request: CommandRequest,
+        state: PersistedTimerState
+    ) throws {
+        guard request.phase == .focus,
+              request.taskID == nil || UUID(uuidString: request.taskID!) != nil else {
+            throw AppError.invalidLocalClock
+        }
     }
 
     func prepareFinish(
@@ -380,7 +395,12 @@ extension TimerSessionController {
     ) throws -> CoreProjectionOutput {
         let core = try loadCore()
         let base = try projectionBase(for: state, override: override)
-        let projectedCommands = state.localProjection(of: state.pendingCommands)
+        // safeProjection* mirrors Core reconcile delivery::Policy::projectable
+        // (all pending neverSent + clocks after canonical head, else empty).
+        // Reconcile output.timer/history already use Core projectionPending;
+        // this local path reuses the same rule for display projection.
+        let safeCommands = state.safeProjectionCommands()
+        let projectedCommands = state.localProjection(of: safeCommands)
         let pending = projectionPending(for: state, commands: projectedCommands)
         let replayDate = projectionReplayDate(
             explicitDate: projectionDate,
@@ -746,14 +766,14 @@ private extension TimerSessionController {
     ) -> CoreProjectionPending {
         CoreProjectionPending(
             commands: commands.map { CoreTimerCommand($0, deviceId: state.deviceId) },
-            taskOperations: state.pendingTaskOperations.map {
+            taskOperations: state.safeProjectionTaskOperations().map {
                 CoreTaskOperation($0, deviceId: state.deviceId)
             },
-            durationOperations: state.pendingDurationOperations.map {
+            durationOperations: state.safeProjectionDurationOperations().map {
                 CoreDurationOperation($0, deviceId: state.deviceId)
             },
-            autoStartOperations: state.pendingAutoStartOperations.map(CoreAutoStartOperation.init),
-            selectedTaskOperations: state.pendingSelectedTaskOperations.map(CoreSelectedTaskOperation.init)
+            autoStartOperations: state.safeProjectionAutoStartOperations().map(CoreAutoStartOperation.init),
+            selectedTaskOperations: state.safeProjectionSelectedTaskOperations().map(CoreSelectedTaskOperation.init)
         )
     }
 

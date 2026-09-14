@@ -84,8 +84,8 @@ final class AppModel {
     @ObservationIgnored private var completionQueuedFor: String?
     @ObservationIgnored private var physicalAnchor: (wall: Date, uptime: TimeInterval)?
     @ObservationIgnored private var taskIdentityCore: SharedCore?
-    @ObservationIgnored private var projectedAutoStartBreaks = false
-    @ObservationIgnored private var projectedSelectedTaskID: UUID?
+    private var projectedAutoStartBreaks = false
+    private var projectedSelectedTaskID: UUID?
     @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private lazy var roomReplicationController = makeRoomReplicationController()
     @ObservationIgnored let watchSync = WatchSyncService()
@@ -1819,8 +1819,14 @@ final class AppModel {
     private func performSyncRound(
         _ lease: CentralizedAccountSessionCoordinator.SyncLease
     ) async throws -> Bool {
-        let plan = accountSessionCoordinator.makeSyncPlan(state: timerState)
+        let prepared = accountSessionCoordinator.prepareSyncPlan(state: timerState)
+        let plan = prepared.plan
         guard !plan.batch.commands.isEmpty || timerState.pendingCommands.isEmpty else {
+            throw AppError.invalidResponse
+        }
+        let preSendPrevious = timerState
+        timerState = prepared.retired
+        guard persistAtomically(previous: preSendPrevious, rebuildsOnRollback: true) else {
             throw AppError.invalidResponse
         }
         let previousTimer = activeTimer
@@ -2603,8 +2609,11 @@ final class AppModel {
             snapshot: snapshot,
             state: timerState
         )
-        timerState.pendingBootstrapResolution = request
-        persist()
+        var retired = accountSessionCoordinator.retiredStateForBootstrapRequest(request, state: timerState)
+        retired.pendingBootstrapResolution = request
+        let previous = timerState
+        timerState = retired
+        guard persistAtomically(previous: previous, rebuildsOnRollback: true) else { return }
         await submitPersistedBootstrapResolution(request, generation: sessionGeneration)
     }
 

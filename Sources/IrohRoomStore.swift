@@ -760,9 +760,20 @@ final class IrohRoomStore: @unchecked Sendable {
     }
 
     private func stateWithoutPendingOperations(
-        _ captured: PersistedTimerState
+        _ captured: PersistedTimerState,
+        published records: [IrohOperationRecord]
     ) -> PersistedTimerState {
         var state = captured
+        // Iroh publication makes ops possibly delivered to peers; retire
+        // neverSent claims before dropping queues so a later server sync
+        // never falsely claims neverSent for Iroh-published work.
+        state.retireNeverSentProof(
+            commands: records.filter { $0.domain == .timer }.map(\.id),
+            taskOperations: records.filter { $0.domain == .task }.map(\.id),
+            durationOperations: records.filter { $0.domain == .duration }.map(\.id),
+            autoStartOperations: records.filter { $0.domain == .autoStart }.map(\.id),
+            selectedTaskOperations: records.filter { $0.domain == .selectedTask }.map(\.id)
+        )
         state.pendingCommands = []
         state.localCommandDates = [:]
         state.pendingTaskOperations = []
@@ -770,6 +781,7 @@ final class IrohRoomStore: @unchecked Sendable {
         state.pendingAutoStartOperations = []
         state.pendingSelectedTaskOperations = []
         state.provisionalBreaks = []
+        state.pruneNeverSentProofToPending()
         return state
     }
 
@@ -782,7 +794,7 @@ final class IrohRoomStore: @unchecked Sendable {
         let existingWorkspace = state.rooms[index]
         try detectCapturedConflict(records, existing: existingWorkspace, index: index)
         var workspace = existingWorkspace
-        workspace.roomState = stateWithoutPendingOperations(stateToCapture)
+        workspace.roomState = stateWithoutPendingOperations(stateToCapture, published: records)
         workspace = try inserting(records, into: workspace)
         try validateCapturedMigration(workspace, existing: existingWorkspace)
         if workspace.genesis != nil {
@@ -960,6 +972,11 @@ final class IrohRoomStore: @unchecked Sendable {
         state.provisionalBreaks = []
         state.bootstrapUser = nil
         state.pendingBootstrapResolution = nil
+        // New room device state carries no server delivery claims: pending is
+        // empty so proof prunes to empty and head resets for fresh HLC barriers.
+        state.pruneNeverSentProofToPending()
+        state.canonicalHeadWallMs = nil
+        state.canonicalHeadCounter = nil
         return state
     }
 

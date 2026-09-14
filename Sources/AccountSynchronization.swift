@@ -72,6 +72,19 @@ final class AccountSynchronization {
         )
     }
 
+    func prepareSyncPlan(state: PersistedTimerState) -> (plan: SyncPlan, retired: PersistedTimerState) {
+        let plan = makeSyncPlan(state: state)
+        var retired = state
+        retired.retireNeverSentProof(
+            commands: plan.batch.commands.map(\.id),
+            taskOperations: plan.batch.taskOperations.map(\.id),
+            durationOperations: plan.batch.durationOperations.map(\.id),
+            autoStartOperations: plan.batch.autoStartOperations.map { $0.id.uuidString.lowercased() },
+            selectedTaskOperations: plan.batch.selectedTaskOperations.map { $0.id.uuidString.lowercased() }
+        )
+        return (plan, retired)
+    }
+
     func sendSync(_ plan: SyncPlan) async throws -> TimedHTTPResponse<SyncResponse> {
         try await api.sync(plan.request)
     }
@@ -194,6 +207,21 @@ extension AccountSynchronization {
                 ? Array(state.pendingSelectedTaskOperations.prefix(4_096))
                 : []
         )
+    }
+
+    func retiredStateForBootstrapRequest(
+        _ request: BootstrapResolveRequest,
+        state: PersistedTimerState
+    ) -> PersistedTimerState {
+        var retired = state
+        retired.retireNeverSentProof(
+            commands: request.commands.map(\.id),
+            taskOperations: request.taskOperations.map(\.id),
+            durationOperations: request.durationOperations.map(\.id),
+            autoStartOperations: (request.autoStartOperations ?? []).map { $0.id.uuidString.lowercased() },
+            selectedTaskOperations: (request.selectedTaskOperations ?? []).map { $0.id.uuidString.lowercased() }
+        )
+        return retired
     }
 
     func validateBootstrapRequest(
@@ -368,7 +396,8 @@ private extension AccountSynchronization {
                 selectedTaskOperations: sent.selectedTaskOperations
             ),
             response: response,
-            timerDependencies: coreTimerDependencies(in: state)
+            timerDependencies: coreTimerDependencies(in: state),
+            neverSent: state.neverSentProof()
         ))
     }
 
@@ -391,6 +420,13 @@ private extension AccountSynchronization {
         state.settings.durationsMs = output.baseDurationsMs
         state.autoStartBreaks = output.baseAutoStartBreaks
         state.selectedTaskID = output.baseSelectedTaskId.flatMap(UUID.init(uuidString:))
+        state.storeCanonicalHead(wallMs: response.serverHlcWallMs, counter: response.serverHlcCounter)
+        state.pruneNeverSentProofToPending()
+        // Core v2 projectionPending is the authoritative safe subset used for
+        // output.timer/history. Local safeProjection* mirrors Core
+        // delivery::Policy::projectable (neverSent + head); cross-check so
+        // silent recomputation drift fails closed instead of diverging.
+        try Self.validateProjectionEquivalence(output.projectionPending, state: state)
 
         let pendingIDs = Set(state.pendingCommands.map(\.id))
         let promotedIDs = Set(output.promotedTimerOperationIds)
@@ -407,6 +443,28 @@ private extension AccountSynchronization {
             throw SharedCoreError.invalidResponse(
                 "reconciled revision changed during native adaptation"
             )
+        }
+    }
+
+    private static func validateProjectionEquivalence(
+        _ projected: CoreReconcileProjectionPending?,
+        state: PersistedTimerState
+    ) throws {
+        guard let projected else { return }
+        let localCommands = Set(state.safeProjectionCommands().map(\.id))
+        let localTasks = Set(state.safeProjectionTaskOperations().map(\.id))
+        let localDurations = Set(state.safeProjectionDurationOperations().map(\.id))
+        let localAuto = Set(state.safeProjectionAutoStartOperations().map { $0.id.uuidString.lowercased() })
+        let localSelected = Set(state.safeProjectionSelectedTaskOperations().map { $0.id.uuidString.lowercased() })
+        let coreCommands = Set(projected.commands.map(\.id))
+        let coreTasks = Set(projected.taskOperations.map(\.id))
+        let coreDurations = Set(projected.durationOperations.map(\.id))
+        let coreAuto = Set(projected.autoStartOperations.map { $0.id.lowercased() })
+        let coreSelected = Set(projected.selectedTaskOperations.map { $0.id.lowercased() })
+        guard localCommands == coreCommands, localTasks == coreTasks,
+              localDurations == coreDurations, localAuto == coreAuto,
+              localSelected == coreSelected else {
+            throw SharedCoreError.invalidResponse("reconcile.rebase.v2 projectionPending diverges from local safeProjection")
         }
     }
 
@@ -597,6 +655,7 @@ private extension AccountSynchronization {
         state.provisionalPhaseAdvances = []
         state.knownTasks = response.tasks
         state.legacyTaskAssignments = [:]
+        state.pruneNeverSentProofToPending()
     }
 
     private static func hasRemoteBootstrapState(_ response: BootstrapResponse) -> Bool {

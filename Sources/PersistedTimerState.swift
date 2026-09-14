@@ -133,12 +133,34 @@ extension PersistedTimerState {
         !hasCorruptPendingOperations
             && hasValidGeneratorState
             && pendingQueue.hasValidOperationsAndIdentity(deviceID: deviceId)
+            && hasValidDeliveryProof
     }
 
     var hasValidPendingWireOperationsForResample: Bool {
         !hasCorruptPendingOperations
             && hasValidGeneratorCore
             && pendingQueue.hasValidOperationsAndIdentity(deviceID: deviceId)
+            && hasValidDeliveryProof
+    }
+
+    private var hasValidDeliveryProof: Bool {
+        let commandIDs = Set(pendingCommands.map(\.id))
+        let taskIDs = Set(pendingTaskOperations.map(\.id))
+        let durationIDs = Set(pendingDurationOperations.map(\.id))
+        let autoStartIDs = Set(pendingAutoStartOperations.map { $0.id.uuidString.lowercased() })
+        let selectedIDs = Set(pendingSelectedTaskOperations.map { $0.id.uuidString.lowercased() })
+        let headValid: Bool = {
+            guard let wall = canonicalHeadWallMs, let counter = canonicalHeadCounter else {
+                return canonicalHeadWallMs == nil && canonicalHeadCounter == nil
+            }
+            return WireBounds.isValidClock(wallMs: wall, counter: counter)
+        }()
+        return neverSentCommandIDs.isSubset(of: commandIDs)
+            && neverSentTaskOperationIDs.isSubset(of: taskIDs)
+            && neverSentDurationOperationIDs.isSubset(of: durationIDs)
+            && neverSentAutoStartOperationIDs.isSubset(of: autoStartIDs)
+            && neverSentSelectedTaskOperationIDs.isSubset(of: selectedIDs)
+            && headValid
     }
 
     mutating func reserveDeviceSequence() throws -> Int64 {

@@ -279,7 +279,7 @@ struct CoreProjectionBase: Encodable, Sendable {
     }
 }
 
-struct CoreTimerCommand: Codable, Equatable, Sendable {
+struct CoreTimerCommand: Equatable, Sendable {
     let id: String
     let deviceId: String
     let deviceSequence: Int64
@@ -326,6 +326,60 @@ struct CoreTimerCommand: Codable, Equatable, Sendable {
             throw SharedCoreError.invalidResponse("invalid rebased timer command")
         }
         return command
+    }
+}
+
+extension CoreTimerCommand: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, deviceId, deviceSequence, timerId, taskId, type, phase
+        case plannedDurationMs, occurredAt, hlcWallMs, hlcCounter, observedElapsedMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        deviceId = try values.decode(String.self, forKey: .deviceId)
+        deviceSequence = try values.decode(Int64.self, forKey: .deviceSequence)
+        timerId = try values.decode(String.self, forKey: .timerId)
+        type = try values.decode(CommandType.self, forKey: .type)
+        // Mirror TimerCommand: retarget explicit null differs from omission.
+        if type == .retarget, !values.contains(.taskId) {
+            throw DecodingError.keyNotFound(
+                CodingKeys.taskId,
+                .init(codingPath: values.codingPath, debugDescription: "Retarget requires taskId.")
+            )
+        }
+        taskId = try values.decodeIfPresent(String.self, forKey: .taskId)
+        phase = try values.decode(TimerPhase.self, forKey: .phase)
+        plannedDurationMs = try values.decode(Int64.self, forKey: .plannedDurationMs)
+        occurredAt = try values.decode(Date.self, forKey: .occurredAt)
+        hlcWallMs = try values.decode(Int64.self, forKey: .hlcWallMs)
+        hlcCounter = try values.decode(Int64.self, forKey: .hlcCounter)
+        observedElapsedMs = try values.decode(Int64.self, forKey: .observedElapsedMs)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(deviceId, forKey: .deviceId)
+        try values.encode(deviceSequence, forKey: .deviceSequence)
+        try values.encode(timerId, forKey: .timerId)
+        if type == .retarget {
+            if let taskId {
+                try values.encode(taskId, forKey: .taskId)
+            } else {
+                try values.encodeNil(forKey: .taskId)
+            }
+        } else {
+            try values.encodeIfPresent(taskId, forKey: .taskId)
+        }
+        try values.encode(type, forKey: .type)
+        try values.encode(phase, forKey: .phase)
+        try values.encode(plannedDurationMs, forKey: .plannedDurationMs)
+        try values.encode(occurredAt, forKey: .occurredAt)
+        try values.encode(hlcWallMs, forKey: .hlcWallMs)
+        try values.encode(hlcCounter, forKey: .hlcCounter)
+        try values.encode(observedElapsedMs, forKey: .observedElapsedMs)
     }
 }
 
@@ -936,11 +990,57 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
     }
 }
 
+struct CoreReconcileNeverSent: Encodable, Equatable, Sendable {
+    let commands: [String]
+    let taskOperations: [String]
+    let durationOperations: [String]
+    let autoStartOperations: [String]
+    let selectedTaskOperations: [String]
+
+    init(
+        commands: [String] = [],
+        taskOperations: [String] = [],
+        durationOperations: [String] = [],
+        autoStartOperations: [String] = [],
+        selectedTaskOperations: [String] = []
+    ) {
+        self.commands = commands.sorted()
+        self.taskOperations = taskOperations.sorted()
+        self.durationOperations = durationOperations.sorted()
+        self.autoStartOperations = autoStartOperations.sorted()
+        self.selectedTaskOperations = selectedTaskOperations.sorted()
+    }
+
+    init(state: PersistedTimerState) {
+        let pendingCommands = Set(state.pendingCommands.map(\.id))
+        let pendingTasks = Set(state.pendingTaskOperations.map(\.id))
+        let pendingDurations = Set(state.pendingDurationOperations.map(\.id))
+        let pendingAutoStart = Set(state.pendingAutoStartOperations.map { $0.id.uuidString.lowercased() })
+        let pendingSelected = Set(state.pendingSelectedTaskOperations.map { $0.id.uuidString.lowercased() })
+        self.init(
+            commands: Array(state.neverSentCommandIDs.intersection(pendingCommands)),
+            taskOperations: Array(state.neverSentTaskOperationIDs.intersection(pendingTasks)),
+            durationOperations: Array(state.neverSentDurationOperationIDs.intersection(pendingDurations)),
+            autoStartOperations: Array(state.neverSentAutoStartOperationIDs.intersection(pendingAutoStart)),
+            selectedTaskOperations: Array(state.neverSentSelectedTaskOperationIDs.intersection(pendingSelected))
+        )
+    }
+}
+
+struct CoreReconcileProjectionPending: Decodable, Equatable, Sendable {
+    let commands: [CoreTimerCommand]
+    let taskOperations: [CoreTaskOperation]
+    let durationOperations: [CoreDurationOperation]
+    let autoStartOperations: [CoreAutoStartOperation]
+    let selectedTaskOperations: [CoreSelectedTaskOperation]
+}
+
 struct CoreReconcileInput: Encodable, Equatable, Sendable {
     let local: CoreReconcileLocalQueues
     let sent: CoreReconcileSentQueues
     let response: CoreReconcileCanonicalResponse
     let timerDependencies: [CoreTimerDependency]
+    let neverSent: CoreReconcileNeverSent
 }
 
 struct CoreReconcileOutput: Decodable, Equatable, Sendable {
@@ -966,6 +1066,7 @@ struct CoreReconcileOutput: Decodable, Equatable, Sendable {
     let durationsMs: DurationValues
     let autoStartBreaks: Bool
     let selectedTaskId: String?
+    let projectionPending: CoreReconcileProjectionPending?
 
     private static func wireDatesEqual(_ lhs: Date?, _ rhs: Date?) -> Bool {
         switch (lhs, rhs) {
@@ -1033,16 +1134,22 @@ struct CoreReconcileOutput: Decodable, Equatable, Sendable {
     }
 
     func validated(for input: CoreReconcileInput) throws -> Self {
-        let response = input.response
-        let localTimerIDs = Set(input.local.commands.map(\.id))
-        let localTaskIDs = Set(input.local.taskOperations.map(\.id))
-        let localDurationIDs = Set(input.local.durationOperations.map(\.id))
-        let localAutoStartIDs = Set(input.local.autoStartOperations.map(\.id))
-        let localSelectedTaskIDs = Set(input.local.selectedTaskOperations.map(\.id))
-        let pendingTimerIDs = Set(pending.map(\.id))
-        let promotedIDs = Set(promotedTimerOperationIds)
-        let droppedIDs = Set(droppedTimerOperationIds)
-        let structuralChecks: [(String, Bool)] = [
+        var checks = snapshotChecks(for: input.response)
+        checks += pendingUniquenessChecks()
+        checks += pendingSubsetChecks(for: input)
+        checks += promotionChecks(for: input)
+        checks += projectionChecks()
+        let failed = checks.filter { !$0.1 }.map(\.0)
+        guard failed.isEmpty else {
+            throw SharedCoreError.invalidResponse(
+                "reconcile.rebase.v2 output failed structural validation: \(failed.joined(separator: ", "))"
+            )
+        }
+        return self
+    }
+
+    private func snapshotChecks(for response: CoreReconcileCanonicalResponse) -> [(String, Bool)] {
+        [
             ("revision", revision == response.revision),
             ("baseTimer", Self.wireTimersEqual(baseTimer, response.canonicalTimer)),
             ("baseHistory", Self.wireHistoriesEqual(baseHistory, response.history)),
@@ -1051,33 +1158,56 @@ struct CoreReconcileOutput: Decodable, Equatable, Sendable {
             ("baseAutoStart", baseAutoStartBreaks == response.autoStartBreaks),
             ("baseSelectedTask", baseSelectedTaskId == response.selectedTaskId),
             ("canonicalSnapshot", CanonicalSnapshotValidation.isValid(timer: timer, history: history, tasks: tasks, durations: durationsMs, selectedTaskId: selectedTaskId)),
-            ("pendingTimerUnique", pendingTimerIDs.count == pending.count),
+        ]
+    }
+
+    private func pendingUniquenessChecks() -> [(String, Bool)] {
+        [
+            ("pendingTimerUnique", Set(pending.map(\.id)).count == pending.count),
             ("pendingTaskUnique", Set(pendingTaskOperations.map(\.id)).count == pendingTaskOperations.count),
             ("pendingDurationUnique", Set(pendingDurationOperations.map(\.id)).count == pendingDurationOperations.count),
             ("pendingAutoStartUnique", Set(pendingAutoStartOperations.map(\.id)).count == pendingAutoStartOperations.count),
             ("pendingSelectedTaskUnique", Set(pendingSelectedTaskOperations.map(\.id)).count == pendingSelectedTaskOperations.count),
-            ("pendingTimerSubset", pendingTimerIDs.isSubset(of: localTimerIDs)),
-            ("pendingTaskSubset", Set(pendingTaskOperations.map(\.id)).isSubset(of: localTaskIDs)),
-            ("pendingDurationSubset", Set(pendingDurationOperations.map(\.id)).isSubset(of: localDurationIDs)),
-            ("pendingAutoStartSubset", Set(pendingAutoStartOperations.map(\.id)).isSubset(of: localAutoStartIDs)),
-            ("pendingSelectedTaskSubset", Set(pendingSelectedTaskOperations.map(\.id)).isSubset(of: localSelectedTaskIDs)),
+        ]
+    }
+
+    private func pendingSubsetChecks(for input: CoreReconcileInput) -> [(String, Bool)] {
+        let pendingTimerIDs = Set(pending.map(\.id))
+        return [
+            ("pendingTimerSubset", pendingTimerIDs.isSubset(of: Set(input.local.commands.map(\.id)))),
+            ("pendingTaskSubset", Set(pendingTaskOperations.map(\.id)).isSubset(of: Set(input.local.taskOperations.map(\.id)))),
+            ("pendingDurationSubset", Set(pendingDurationOperations.map(\.id)).isSubset(of: Set(input.local.durationOperations.map(\.id)))),
+            ("pendingAutoStartSubset", Set(pendingAutoStartOperations.map(\.id)).isSubset(of: Set(input.local.autoStartOperations.map(\.id)))),
+            ("pendingSelectedTaskSubset", Set(pendingSelectedTaskOperations.map(\.id)).isSubset(of: Set(input.local.selectedTaskOperations.map(\.id)))),
+        ]
+    }
+
+    private func promotionChecks(for input: CoreReconcileInput) -> [(String, Bool)] {
+        let localTimerIDs = Set(input.local.commands.map(\.id))
+        let pendingTimerIDs = Set(pending.map(\.id))
+        let promotedIDs = Set(promotedTimerOperationIds)
+        let droppedIDs = Set(droppedTimerOperationIds)
+        return [
             ("promotedSubset", promotedIDs.isSubset(of: localTimerIDs)),
             ("droppedSubset", droppedIDs.isSubset(of: localTimerIDs)),
             ("promotedDroppedDisjoint", promotedIDs.isDisjoint(with: droppedIDs)),
             ("droppedTimerUnique", Set(droppedTimerIds).count == droppedTimerIds.count),
             ("dependencyUnique", Set(pendingTimerDependencies.map(\.operationId)).count == pendingTimerDependencies.count),
-            ("dependencyRetained", pendingTimerDependencies.allSatisfy({ dependency in
-                pendingTimerIDs.contains(dependency.operationId)
-                    && pendingTimerIDs.contains(dependency.dependsOnOperationId)
-            }))
+            ("dependencyRetained", pendingTimerDependencies.allSatisfy {
+                pendingTimerIDs.contains($0.operationId) && pendingTimerIDs.contains($0.dependsOnOperationId)
+            }),
         ]
-        let failedChecks = structuralChecks.filter { !$0.1 }.map(\.0)
-        guard failedChecks.isEmpty else {
-            throw SharedCoreError.invalidResponse(
-                "reconcile.rebase.v1 output failed structural validation: \(failedChecks.joined(separator: ", "))"
-            )
-        }
-        return self
+    }
+
+    private func projectionChecks() -> [(String, Bool)] {
+        guard let projected = projectionPending else { return [] }
+        return [
+            ("projectionTimerSubset", Set(projected.commands.map(\.id)).isSubset(of: Set(pending.map(\.id)))),
+            ("projectionTaskSubset", Set(projected.taskOperations.map(\.id)).isSubset(of: Set(pendingTaskOperations.map(\.id)))),
+            ("projectionDurationSubset", Set(projected.durationOperations.map(\.id)).isSubset(of: Set(pendingDurationOperations.map(\.id)))),
+            ("projectionAutoStartSubset", Set(projected.autoStartOperations.map(\.id)).isSubset(of: Set(pendingAutoStartOperations.map(\.id)))),
+            ("projectionSelectedSubset", Set(projected.selectedTaskOperations.map(\.id)).isSubset(of: Set(pendingSelectedTaskOperations.map(\.id)))),
+        ]
     }
 
     func nativePendingCommands(deviceId: String) throws -> [TimerCommand] {

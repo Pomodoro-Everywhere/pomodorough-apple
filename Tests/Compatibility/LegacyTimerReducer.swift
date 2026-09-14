@@ -200,7 +200,35 @@ extension TimerReducer {
         case .clear:
             guard target(command.timerId, current: timer, history: history, at: command.occurredAt) != nil else { return (timer, history) }
             return (timer?.id == command.timerId ? nil : timer, history)
+        case .retarget:
+            return retargetTransition(command, timer: timer, history: history)
         }
+    }
+
+    private static func retargetTransition(
+        _ command: TimerCommand,
+        timer: CanonicalTimer?,
+        history: [HistoryItem]
+    ) -> (CanonicalTimer?, [HistoryItem]) {
+        // Mirrors Core apply_retarget: active focus timer only, task
+        // attribution without lifecycle intent change.
+        guard let timer, timer.id == command.timerId,
+              timer.status == .running || timer.status == .paused,
+              timer.phase == .focus, command.phase == .focus else {
+            return (timer, history)
+        }
+        let retargeted = CanonicalTimer(
+            id: timer.id,
+            taskId: command.taskId,
+            phase: timer.phase,
+            status: timer.status,
+            plannedDurationMs: timer.plannedDurationMs,
+            elapsedAtAnchorMs: timer.elapsedAtAnchorMs,
+            anchorAt: timer.anchorAt,
+            startedByDeviceId: timer.startedByDeviceId,
+            lastIntent: timer.lastIntent
+        )
+        return (retargeted, history)
     }
 
     private static func startTransition(

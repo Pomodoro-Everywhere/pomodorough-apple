@@ -861,7 +861,7 @@ extension CentralizedAccountSessionCoordinator {
             && migrated.tasks.allSatisfy(stored.tasks.contains)
             && migrated.knownTasks.allSatisfy(stored.knownTasks.contains)
             && stored.selectedTaskID == migrated.selectedTaskID
-            && migrated.legacyTaskAssignments.allSatisfy { stored.legacyTaskAssignments[$0.key] == $0.value }
+        // legacyTaskAssignments is decode-only and never written; excluded.
     }
 
     func containsCommittedLegacyRecords(
@@ -920,6 +920,10 @@ extension CentralizedAccountSessionCoordinator {
         synchronization.makeSyncPlan(state: state)
     }
 
+    func prepareSyncPlan(state: PersistedTimerState) -> (plan: AccountSynchronization.SyncPlan, retired: PersistedTimerState) {
+        synchronization.prepareSyncPlan(state: state)
+    }
+
     func sendSync(
         _ plan: AccountSynchronization.SyncPlan
     ) async throws -> TimedHTTPResponse<SyncResponse> {
@@ -961,6 +965,13 @@ extension CentralizedAccountSessionCoordinator {
         synchronization.makeBootstrapResolutionRequest(
             strategy: strategy, snapshot: snapshot, state: state
         )
+    }
+
+    func retiredStateForBootstrapRequest(
+        _ request: BootstrapResolveRequest,
+        state: PersistedTimerState
+    ) -> PersistedTimerState {
+        synchronization.retiredStateForBootstrapRequest(request, state: state)
     }
 
     func validateBootstrapRequest(_ request: BootstrapResolveRequest, deviceID: String) throws {

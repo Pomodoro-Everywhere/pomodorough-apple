@@ -75,7 +75,8 @@ struct SharedCoreWASMTests {
                 selectedTaskOperations: []
             ),
             response: CoreReconcileCanonicalResponse(response),
-            timerDependencies: []
+            timerDependencies: [],
+            neverSent: CoreReconcileNeverSent()
         )
 
         let output = try SharedCore.bundled().reconcileRebase(input)

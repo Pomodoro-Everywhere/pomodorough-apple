@@ -156,38 +156,25 @@ private extension SynchronizedWorkspaceMutationController {
         var state = snapshot.state
         let occurredAt = try occurrenceDate(snapshot)
         let operationID = try appendSelectedTaskOperation(taskID, at: occurredAt, to: &state)
-        // Retarget the active focus timer when its start command is still
-        // pending: the server has not acked it yet, so rewriting taskId makes
-        // the eventual history follow the newly selected task with no dup id.
         if let timer = snapshot.canonicalTimer,
            isActive(timer),
            timer.phase == .focus {
-            // Local-only retarget marker: display and local history follow the
-            // newly picked task at once (also post-ack). Remote selected-task
-            // syncs never write here, so they cannot hijack the active timer.
-            if let taskID {
-                state.legacyTaskAssignments[timer.id] = taskID
-            } else {
-                state.legacyTaskAssignments.removeValue(forKey: timer.id)
-            }
-            if let startIndex = state.pendingCommands.firstIndex(where: {
-                $0.timerId == timer.id && $0.type == .start
-            }) {
-                let start = state.pendingCommands[startIndex]
-                state.pendingCommands[startIndex] = TimerCommand(
-                    id: start.id,
-                    deviceSequence: start.deviceSequence,
-                    timerId: start.timerId,
-                    taskId: taskID?.uuidString.lowercased(),
-                    type: start.type,
-                    phase: start.phase,
-                    plannedDurationMs: start.plannedDurationMs,
-                    occurredAt: start.occurredAt,
-                    hlcWallMs: start.hlcWallMs,
-                    hlcCounter: start.hlcCounter,
-                    observedElapsedMs: start.observedElapsedMs
-                )
-            }
+            let retarget = try makeRetargetCommand(
+                timer: timer,
+                taskID: taskID,
+                occurredAt: occurredAt,
+                snapshot: snapshot,
+                state: state
+            )
+            state = retarget.state
+            return try synchronized(
+                state,
+                Requirements(
+                    timerCommandIDs: [retarget.command.id],
+                    selectedTaskOperationIDs: [operationID]
+                ),
+                snapshot: snapshot
+            )
         }
         return try synchronized(
             state,
@@ -210,6 +197,7 @@ private extension SynchronizedWorkspaceMutationController {
             hlcWallMs: state.hlcWallMs,
             hlcCounter: state.hlcCounter
         ))
+        state.recordNeverSentAutoStartOperation(id: operationID)
         return try synchronized(
             state,
             Requirements(autoStartOperationIDs: [operationID.uuidString.lowercased()]),
@@ -244,7 +232,7 @@ private extension SynchronizedWorkspaceMutationController {
         }
         try state.advanceClock(at: occurredAt)
         let operationID = "duration-operation-\(try state.reserveUuidV7()[0].uuidString.lowercased())"
-        state.pendingDurationOperations.removeAll { $0.phase == phase }
+        discardNeverSentDurations(for: phase, in: &state)
         state.pendingDurationOperations.append(DurationOperation(
             id: operationID,
             phase: phase,
@@ -253,6 +241,7 @@ private extension SynchronizedWorkspaceMutationController {
             hlcWallMs: state.hlcWallMs,
             hlcCounter: state.hlcCounter
         ))
+        state.recordNeverSentDurationOperation(id: operationID)
         state.settings.setMinutes(minutes, for: phase)
         return try synchronized(
             state,
@@ -263,6 +252,17 @@ private extension SynchronizedWorkspaceMutationController {
             snapshot: snapshot,
             afterSync: effects
         )
+    }
+
+    private func discardNeverSentDurations(for phase: TimerPhase, in state: inout PersistedTimerState) {
+        let discarded = state.pendingDurationOperations.filter {
+            $0.phase == phase && state.neverSentDurationOperationIDs.contains($0.id)
+        }
+        guard !discarded.isEmpty else { return }
+        state.pendingDurationOperations.removeAll {
+            $0.phase == phase && state.neverSentDurationOperationIDs.contains($0.id)
+        }
+        state.retireNeverSentProof(commands: [], taskOperations: [], durationOperations: discarded.map(\.id), autoStartOperations: [], selectedTaskOperations: [])
     }
 
     func planStart(_ snapshot: Snapshot) throws -> Transition? {
@@ -407,6 +407,7 @@ private extension SynchronizedWorkspaceMutationController {
             hlcWallMs: state.hlcWallMs,
             hlcCounter: state.hlcCounter
         ))
+        state.recordNeverSentTaskOperation(id: operationID)
         var selectedOperationIDs = Set<String>()
         if type == .delete, snapshot.projectedSelectedTaskID == task.id {
             selectedOperationIDs.insert(try appendSelectedTaskOperation(
@@ -591,8 +592,31 @@ private extension SynchronizedWorkspaceMutationController {
             hlcWallMs: state.hlcWallMs,
             hlcCounter: state.hlcCounter
         ))
+        state.recordNeverSentSelectedTaskOperation(id: operationID)
         state.selectedTaskID = selectedTaskID
         return operationID.uuidString.lowercased()
+    }
+
+    func makeRetargetCommand(
+        timer: CanonicalTimer,
+        taskID: UUID?,
+        occurredAt: Date,
+        snapshot: Snapshot,
+        state: PersistedTimerState
+    ) throws -> TimerSessionController.CommandTransition {
+        try timerSessionController.makeCommand(
+            .init(
+                type: .retarget,
+                timerID: timer.id,
+                taskID: taskID?.uuidString.lowercased(),
+                phase: .focus,
+                duration: timer.plannedDuration,
+                elapsed: timer.elapsed(at: snapshot.localDate),
+                occurredAt: occurredAt,
+                localDate: snapshot.localDate
+            ),
+            state: state
+        )
     }
 }
 

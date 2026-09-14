@@ -30,9 +30,17 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var tasks: [FocusTask]
     var knownTasks: [FocusTask]
     var selectedTaskID: UUID?
+    // Decode-only: immutable retarget supersedes this map; never write.
     var legacyTaskAssignments: [String: UUID]
     var irohLegacyTaskMigration: IrohLegacyTaskMigration? = nil
     var hasCorruptPendingOperations: Bool
+    var neverSentCommandIDs: Set<String>
+    var neverSentTaskOperationIDs: Set<String>
+    var neverSentDurationOperationIDs: Set<String>
+    var neverSentAutoStartOperationIDs: Set<String>
+    var neverSentSelectedTaskOperationIDs: Set<String>
+    var canonicalHeadWallMs: Int64?
+    var canonicalHeadCounter: Int64?
     var settings: TimerSettings
     var cachedUser: User?
     var pendingAccountSwitchUser: User?
@@ -67,6 +75,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
         case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
         case tasks, knownTasks, selectedTaskID, legacyTaskAssignments, hasCorruptPendingOperations
+        case neverSentCommandIDs, neverSentTaskOperationIDs, neverSentDurationOperationIDs
+        case neverSentAutoStartOperationIDs, neverSentSelectedTaskOperationIDs
+        case canonicalHeadWallMs, canonicalHeadCounter
         case irohLegacyTaskMigration
         case settings, cachedUser, pendingAccountSwitchUser
         case bootstrapUser, pendingBootstrapResolution
@@ -105,6 +116,13 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         selectedTaskID: UUID?,
         legacyTaskAssignments: [String: UUID],
         hasCorruptPendingOperations: Bool = false,
+        neverSentCommandIDs: Set<String> = [],
+        neverSentTaskOperationIDs: Set<String> = [],
+        neverSentDurationOperationIDs: Set<String> = [],
+        neverSentAutoStartOperationIDs: Set<String> = [],
+        neverSentSelectedTaskOperationIDs: Set<String> = [],
+        canonicalHeadWallMs: Int64? = nil,
+        canonicalHeadCounter: Int64? = nil,
         settings: TimerSettings,
         cachedUser: User?,
         pendingAccountSwitchUser: User? = nil,
@@ -142,6 +160,13 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self.selectedTaskID = selectedTaskID
         self.legacyTaskAssignments = legacyTaskAssignments
         self.hasCorruptPendingOperations = hasCorruptPendingOperations
+        self.neverSentCommandIDs = neverSentCommandIDs
+        self.neverSentTaskOperationIDs = neverSentTaskOperationIDs
+        self.neverSentDurationOperationIDs = neverSentDurationOperationIDs
+        self.neverSentAutoStartOperationIDs = neverSentAutoStartOperationIDs
+        self.neverSentSelectedTaskOperationIDs = neverSentSelectedTaskOperationIDs
+        self.canonicalHeadWallMs = canonicalHeadWallMs
+        self.canonicalHeadCounter = canonicalHeadCounter
         self.settings = settings
         self.cachedUser = cachedUser
         self.pendingAccountSwitchUser = pendingAccountSwitchUser
@@ -206,7 +231,19 @@ enum PersistedStateSchema {
         let pending = try decodePending(from: values)
         let room = try decodeRoom(from: values)
         let account = try decodeAccount(from: values)
-        return PersistedTimerState(
+        let delivery = decodeDelivery(from: values, pending: pending)
+        return assemble(generator: generator, pending: pending, room: room, account: account, delivery: delivery)
+    }
+
+    // size-exception: decode assembly is atomic inventory of every durable field.
+    private static func assemble(
+        generator: DecodedGeneratorState,
+        pending: DecodedPendingState,
+        room: DecodedRoomState,
+        account: DecodedAccountState,
+        delivery: DecodedDeliveryState
+    ) -> PersistedTimerState {
+        PersistedTimerState(
             deviceId: generator.deviceId,
             nextSequence: generator.nextSequence,
             sequenceExhausted: generator.sequenceExhausted,
@@ -238,6 +275,13 @@ enum PersistedStateSchema {
             selectedTaskID: room.selectedTaskID,
             legacyTaskAssignments: room.legacyTaskAssignments,
             hasCorruptPendingOperations: pending.hasCorruptOperations || room.hasCorruptHistory,
+            neverSentCommandIDs: delivery.commands,
+            neverSentTaskOperationIDs: delivery.tasks,
+            neverSentDurationOperationIDs: delivery.durations,
+            neverSentAutoStartOperationIDs: delivery.autoStart,
+            neverSentSelectedTaskOperationIDs: delivery.selectedTask,
+            canonicalHeadWallMs: delivery.headWallMs,
+            canonicalHeadCounter: delivery.headCounter,
             settings: room.settings,
             cachedUser: account.cachedUser,
             pendingAccountSwitchUser: account.pendingAccountSwitchUser,
@@ -313,6 +357,16 @@ enum PersistedStateSchema {
         let pendingBootstrapResolution: BootstrapResolveRequest?
     }
 
+    private struct DecodedDeliveryState {
+        let commands: Set<String>
+        let tasks: Set<String>
+        let durations: Set<String>
+        let autoStart: Set<String>
+        let selectedTask: Set<String>
+        let headWallMs: Int64?
+        let headCounter: Int64?
+    }
+
     private enum CodingKeys: String, CodingKey {
         case deviceId, nextSequence, sequenceExhausted, revision, hlcWallMs, hlcCounter
         case serverTimeOffsetMs, serverTimeUncertaintyMs, serverTimeAnchorMs
@@ -322,6 +376,9 @@ enum PersistedStateSchema {
         case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
         case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
         case tasks, knownTasks, selectedTaskID, legacyTaskAssignments, hasCorruptPendingOperations
+        case neverSentCommandIDs, neverSentTaskOperationIDs, neverSentDurationOperationIDs
+        case neverSentAutoStartOperationIDs, neverSentSelectedTaskOperationIDs
+        case canonicalHeadWallMs, canonicalHeadCounter
         case settings, cachedUser, pendingAccountSwitchUser
         case bootstrapUser, pendingBootstrapResolution
     }
@@ -429,6 +486,48 @@ enum PersistedStateSchema {
                 forKey: .pendingBootstrapResolution
             ).map(normalizedLegacySentinels)
         )
+    }
+
+    private static func decodeDelivery(
+        from values: KeyedDecodingContainer<CodingKeys>,
+        pending: DecodedPendingState
+    ) -> DecodedDeliveryState {
+        let commandIDs = Set(pending.commands.map(\.id))
+        let taskIDs = Set(pending.taskOperations.map(\.id))
+        let durationIDs = Set(pending.durationOperations.map(\.id))
+        let autoStartIDs = Set(pending.autoStartOperations.map { $0.id.uuidString.lowercased() })
+        let selectedIDs = Set(pending.selectedTaskOperations.map { $0.id.uuidString.lowercased() })
+        return DecodedDeliveryState(
+            commands: decodedStringSet(from: values, key: .neverSentCommandIDs).intersection(commandIDs),
+            tasks: decodedStringSet(from: values, key: .neverSentTaskOperationIDs).intersection(taskIDs),
+            durations: decodedStringSet(from: values, key: .neverSentDurationOperationIDs).intersection(durationIDs),
+            autoStart: decodedStringSet(from: values, key: .neverSentAutoStartOperationIDs).intersection(autoStartIDs),
+            selectedTask: decodedStringSet(from: values, key: .neverSentSelectedTaskOperationIDs).intersection(selectedIDs),
+            headWallMs: decodedInt(from: values, key: .canonicalHeadWallMs),
+            headCounter: decodedInt(from: values, key: .canonicalHeadCounter)
+        )
+    }
+
+    private static func decodedStringSet(
+        from values: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Set<String> {
+        do {
+            return try values.decodeIfPresent(Set<String>.self, forKey: key) ?? []
+        } catch {
+            return []
+        }
+    }
+
+    private static func decodedInt(
+        from values: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int64? {
+        do {
+            return try values.decodeIfPresent(Int64.self, forKey: key) ?? nil
+        } catch {
+            return nil
+        }
     }
 
     private static func normalizedLegacySentinel(_ operation: DurationOperation) -> DurationOperation {

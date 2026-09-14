@@ -32,10 +32,24 @@ enum PersistedLegacyMigration {
 
     static func restoreTaskMetadata(_ legacy: LocalTaskState, state: inout PersistedTimerState) {
         state.mergeKnownTasks(legacy.tasks + Array(legacy.assignments.values))
-        state.legacyTaskAssignments.merge(legacy.assignments.mapValues(\.id)) { _, migrated in migrated }
+        // legacyTaskAssignments is decode-only: immutable retarget carries
+        // task identity, and no reader consults this map. Do not write it.
+        let rewrittenIDs = rewrittenStartIDs(in: state.pendingCommands, assignments: legacy.assignments)
         state.pendingCommands = assignTasks(to: state.pendingCommands, assignments: legacy.assignments)
+        for id in rewrittenIDs {
+            state.recordNeverSentCommand(id: id)
+        }
         state.canonicalTimer = assignTask(to: state.canonicalTimer, assignments: legacy.assignments)
         state.history = assignTasks(to: state.history, assignments: legacy.assignments)
+    }
+
+    private static func rewrittenStartIDs(
+        in commands: [TimerCommand],
+        assignments: [String: FocusTask]
+    ) -> [String] {
+        commands.filter { command in
+            command.taskId == nil && command.type == .start && assignments[command.timerId] != nil
+        }.map(\.id)
     }
 
     static func migrateDurationSettings(
@@ -54,6 +68,7 @@ enum PersistedLegacyMigration {
                 hlcCounter: 0
             )
             state.pendingDurationOperations.append(operation)
+            state.recordNeverSentDurationOperation(id: operation.id)
             operationIDs.append(operation.id)
         }
         return LegacyDurationMigrationResult(enqueuedOperationIDs: operationIDs)
@@ -77,6 +92,7 @@ enum PersistedLegacyMigration {
             hlcCounter: state.hlcCounter
         )
         state.pendingAutoStartOperations.append(operation)
+        state.recordNeverSentAutoStartOperation(id: operation.id)
         return LegacyOperationMigrationResult(didMigrate: true, operationID: operation.id)
     }
 
@@ -101,6 +117,7 @@ enum PersistedLegacyMigration {
             hlcCounter: state.hlcCounter
         )
         state.pendingSelectedTaskOperations.append(operation)
+        state.recordNeverSentSelectedTaskOperation(id: operation.id)
         return LegacyOperationMigrationResult(didMigrate: true, operationID: operation.id)
     }
 
@@ -225,6 +242,7 @@ enum PersistedLegacyMigration {
                 hlcCounter: state.hlcCounter
             )
             state.pendingTaskOperations.append(operation)
+            state.recordNeverSentTaskOperation(id: operation.id)
             operationIDs.append(operation.id)
         }
         return operationIDs

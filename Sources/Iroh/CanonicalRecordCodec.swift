@@ -224,6 +224,9 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
         case (.genesis, .genesis(let value)):
             return value.isValid
         case (.timer, .timer(let value)):
+            // Explicit null taskId is valid for retarget (unassign); omitted
+            // taskId never reaches here: TimerCommand decoding requires
+            // contains(.taskId) for retarget and rejects omission.
             return (1...WireBounds.maxSafeInteger).contains(value.deviceSequence)
                 && (60_000...14_400_000).contains(value.plannedDurationMs)
                 && (-WireBounds.maxSafeInteger...WireBounds.maxSafeInteger).contains(value.observedElapsedMs)
@@ -232,7 +235,7 @@ struct IrohOperationRecord: Codable, Equatable, Sendable {
                 && IrohProtocolV1.isValidIdentifier(value.id)
                 && IrohProtocolV1.isValidIdentifier(value.timerId)
                 && (value.taskId.map(IrohProtocolV1.isValidTaskID) ?? true)
-                && (value.taskId == nil || (value.type == .start && value.phase == .focus))
+                && (value.taskId == nil || ((value.type == .start || value.type == .retarget) && value.phase == .focus))
         case (.task, .task(let value)):
             return value.isValid
                 && IrohProtocolV1.isValidIdentifier(value.id)

@@ -14,7 +14,7 @@ struct PersistedStateCompatibilityTests {
         #expect((object["pendingCommands"] as? [Any])?.isEmpty == true)
         #expect(object["serverTimeOffsetMs"] as? Int == 125)
         #expect(
-            encoded == Data(#"{"autoStartBreaks":false,"deviceId":"device-compatibility","hasCorruptPendingOperations":false,"hasExplicitPhaseSelection":false,"history":[],"hlcCounter":0,"hlcWallMs":0,"knownTasks":[],"lastTrustedTimeMs":2000000,"legacyTaskAssignments":{},"localCommandDates":{},"localTimerOwners":{},"nextSequence":1,"pendingAutoStartOperations":[],"pendingCommands":[],"pendingDurationOperations":[],"pendingSelectedTaskOperations":[],"pendingTaskOperations":[],"provisionalBreaks":[],"provisionalPhaseAdvances":[],"revision":0,"selectedPhaseGeneration":0,"sequenceExhausted":false,"serverTimeAnchorMs":2000000,"serverTimeAnchorUptime":100,"serverTimeOffsetMs":125,"serverTimeUncertaintyMs":25,"settings":{"autoStartBreaks":false,"focusDurationMs":1500000,"longBreakDurationMs":900000,"selectedPhase":"focus","shortBreakDurationMs":300000},"tasks":[]}"#.utf8)
+            encoded == Data(#"{"autoStartBreaks":false,"deviceId":"device-compatibility","hasCorruptPendingOperations":false,"hasExplicitPhaseSelection":false,"history":[],"hlcCounter":0,"hlcWallMs":0,"knownTasks":[],"lastTrustedTimeMs":2000000,"legacyTaskAssignments":{},"localCommandDates":{},"localTimerOwners":{},"neverSentAutoStartOperationIDs":[],"neverSentCommandIDs":[],"neverSentDurationOperationIDs":[],"neverSentSelectedTaskOperationIDs":[],"neverSentTaskOperationIDs":[],"nextSequence":1,"pendingAutoStartOperations":[],"pendingCommands":[],"pendingDurationOperations":[],"pendingSelectedTaskOperations":[],"pendingTaskOperations":[],"provisionalBreaks":[],"provisionalPhaseAdvances":[],"revision":0,"selectedPhaseGeneration":0,"sequenceExhausted":false,"serverTimeAnchorMs":2000000,"serverTimeAnchorUptime":100,"serverTimeOffsetMs":125,"serverTimeUncertaintyMs":25,"settings":{"autoStartBreaks":false,"focusDurationMs":1500000,"longBreakDurationMs":900000,"selectedPhase":"focus","shortBreakDurationMs":300000},"tasks":[]}"#.utf8)
         )
     }
 
@@ -47,7 +47,14 @@ struct PersistedStateCompatibilityTests {
             "knownTasks",
             "selectedTaskID",
             "legacyTaskAssignments",
-            "hasCorruptPendingOperations"
+            "hasCorruptPendingOperations",
+            "neverSentCommandIDs",
+            "neverSentTaskOperationIDs",
+            "neverSentDurationOperationIDs",
+            "neverSentAutoStartOperationIDs",
+            "neverSentSelectedTaskOperationIDs",
+            "canonicalHeadWallMs",
+            "canonicalHeadCounter"
         ] {
             object.removeValue(forKey: key)
         }
@@ -66,6 +73,8 @@ struct PersistedStateCompatibilityTests {
         #expect(decoded.tasks.isEmpty)
         #expect(decoded.knownTasks.isEmpty)
         #expect(!decoded.hasCorruptPendingOperations)
+        #expect(decoded.neverSentCommandIDs.isEmpty)
+        #expect(decoded.canonicalHeadWallMs == nil)
     }
 
     @Test
@@ -218,6 +227,11 @@ struct PersistedStateCompatibilityTests {
         "legacyTaskAssignments",
         "localCommandDates",
         "localTimerOwners",
+        "neverSentAutoStartOperationIDs",
+        "neverSentCommandIDs",
+        "neverSentDurationOperationIDs",
+        "neverSentSelectedTaskOperationIDs",
+        "neverSentTaskOperationIDs",
         "nextSequence",
         "pendingAutoStartOperations",
         "pendingCommands",

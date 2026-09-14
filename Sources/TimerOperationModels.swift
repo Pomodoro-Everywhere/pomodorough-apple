@@ -1,10 +1,10 @@
 import Foundation
 
 enum CommandType: String, Codable, Sendable {
-    case start, pause, resume, finish, cancel, clear
+    case start, pause, resume, finish, cancel, clear, retarget
 }
 
-struct TimerCommand: Codable, Identifiable, Equatable, Sendable {
+struct TimerCommand: Identifiable, Equatable, Sendable {
     let id: String
     let deviceSequence: Int64
     let timerId: String
@@ -17,15 +17,95 @@ struct TimerCommand: Codable, Identifiable, Equatable, Sendable {
     let hlcCounter: Int64
     let observedElapsedMs: Int64
 
+    init(
+        id: String,
+        deviceSequence: Int64,
+        timerId: String,
+        taskId: String?,
+        type: CommandType,
+        phase: TimerPhase,
+        plannedDurationMs: Int64,
+        occurredAt: Date,
+        hlcWallMs: Int64,
+        hlcCounter: Int64,
+        observedElapsedMs: Int64
+    ) {
+        self.id = id
+        self.deviceSequence = deviceSequence
+        self.timerId = timerId
+        self.taskId = taskId
+        self.type = type
+        self.phase = phase
+        self.plannedDurationMs = plannedDurationMs
+        self.occurredAt = occurredAt
+        self.hlcWallMs = hlcWallMs
+        self.hlcCounter = hlcCounter
+        self.observedElapsedMs = observedElapsedMs
+    }
+
     var isValid: Bool {
         !id.isEmpty
             && !timerId.isEmpty
             && (taskId == nil || taskId.flatMap(UUID.init(uuidString:)) != nil)
+            && (type != .retarget || phase == .focus)
             && (1...WireBounds.maxSafeInteger).contains(deviceSequence)
             && DurationValues.isValidWireDuration(plannedDurationMs)
             && (0...plannedDurationMs).contains(observedElapsedMs)
             && WireBounds.isValidClock(wallMs: hlcWallMs, counter: hlcCounter)
             && WireBounds.isWithinClockSkew(wallMs: hlcWallMs, occurredAt: occurredAt)
+    }
+}
+
+extension TimerCommand: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, deviceSequence, timerId, taskId, type, phase
+        case plannedDurationMs, occurredAt, hlcWallMs, hlcCounter, observedElapsedMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        deviceSequence = try values.decode(Int64.self, forKey: .deviceSequence)
+        timerId = try values.decode(String.self, forKey: .timerId)
+        type = try values.decode(CommandType.self, forKey: .type)
+        // Retarget keeps explicit null (unassign) distinct from omission:
+        // decodeIfPresent collapses omission to nil, so require the key.
+        if type == .retarget, !values.contains(.taskId) {
+            throw DecodingError.keyNotFound(
+                CodingKeys.taskId,
+                .init(codingPath: values.codingPath, debugDescription: "Retarget requires taskId.")
+            )
+        }
+        taskId = try values.decodeIfPresent(String.self, forKey: .taskId)
+        phase = try values.decode(TimerPhase.self, forKey: .phase)
+        plannedDurationMs = try values.decode(Int64.self, forKey: .plannedDurationMs)
+        occurredAt = try values.decode(Date.self, forKey: .occurredAt)
+        hlcWallMs = try values.decode(Int64.self, forKey: .hlcWallMs)
+        hlcCounter = try values.decode(Int64.self, forKey: .hlcCounter)
+        observedElapsedMs = try values.decode(Int64.self, forKey: .observedElapsedMs)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(deviceSequence, forKey: .deviceSequence)
+        try values.encode(timerId, forKey: .timerId)
+        if type == .retarget {
+            if let taskId {
+                try values.encode(taskId, forKey: .taskId)
+            } else {
+                try values.encodeNil(forKey: .taskId)
+            }
+        } else {
+            try values.encodeIfPresent(taskId, forKey: .taskId)
+        }
+        try values.encode(type, forKey: .type)
+        try values.encode(phase, forKey: .phase)
+        try values.encode(plannedDurationMs, forKey: .plannedDurationMs)
+        try values.encode(occurredAt, forKey: .occurredAt)
+        try values.encode(hlcWallMs, forKey: .hlcWallMs)
+        try values.encode(hlcCounter, forKey: .hlcCounter)
+        try values.encode(observedElapsedMs, forKey: .observedElapsedMs)
     }
 }
 

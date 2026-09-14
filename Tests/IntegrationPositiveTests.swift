@@ -2977,7 +2977,7 @@ struct IntegrationPositiveTests {
     }
 
     @Test @MainActor
-    func retargetRewritesPendingStartPreAck() throws {
+    func retargetCreatesImmutableCommandPreAck() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -3005,10 +3005,18 @@ struct IntegrationPositiveTests {
 
         #expect(model.task(forTimerID: "timer-preack-retarget")?.id == nextTask.id)
         let persisted = try persistedState(defaults)
-        let rewritten = try #require(persisted.pendingCommands.first(where: {
+        let start = try #require(persisted.pendingCommands.first(where: {
             $0.timerId == "timer-preack-retarget" && $0.type == .start
         }))
-        #expect(rewritten.taskId == nextTask.id.uuidString.lowercased())
+        #expect(start.taskId == activeTask.id.uuidString.lowercased())
+        let retarget = try #require(persisted.pendingCommands.first(where: {
+            $0.timerId == "timer-preack-retarget" && $0.type == .retarget
+        }))
+        #expect(retarget.taskId == nextTask.id.uuidString.lowercased())
+        #expect(retarget.phase == .focus)
+        #expect(persisted.neverSentCommandIDs.contains(retarget.id))
+        #expect(persisted.pendingSelectedTaskOperations.count == 1)
+        #expect(persisted.legacyTaskAssignments.isEmpty)
     }
 
     // AP92: finished timers land on Skip with no Dismiss control, so
@@ -3952,6 +3960,8 @@ struct IntegrationPositiveTests {
                                     model?.cancel(at: date)
                                 case .clear:
                                     model?.clear()
+                                case .retarget:
+                                    Issue.record("\(label): unexpected retarget in provisional chain")
                                 }
                             }
                             if restartsBeforeHTTP {

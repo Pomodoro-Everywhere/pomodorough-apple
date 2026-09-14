@@ -157,7 +157,7 @@ final class SharedCore: @unchecked Sendable {
 
     func reconcileRebase(_ input: CoreReconcileInput) throws -> CoreReconcileOutput {
         let output: CoreReconcileOutput = try dispatch(
-            "reconcile.rebase.v1",
+            "reconcile.rebase.v2",
             input: input,
             as: CoreReconcileOutput.self
         )
