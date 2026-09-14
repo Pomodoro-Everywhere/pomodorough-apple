@@ -19,6 +19,7 @@ struct TimerControls: View {
     let layout: TimerLayout
     var compact = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Namespace private var glassNamespace
 
     var body: some View {
@@ -42,44 +43,60 @@ struct TimerControls: View {
 
     @ViewBuilder
     private func controls(glass: Bool) -> some View {
-        if usesHorizontalControls {
+        // One row when the buttons fit side by side, stacked rows when
+        // they don't. Width is always bounded (even inside the scroll
+        // view), so the fit is honest on phones, iPad, and large text.
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
                 primaryButton(glass: glass)
-                if model.isTimerActive {
-                    controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-                    controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
-                    if model.hasActiveCompletionAlert {
-                        controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
-                    }
-                } else if model.hasActiveCompletionAlert {
-                    controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
-                }
+                secondaryInlineButtons(glass: glass)
             }
-        } else {
             VStack(spacing: 14) {
                 primaryButton(glass: glass)
-                if model.isTimerActive {
-                    HStack(spacing: 14) {
-                        controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-                        controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
-                    }
-                }
-                if model.isTimerActive {
-                    if model.hasActiveCompletionAlert {
-                        controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
-                    }
-                } else if model.hasActiveCompletionAlert {
-                    controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
-                } else {
-                    // Idle second row: keeps the button block two lines tall
-                    // in every state so the card never jumps, and offers a
-                    // way past the selected phase without starting it.
-                    // Finished timers land here too: the next Start replaces
-                    // them, so no Dismiss control is needed.
-                    controlButton(skipTitle, symbol: "forward.fill", glassID: .skip, prominent: false, glass: glass) {
-                        model.selectPhase(skipDestination)
-                    }
-                }
+                secondaryStackedButtons(glass: glass)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func secondaryInlineButtons(glass: Bool) -> some View {
+        if model.isTimerActive {
+            controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
+            controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+            if model.hasActiveCompletionAlert {
+                controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
+            }
+        } else if model.hasActiveCompletionAlert {
+            controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
+        } else {
+            controlButton(skipTitle, symbol: "forward.fill", glassID: .skip, prominent: false, glass: glass) {
+                model.selectPhase(skipDestination)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func secondaryStackedButtons(glass: Bool) -> some View {
+        if model.isTimerActive {
+            HStack(spacing: 14) {
+                controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
+                controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+            }
+        }
+        if model.isTimerActive {
+            if model.hasActiveCompletionAlert {
+                controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
+            }
+        } else if model.hasActiveCompletionAlert {
+            controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
+        } else {
+            // Idle second row: keeps the button block two lines tall
+            // in every state so the card never jumps, and offers a
+            // way past the selected phase without starting it.
+            // Finished timers land here too: the next Start replaces
+            // them, so no Dismiss control is needed.
+            controlButton(skipTitle, symbol: "forward.fill", glassID: .skip, prominent: false, glass: glass) {
+                model.selectPhase(skipDestination)
             }
         }
     }
@@ -100,6 +117,24 @@ struct TimerControls: View {
         TimerAlarmScheduler.stopSoundTitle
     }
 
+    /// At accessibility sizes the icon is dropped and the title may take
+    /// two lines: icon + headline text no longer fits side by side, and a
+    /// clipped "…" label (Finish/Cancel) is worse than a taller button.
+    @ViewBuilder
+    private func controlLabel(title: String, symbol: String) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Text(title)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.5)
+        } else {
+            Label(title, systemImage: symbol)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .allowsTightening(true)
+        }
+    }
+
     @ViewBuilder
     private func primaryButton(glass: Bool) -> some View {
         if model.canonicalTimer?.status == .running {
@@ -116,16 +151,6 @@ struct TimerControls: View {
                 action: model.start
             )
         }
-    }
-
-    private var usesHorizontalControls: Bool {
-#if os(iOS)
-        // Side-by-side landscape card has a narrow button column; a
-        // three-up row would clip, so iOS always stacks vertically.
-        false
-#else
-        layout != .landscape
-#endif
     }
 
     private var controlState: ControlState {
@@ -148,10 +173,7 @@ struct TimerControls: View {
         action: @escaping () -> Void
     ) -> some View {
         let button = Button(action: action) {
-            Label(title, systemImage: symbol)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .allowsTightening(true)
+            controlLabel(title: title, symbol: symbol)
                 .frame(maxWidth: .infinity, minHeight: compact ? 28 : 44)
         }
             .font(.headline)
@@ -161,8 +183,9 @@ struct TimerControls: View {
         if #available(iOS 26, macOS 26, *), glass {
             if prominent {
                 button
-                    .buttonStyle(.glassProminent)
-                    .tint(PomodoroughTheme.signal)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.black)
+                    .glassEffect(.regular.tint(PomodoroughTheme.signal).interactive(), in: Capsule())
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
@@ -170,6 +193,7 @@ struct TimerControls: View {
                 button
                     .buttonStyle(.glass)
                     .tint(PomodoroughTheme.porcelain.opacity(0.16))
+                    .foregroundStyle(Color.black)
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(glassID == .primary ? .matchedGeometry : .materialize)
@@ -177,8 +201,8 @@ struct TimerControls: View {
         } else {
             button
                 .buttonStyle(.borderedProminent)
-                .tint(prominent ? PomodoroughTheme.ticket : PomodoroughTheme.sky)
-                .foregroundStyle(PomodoroughTheme.track)
+                .tint(prominent ? PomodoroughTheme.signal : PomodoroughTheme.sky)
+                .foregroundStyle(Color.black)
                 .controlSize(compact ? .regular : .large)
         }
     }

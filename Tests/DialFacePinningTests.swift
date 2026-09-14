@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import Pomodorough
 
-// Pins other-agent dial-face/header/compact work: progress derivation,
-// header fan-out, backwards-compatible defaults, toolbar preference max.
+// Pins other-agent dial-face/compact work: progress derivation,
+// indicator color defaults, backwards-compatible defaults, toolbar
+// preference max.
 @Suite("Dial face pinning")
 struct DialFacePinningTests {
     @Test func longBreakIndicatorDerivesProgressFromCompletedToday() {
@@ -39,12 +40,10 @@ struct DialFacePinningTests {
         #expect(DialFace(progress: 0.5, phase: .focus, status: "Running", timeText: "17:00", layout: .portrait).completedFocusCount == 0)
     }
 
-    @Test func timerReadoutHeaderStoresPhaseStatusAndCount() {
-        let header = TimerReadoutHeader(phase: .focus, status: "Running", completedFocusCount: 5)
-        #expect(header.phase == .focus)
-        #expect(header.status == "Running")
-        #expect(header.completedFocusCount == 5)
-        #expect(LongBreakProgressIndicator(completedToday: header.completedFocusCount).progress == 1)
+    @Test func longBreakIndicatorDefaultsToTicketAndAcceptsCustomColor() {
+        #expect(LongBreakProgressIndicator(completedToday: 5).color == PomodoroughTheme.ticket)
+        #expect(LongBreakProgressIndicator(completedToday: 5, color: PomodoroughTheme.platform).color == PomodoroughTheme.platform)
+        #expect(LongBreakProgressIndicator(progress: 2, completedToday: 6, color: PomodoroughTheme.platform).color == PomodoroughTheme.platform)
     }
 
     @Test func syncToolbarPreferenceTakesMax() {

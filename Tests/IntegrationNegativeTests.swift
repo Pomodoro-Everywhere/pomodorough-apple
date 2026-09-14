@@ -545,7 +545,7 @@ struct IntegrationNegativeTests {
     }
 
     @Test @MainActor
-    func deniedAlarmAuthorizationKeepsTimerRunningAndReportsFallback() async throws {
+    func deniedAlarmAuthorizationKeepsTimerRunningWithoutAlert() async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -557,8 +557,7 @@ struct IntegrationNegativeTests {
         await model.waitForAlarmOperations()
 
         #expect(model.canonicalTimer?.status == .running)
-        #expect(model.errorMessage?.contains("Timer continues in Pomodorough") == true)
-        #expect(model.errorMessage?.contains("Allow notifications or alarms in Settings") == true)
+        #expect(model.errorMessage == nil)
     }
 
     @Test @MainActor

@@ -1,51 +1,73 @@
 {
-  "sourceLanguage": "en",
-  "strings": {
-    "%@ duration": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ duration"
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@" : {
+
+    },
+    "%@ arrivals" : {
+
+    },
+    "%@ completed" : {
+
+    },
+    "%@ duration" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ duration"
           }
         }
       }
     },
-    "%@ remaining, %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ remaining, %@"
+    "%@ finished pomodoros" : {
+
+    },
+    "%@ remaining, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ remaining, %@"
           }
         }
       }
     },
-    "%@ timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ timer"
+    "%@ timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ timer"
           }
         }
       }
     },
-    "%@, %@, %@, %lld minutes": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%@, %@, %@, %lld minute"
+    "%@, %@, %@, %@ minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@, %3$@, %4$@ minutes"
+          }
+        }
+      }
+    },
+    "%@, %@, %@, %lld minutes" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%@, %@, %@, %lld minute"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%@, %@, %@, %lld minutes"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%@, %@, %@, %lld minutes"
                 }
               }
             }
@@ -53,41 +75,91 @@
         }
       }
     },
-    "%@; Iroh %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@; Iroh %@"
+    "%@; Iroh %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@; Iroh %@"
           }
         }
       }
     },
-    "%lld": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld"
+    "%arg arrivals" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%arg arrivals"
           }
         }
       }
     },
-    "%lld completed": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld completed"
+    "%arg completed of %arg runs" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%arg completed of %arg runs"
+          }
+        }
+      }
+    },
+    "%arg finished pomodoros, %arg spent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%arg finished pomodoros, %arg spent"
+          }
+        }
+      }
+    },
+    "%arg of 4 toward the next long break, %arg completed today" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%arg of 4 toward the next long break, %arg completed today"
+          }
+        }
+      }
+    },
+    "%arg · Σ %arg" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%arg · Σ %arg"
+          }
+        }
+      }
+    },
+    "%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld"
+          }
+        }
+      }
+    },
+    "%lld completed" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld completed"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld completed"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld completed"
                 }
               }
             }
@@ -95,21 +167,21 @@
         }
       }
     },
-    "%lld completed pomodoros, %@": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld completed pomodoro, %@"
+    "%lld completed pomodoros, %@" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld completed pomodoro, %@"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld completed pomodoros, %@"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld completed pomodoros, %@"
                 }
               }
             }
@@ -117,21 +189,21 @@
         }
       }
     },
-    "%lld completed pomodoros, %@ total": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld completed pomodoro, %@ total"
+    "%lld completed pomodoros, %@ total" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld completed pomodoro, %@ total"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld completed pomodoros, %@ total"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld completed pomodoros, %@ total"
                 }
               }
             }
@@ -139,21 +211,21 @@
         }
       }
     },
-    "%lld finished pomodoros": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld finished pomodoro"
+    "%lld finished pomodoros" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld finished pomodoro"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld finished pomodoros"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld finished pomodoros"
                 }
               }
             }
@@ -161,21 +233,22 @@
         }
       }
     },
-    "%lld history entries": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld history entry"
+    "%lld history entries" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld history entry"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld history entries"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld history entries"
                 }
               }
             }
@@ -183,31 +256,31 @@
         }
       }
     },
-    "%lld min": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld min"
+    "%lld min" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld min"
           }
         }
       }
     },
-    "%lld minutes": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld minute"
+    "%lld minutes" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld minute"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld minutes"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld minutes"
                 }
               }
             }
@@ -215,21 +288,22 @@
         }
       }
     },
-    "%lld of 4 pomodoros today": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld of 4 pomodoro today"
+    "%lld of 4 pomodoros today" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld of 4 pomodoro today"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld of 4 pomodoros today"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld of 4 pomodoros today"
                 }
               }
             }
@@ -237,21 +311,21 @@
         }
       }
     },
-    "%lld peers": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld peer"
+    "%lld peers" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld peer"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld peers"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld peers"
                 }
               }
             }
@@ -259,21 +333,21 @@
         }
       }
     },
-    "%lld queued": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld queued"
+    "%lld queued" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld queued"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld queued"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld queued"
                 }
               }
             }
@@ -281,21 +355,21 @@
         }
       }
     },
-    "%lld records": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld record"
+    "%lld records" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld record"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld records"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld records"
                 }
               }
             }
@@ -303,21 +377,22 @@
         }
       }
     },
-    "%lld total": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld total"
+    "%lld total" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld total"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld total"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld total"
                 }
               }
             }
@@ -325,2601 +400,2797 @@
         }
       }
     },
-    "ACTION": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ACTION"
+    "ACTION" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ACTION"
           }
         }
       }
     },
-    "ADD TASK": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ADD TASK"
+    "ADD TASK" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ADD TASK"
           }
         }
       }
     },
-    "Account": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account"
+    "Account" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account"
           }
         }
       }
     },
-    "Account data remains quarantined until deletion and local cleanup can be confirmed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account data remains quarantined until deletion and local cleanup can be confirmed."
+    "Account data remains quarantined until deletion and local cleanup can be confirmed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account data remains quarantined until deletion and local cleanup can be confirmed."
           }
         }
       }
     },
-    "Account data was removed; use Retry account deletion to continue credential cleanup.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account data was removed; use Retry account deletion to continue credential cleanup."
+    "Account data was removed; use Retry account deletion to continue credential cleanup." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account data was removed; use Retry account deletion to continue credential cleanup."
           }
         }
       }
     },
-    "Account data was removed; use Retry account deletion to continue room cleanup.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account data was removed; use Retry account deletion to continue room cleanup."
+    "Account data was removed; use Retry account deletion to continue room cleanup." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account data was removed; use Retry account deletion to continue room cleanup."
           }
         }
       }
     },
-    "Account deletion is waiting for retained credentials.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion is waiting for retained credentials."
+    "Account deletion is waiting for retained credentials." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion is waiting for retained credentials."
           }
         }
       }
     },
-    "Account deletion is waiting to confirm the remote result.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion is waiting to confirm the remote result."
+    "Account deletion is waiting to confirm the remote result." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion is waiting to confirm the remote result."
           }
         }
       }
     },
-    "Account deletion paused because its recovery state could not be saved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion paused because its recovery state could not be saved."
+    "Account deletion paused because its recovery state could not be saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion paused because its recovery state could not be saved."
           }
         }
       }
     },
-    "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm."
+    "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm."
           }
         }
       }
     },
-    "Account deletion recovery": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion recovery"
+    "Account deletion recovery" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion recovery"
           }
         }
       }
     },
-    "Account deletion returned an invalid response.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion returned an invalid response."
+    "Account deletion returned an invalid response." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion returned an invalid response."
           }
         }
       }
     },
-    "Account deletion was confirmed, but local cleanup is waiting for durable recovery state.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion was confirmed, but local cleanup is waiting for durable recovery state."
+    "Account deletion was confirmed, but local cleanup is waiting for durable recovery state." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion was confirmed, but local cleanup is waiting for durable recovery state."
           }
         }
       }
     },
-    "Account deletion was confirmed; use Retry account deletion to continue local cleanup.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion was confirmed; use Retry account deletion to continue local cleanup."
+    "Account deletion was confirmed; use Retry account deletion to continue local cleanup." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion was confirmed; use Retry account deletion to continue local cleanup."
           }
         }
       }
     },
-    "Account deletion was confirmed; use Retry account deletion to continue room cleanup.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion was confirmed; use Retry account deletion to continue room cleanup."
+    "Account deletion was confirmed; use Retry account deletion to continue room cleanup." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion was confirmed; use Retry account deletion to continue room cleanup."
           }
         }
       }
     },
-    "Account deletion was rejected, but its recovery state could not be cleared.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account deletion was rejected, but its recovery state could not be cleared."
+    "Account deletion was rejected, but its recovery state could not be cleared." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account deletion was rejected, but its recovery state could not be cleared."
           }
         }
       }
     },
-    "Account switch paused because local data could not be saved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account switch paused because local data could not be saved."
+    "Account switch paused because local data could not be saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account switch paused because local data could not be saved."
           }
         }
       }
     },
-    "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data."
+    "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account timer, history, tasks, settings, and queued changes will be replaced by this device's data."
           }
         }
       }
     },
-    "Account, %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account, %@"
+    "Account, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account, %@"
           }
         }
       }
     },
-    "Active timer task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Active timer task"
+    "Active timer task" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Active timer task"
           }
         }
       }
     },
-    "Add a task, then assign it before starting focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Add a task, then assign it before starting focus."
+    "Add a task, then assign it before starting focus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a task, then assign it before starting focus."
           }
         }
       }
     },
-    "Add task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Add task"
+    "Add task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add task"
           }
         }
       }
     },
-    "Allow notifications or alarms in Settings to receive timer alerts when Pomodorough is not open.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allow notifications or alarms in Settings to receive timer alerts when Pomodorough is not open."
+    "Allow notifications or alarms in Settings to receive timer alerts when Pomodorough is not open." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow notifications or alarms in Settings to receive timer alerts when Pomodorough is not open."
           }
         }
       }
     },
-    "Allow timer alerts": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allow timer alerts"
+    "Allow timer alerts" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow timer alerts"
           }
         }
       }
     },
-    "Applies to next timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to next timer"
+    "Applies to next timer" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applies to next timer"
           }
         }
       }
     },
-    "Applies to next timer. Short after focus. Long every fourth completed focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to next timer. Short after focus. Long every fourth completed focus."
+    "Applies to next timer. Short after focus. Long every fourth completed focus." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applies to next timer. Short after focus. Long every fourth completed focus."
           }
         }
       }
     },
-    "Applies to the next focus timer and does not reassign the active timer.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to the next focus timer and does not reassign the active timer."
+    "Applies to the current running focus timer and the next timer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applies to the current running focus timer and the next timer."
           }
         }
       }
     },
-    "Applies to the current running focus timer and the next timer.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to the current running focus timer and the next timer."
+    "Applies to the next focus timer and does not reassign the active timer." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applies to the next focus timer and does not reassign the active timer."
           }
         }
       }
     },
-    "Arrivals": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Arrivals"
+    "Arrivals" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrivals"
           }
         }
       }
     },
-    "Auto-start breaks": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auto-start breaks"
+    "Auto-start breaks" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-start breaks"
           }
         }
       }
     },
-    "BEFORE DEPARTURE": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "BEFORE DEPARTURE"
+    "BEFORE DEPARTURE" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "BEFORE DEPARTURE"
           }
         }
       }
     },
-    "Bundled pomodorough_core.wasm resource is missing.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bundled pomodorough_core.wasm resource is missing."
+    "Both" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Both"
           }
         }
       }
     },
-    "CHECKING LINE": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CHECKING LINE"
+    "Bundled pomodorough_core.wasm resource is missing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bundled pomodorough_core.wasm resource is missing."
           }
         }
       }
     },
-    "Cancel": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancel"
+    "CHECKING LINE" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CHECKING LINE"
           }
         }
       }
     },
-    "Cancel account switch": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancel account switch"
+    "Cancel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
           }
         }
       }
     },
-    "Cancel timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancel timer"
+    "Cancel account switch" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel account switch"
           }
         }
       }
     },
-    "Cancelled": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancelled"
+    "Cancel timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel timer"
           }
         }
       }
     },
-    "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified."
+    "Cancelled" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled"
           }
         }
       }
     },
-    "Checking history": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking history"
+    "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change blocked because saved sequence or trusted-time state is invalid. Queued changes were not modified."
           }
         }
       }
     },
-    "Checking line": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking line"
+    "Checking history" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking history"
           }
         }
       }
     },
-    "Checking…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking…"
+    "Checking line" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking line"
           }
         }
       }
     },
-    "Choose history": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose history"
+    "Checking…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking…"
           }
         }
       }
     },
-    "Choose one replication line": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose one replication line"
+    "Choose history" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose history"
           }
         }
       }
     },
-    "Choose synchronized state": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose synchronized state"
+    "Choose one replication line" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose one replication line"
           }
         }
       }
     },
-    "Completed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed"
+    "Choose synchronized state" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose synchronized state"
           }
         }
       }
     },
-    "Completed focus": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed focus"
+    "Completed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed"
           }
         }
       }
     },
-    "Completed focus minutes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed focus minutes"
+    "Completed focus" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus"
           }
         }
       }
     },
-    "Completed focus runs": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed focus runs"
+    "Completed focus minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus minutes"
           }
         }
       }
     },
-    "Completed focus summary": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed focus summary"
+    "Completed focus runs" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus runs"
           }
         }
       }
     },
-    "Completed focus time by task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed focus time by task"
+    "Completed focus summary" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus summary"
           }
         }
       }
     },
-    "Confirm %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confirm %@"
+    "Completed focus time by task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus time by task"
           }
         }
       }
     },
-    "Confirm %@. %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confirm %@. %@"
+    "Completed focus: %@" : {
+
+    },
+    "Completed focus: %arg" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed focus: %arg"
+          }
+        }
+      }
+    },
+    "Confirm %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm %@"
+          }
+        }
+      }
+    },
+    "Confirm %@. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm %@. %@"
+          }
+        }
+      }
+    },
+    "Confirms %@ and starts history resolution" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirms %@ and starts history resolution"
+          }
+        }
+      }
+    },
+    "Connect to your iPhone to start a timer. Start was not queued." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to your iPhone to start a timer. Start was not queued."
+          }
+        }
+      }
+    },
+    "Continues without timer alerts. The timer still works while Pomodorough is open." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continues without timer alerts. The timer still works while Pomodorough is open."
+          }
+        }
+      }
+    },
+    "Controls the break after the current focus. Short after focus. Long every fourth completed focus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Controls the break after the current focus. Short after focus. Long every fourth completed focus."
+          }
+        }
+      }
+    },
+    "Could not confirm Start. Check your iPhone before trying again. Start was not queued." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not confirm Start. Check your iPhone before trying again. Start was not queued."
+          }
+        }
+      }
+    },
+    "Create Iroh room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create Iroh room"
+          }
+        }
+      }
+    },
+    "Create another room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create another room"
+          }
+        }
+      }
+    },
+    "Create invite" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create invite"
+          }
+        }
+      }
+    },
+    "Create or join an Iroh room before selecting Iroh mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create or join an Iroh room before selecting Iroh mode."
+          }
+        }
+      }
+    },
+    "Create replacement room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create replacement room"
+          }
+        }
+      }
+    },
+    "Creating room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Creating room"
+          }
+        }
+      }
+    },
+    "Current timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current timer"
+          }
+        }
+      }
+    },
+    "Delete %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete %@"
+          }
+        }
+      }
+    },
+    "Delete account" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete account"
+          }
+        }
+      }
+    },
+    "Delete task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete task"
+          }
+        }
+      }
+    },
+    "Delete task?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete task?"
           }
         }
       }
     },
-    "Confirms %@ and starts history resolution": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confirms %@ and starts history resolution"
+    "Delete “%arg”?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete “%arg”?"
           }
         }
       }
     },
-    "Connect to your iPhone to start a timer. Start was not queued.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connect to your iPhone to start a timer. Start was not queued."
+    "Deleted task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deleted task"
           }
         }
       }
     },
-    "Continues without timer alerts. The timer still works while Pomodorough is open.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Continues without timer alerts. The timer still works while Pomodorough is open."
+    "Device" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Device"
           }
         }
       }
     },
-    "Controls the break after the current focus. Short after focus. Long every fourth completed focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controls the break after the current focus. Short after focus. Long every fourth completed focus."
+    "Dismiss" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss"
           }
         }
       }
     },
-    "Could not confirm Start. Check your iPhone before trying again. Start was not queued.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not confirm Start. Check your iPhone before trying again. Start was not queued."
+    "Done" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
           }
         }
       }
     },
-    "Create Iroh room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create Iroh room"
+    "Double tap to select this phase." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Double tap to select this phase."
           }
         }
       }
     },
-    "Create another room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create another room"
+    "Double tap to select. Swipe up or down to change duration." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Double tap to select. Swipe up or down to change duration."
           }
         }
       }
     },
-    "Create invite": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create invite"
+    "Duration changes apply to next timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duration changes apply to next timer"
           }
         }
       }
     },
-    "Create or join an Iroh room before selecting Iroh mode.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create or join an Iroh room before selecting Iroh mode."
+    "Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus."
           }
         }
       }
     },
-    "Create replacement room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create replacement room"
+    "Enable timer alerts" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable timer alerts"
           }
         }
       }
     },
-    "Creating room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Creating room"
+    "Enabling timer alerts" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enabling timer alerts"
           }
         }
       }
     },
-    "Delete %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete %@"
+    "Exchanging changes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exchanging changes"
           }
         }
       }
     },
-    "Delete account": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete account"
+    "FINISHED" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FINISHED"
           }
         }
       }
     },
-    "Delete task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete task"
+    "FOCUS TASK" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FOCUS TASK"
           }
         }
       }
     },
-    "Deleted task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deleted task"
+    "Finish" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finish"
           }
         }
       }
     },
-    "Device": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Device"
+    "Finish a focus timer to see its time here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finish a focus timer to see its time here."
           }
         }
       }
     },
-    "Dismiss": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dismiss"
+    "Finish account deletion cleanup before signing in." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finish account deletion cleanup before signing in."
           }
         }
       }
     },
-    "Done": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Done"
+    "Finish timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finish timer"
           }
         }
       }
     },
-    "Double tap to select this phase.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Double tap to select this phase."
+    "Focus" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus"
           }
         }
       }
     },
-    "Double tap to select. Swipe up or down to change duration.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Double tap to select. Swipe up or down to change duration."
+    "Focus complete" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus complete"
           }
         }
       }
     },
-    "Duration changes apply to next timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Duration changes apply to next timer"
+    "Focus task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus task"
           }
         }
       }
     },
-    "Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus."
+    "Focus task: %@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus task: %@"
           }
         }
       }
     },
-    "Enable timer alerts": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enable timer alerts"
+    "Google Sign-In is not configured for this build." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Sign-In is not configured for this build."
           }
         }
       }
     },
-    "Enabling timer alerts": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enabling timer alerts"
+    "Google did not return an identity token." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google did not return an identity token."
           }
         }
       }
     },
-    "Exchanging changes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Exchanging changes"
+    "Hear when time is up" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hear when time is up"
           }
         }
       }
     },
-    "FINISHED": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FINISHED"
+    "History conflict. This device has %lld completed entries. Your account has %lld." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History conflict. This device has %lld completed entries. Your account has %lld."
           }
         }
       }
     },
-    "FOCUS TASK": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FOCUS TASK"
+    "History resolution in progress" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History resolution in progress"
           }
         }
       }
     },
-    "Finish": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish"
+    "History resolution retry required. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History resolution retry required. %@"
           }
         }
       }
     },
-    "Finish a focus timer to see its time here.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish a focus timer to see its time here."
+    "History resolution retry required. %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History resolution retry required. %@ %@"
           }
         }
       }
     },
-    "Finish account deletion cleanup before signing in.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish account deletion cleanup before signing in."
+    "History resolution retry required. %@ You appear offline. Reconnect, then retry." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History resolution retry required. %@ You appear offline. Reconnect, then retry."
           }
         }
       }
     },
-    "Finish timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish timer"
+    "History retry needed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History retry needed"
           }
         }
       }
     },
-    "Focus": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Focus"
+    "History setup needs a retry" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History setup needs a retry"
           }
         }
       }
     },
-    "Focus complete": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Focus complete"
+    "History setup paused because the server returned an invalid response. Local data remains on this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History setup paused because the server returned an invalid response. Local data remains on this device."
           }
         }
       }
     },
-    "Focus task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Focus task"
+    "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved."
           }
         }
       }
     },
-    "Focus task: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Focus task: %@"
+    "Idle" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Idle"
           }
         }
       }
     },
-    "Google Sign-In is not configured for this build.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Google Sign-In is not configured for this build."
+    "Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair."
           }
         }
       }
     },
-    "Google did not return an identity token.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Google did not return an identity token."
+    "In sync" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In sync"
           }
         }
       }
     },
-    "Hear when time is up": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hear when time is up"
+    "Invalid room invite: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid room invite: %@"
           }
         }
       }
     },
-    "History conflict. This device has %lld completed entries. Your account has %lld.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History conflict. This device has %lld completed entries. Your account has %lld."
+    "Invite contains room secret and peer addresses. Treat it as sensitive. Endpoint secret key never leaves this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite contains room secret and peer addresses. Treat it as sensitive. Endpoint secret key never leaves this device."
           }
         }
       }
     },
-    "History resolution in progress": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History resolution in progress"
+    "Invite grants full read and write access to this room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite grants full read and write access to this room"
           }
         }
       }
     },
-    "History resolution retry required. %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History resolution retry required. %@"
+    "Iroh" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iroh"
           }
         }
       }
     },
-    "History resolution retry required. %@ %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History resolution retry required. %@ %@"
+    "Iroh room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iroh room"
           }
         }
       }
     },
-    "History resolution retry required. %@ You appear offline. Reconnect, then retry.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History resolution retry required. %@ You appear offline. Reconnect, then retry."
+    "Iroh room change was not saved: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iroh room change was not saved: %@"
           }
         }
       }
     },
-    "History retry needed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History retry needed"
+    "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room."
           }
         }
       }
     },
-    "History setup needs a retry": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History setup needs a retry"
+    "Join an Iroh room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join an Iroh room"
           }
         }
       }
     },
-    "History setup paused because the server returned an invalid response. Local data remains on this device.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History setup paused because the server returned an invalid response. Local data remains on this device."
+    "Join another room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join another room"
           }
         }
       }
     },
-    "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved."
+    "Join room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join room"
           }
         }
       }
     },
-    "Idle": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Idle"
+    "Join with invite" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join with invite"
           }
         }
       }
     },
-    "Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Immutable-ID conflict. Iroh sync is stopped; rotate to a new room to repair."
+    "Joining saves your current workspace, downloads the room's fixed genesis and operations, then switches views. Leaving restores your previous workspace unchanged." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joining saves your current workspace, downloads the room's fixed genesis and operations, then switches views. Leaving restores your previous workspace unchanged."
           }
         }
       }
     },
-    "In sync": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In sync"
+    "Keep Both" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Both"
           }
         }
       }
     },
-    "Invalid room invite: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid room invite: %@"
+    "Keep Local" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Local"
           }
         }
       }
     },
-    "Invite contains room secret and peer addresses. Treat it as sensitive. Endpoint secret key never leaves this device.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invite contains room secret and peer addresses. Treat it as sensitive. Endpoint secret key never leaves this device."
+    "Keep Remote" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Remote"
           }
         }
       }
     },
-    "Invite grants full read and write access to this room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invite grants full read and write access to this room"
+    "Keeping local history requires a server update. Your saved choice and local data remain on this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keeping local history requires a server update. Your saved choice and local data remain on this device."
           }
         }
       }
     },
-    "Iroh": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Iroh"
+    "Keychain %@ failed (OSStatus %d): %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keychain %@ failed (OSStatus %d): %@"
           }
         }
       }
     },
-    "Iroh room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Iroh room"
+    "Leave room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave room"
           }
         }
       }
     },
-    "Iroh room change was not saved: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Iroh room change was not saved: %@"
+    "Leave this Iroh room?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave this Iroh room?"
           }
         }
       }
     },
-    "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Iroh room storage changed, but durability could not be confirmed. Restart Pomodorough before changing this room."
+    "Leaving restores the workspace you used before joining. The room's retained operation log stays saved on this device so you can return later." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leaving restores the workspace you used before joining. The room's retained operation log stays saved on this device so you can return later."
           }
         }
       }
     },
-    "Join an Iroh room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Join an Iroh room"
+    "Limited" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limited"
           }
         }
       }
     },
-    "Join another room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Join another room"
+    "Line status" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Line status"
           }
         }
       }
     },
-    "Join room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Join room"
+    "Local account and timer data will be removed from this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local account and timer data will be removed from this device."
           }
         }
       }
     },
-    "Join with invite": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Join with invite"
+    "Local change could not be saved. The previous state was restored." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local change could not be saved. The previous state was restored."
           }
         }
       }
     },
-    "Joining saves your current workspace, downloads the room's fixed genesis and operations, then switches views. Leaving restores your previous workspace unchanged.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Joining saves your current workspace, downloads the room's fixed genesis and operations, then switches views. Leaving restores your previous workspace unchanged."
+    "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup."
           }
         }
       }
     },
-    "Keep Both": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keep Both"
+    "Long break" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Long break"
           }
         }
       }
     },
-    "Keep Local": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keep Local"
+    "Long break complete" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Long break complete"
           }
         }
       }
     },
-    "Keep Remote": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keep Remote"
+    "Menu bar display" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menu bar display"
           }
         }
       }
     },
-    "Keeping local history requires a server update. Your saved choice and local data remain on this device.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keeping local history requires a server update. Your saved choice and local data remain on this device."
+    "NETWORK SWITCHBOARD" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NETWORK SWITCHBOARD"
           }
         }
       }
     },
-    "Keychain %@ failed (OSStatus %d): %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keychain %@ failed (OSStatus %d): %@"
+    "Navigate between Timer, Tasks, Arrivals, and Network" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Navigate between Timer, Tasks, Arrivals, and Network"
           }
         }
       }
     },
-    "Leave room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leave room"
+    "Network" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network"
           }
         }
       }
     },
-    "Leave this Iroh room?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leave this Iroh room?"
+    "Network replication" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network replication"
           }
         }
       }
     },
-    "Leaving restores the workspace you used before joining. The room's retained operation log stays saved on this device so you can return later.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leaving restores the workspace you used before joining. The room's retained operation log stays saved on this device so you can return later."
+    "New task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New task"
           }
         }
       }
     },
-    "Limited": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Limited"
+    "Next focus task" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next focus task"
           }
         }
       }
     },
-    "Line status": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Line status"
+    "No arrivals yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No arrivals yet"
           }
         }
       }
     },
-    "Local account and timer data will be removed from this device.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local account and timer data will be removed from this device."
+    "No completed focus yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No completed focus yet"
           }
         }
       }
     },
-    "Local change could not be saved. The previous state was restored.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local change could not be saved. The previous state was restored."
+    "No task" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No task"
           }
         }
       }
     },
-    "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup."
+    "No tasks yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No tasks yet"
           }
         }
       }
     },
-    "Long break": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Long break"
+    "No window is available for Google Sign-In." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No window is available for Google Sign-In."
           }
         }
       }
     },
-    "Long break complete": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Long break complete"
+    "Not connected" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not connected"
           }
         }
       }
     },
-    "NETWORK SWITCHBOARD": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NETWORK SWITCHBOARD"
+    "Not enabled" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not enabled"
           }
         }
       }
     },
-    "Navigate between Timer, Tasks, Arrivals, and Network": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Navigate between Timer, Tasks, Arrivals, and Network"
+    "Not now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not now"
           }
         }
       }
     },
-    "Network": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Network"
+    "Not selected" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not selected"
           }
         }
       }
     },
-    "Network replication": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Network replication"
+    "OK" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
           }
         }
       }
     },
-    "New task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New task"
+    "OPEN A PEER ROUTE" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OPEN A PEER ROUTE"
           }
         }
       }
     },
-    "Next focus task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Next focus task"
+    "Off" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off"
           }
         }
       }
     },
-    "No arrivals yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No arrivals yet"
+    "Offline" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline"
           }
         }
       }
     },
-    "No completed focus yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No completed focus yet"
+    "On" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On"
           }
         }
       }
     },
-    "No task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No task"
+    "On device" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On device"
           }
         }
       }
     },
-    "No tasks yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No tasks yet"
+    "On-device mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On-device mode"
           }
         }
       }
     },
-    "No window is available for Google Sign-In.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No window is available for Google Sign-In."
+    "One through 64 characters. Room name is display-only." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One through 64 characters. Room name is display-only."
           }
         }
       }
     },
-    "Not connected": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not connected"
+    "Open Pomodorough" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Pomodorough"
           }
         }
       }
     },
-    "Not enabled": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not enabled"
+    "Open Pomodorough on iPhone to connect" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Pomodorough on iPhone to connect"
           }
         }
       }
     },
-    "Not now": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not now"
+    "Open Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Settings"
           }
         }
       }
     },
-    "Not selected": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not selected"
+    "Opening Google" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opening Google"
           }
         }
       }
     },
-    "OK": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OK"
+    "Opening route" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opening route"
           }
         }
       }
     },
-    "OPEN A PEER ROUTE": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OPEN A PEER ROUTE"
+    "Opens Account. Network controls are inside Account." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens Account. Network controls are inside Account."
           }
         }
       }
     },
-    "Off": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Off"
+    "Opens cloud synchronization and Iroh room controls." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens cloud synchronization and Iroh room controls."
           }
         }
       }
     },
-    "Offline": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Offline"
+    "Opens system settings to re-enable timer alerts after denial." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens system settings to re-enable timer alerts after denial."
           }
         }
       }
     },
-    "On": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "On"
+    "Optional, up to 64 characters. Room name is display-only." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Optional, up to 64 characters. Room name is display-only."
           }
         }
       }
     },
-    "On device": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "On device"
+    "P" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "P"
           }
         }
       }
     },
-    "On-device mode": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "On-device mode"
+    "PEER TRANSFER" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PEER TRANSFER"
           }
         }
       }
     },
-    "One through 64 characters. Room name is display-only.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "One through 64 characters. Room name is display-only."
+    "Paste complete invite beginning with pomodorough1 dot" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paste complete invite beginning with pomodorough1 dot"
           }
         }
       }
     },
-    "Open Settings": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Settings"
+    "Pattern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pattern"
           }
         }
       }
     },
-    "Opening Google": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opening Google"
+    "Pause" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause"
           }
         }
       }
     },
-    "Opening route": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opening route"
+    "Pause timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause timer"
           }
         }
       }
     },
-    "Opens Account. Network controls are inside Account.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opens Account. Network controls are inside Account."
+    "Paused" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused"
           }
         }
       }
     },
-    "Opens cloud synchronization and Iroh room controls.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opens cloud synchronization and Iroh room controls."
+    "Peer requested a different room." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peer requested a different room."
           }
         }
       }
     },
-    "Opens system settings to re-enable timer alerts after denial.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opens system settings to re-enable timer alerts after denial."
+    "Peer sent a malformed synchronization frame." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peer sent a malformed synchronization frame."
           }
         }
       }
     },
-    "Optional, up to 64 characters. Room name is display-only.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Optional, up to 64 characters. Room name is display-only."
+    "Peer sent an invalid synchronization message: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peer sent an invalid synchronization message: %@"
           }
         }
       }
     },
-    "P": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "P"
+    "Peers may see each other's IP addresses. Relays keep content encrypted but can observe endpoint IDs, addresses, timing, and traffic volume. Anyone with an invite has full room access; v1 has no member revocation." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peers may see each other's IP addresses. Relays keep content encrypted but can observe endpoint IDs, addresses, timing, and traffic volume. Anyone with an invite has full room access; v1 has no member revocation."
           }
         }
       }
     },
-    "PEER TRANSFER": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PEER TRANSFER"
+    "Pending changes are stored on this device until they can sync." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pending changes are stored on this device until they can sync."
           }
         }
       }
     },
-    "Paste complete invite beginning with pomodorough1 dot": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paste complete invite beginning with pomodorough1 dot"
+    "Permanently delete account?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permanently delete account?"
           }
         }
       }
     },
-    "Pattern": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pattern"
+    "Permissions are optional. The timer still works while Pomodorough is open." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permissions are optional. The timer still works while Pomodorough is open."
           }
         }
       }
     },
-    "Pause": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pause"
+    "Persisted timer state contained corrupt operations that were skipped." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persisted timer state contained corrupt operations that were skipped."
           }
         }
       }
     },
-    "Paused": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paused"
+    "Pomodoro progress" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pomodoro progress"
           }
         }
       }
     },
-    "Peer requested a different room.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Peer requested a different room."
+    "Pomodorough" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pomodorough"
           }
         }
       }
     },
-    "Peer sent a malformed synchronization frame.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Peer sent a malformed synchronization frame."
+    "Pomodorough Cloud" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pomodorough Cloud"
           }
         }
       }
     },
-    "Peer sent an invalid synchronization message: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Peer sent an invalid synchronization message: %@"
+    "Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy."
           }
         }
       }
     },
-    "Peers may see each other's IP addresses. Relays keep content encrypted but can observe endpoint IDs, addresses, timing, and traffic volume. Anyone with an invite has full room access; v1 has no member revocation.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Peers may see each other's IP addresses. Relays keep content encrypted but can observe endpoint IDs, addresses, timing, and traffic volume. Anyone with an invite has full room access; v1 has no member revocation."
+    "Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy."
           }
         }
       }
     },
-    "Pending changes are stored on this device until they can sync.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pending changes are stored on this device until they can sync."
+    "Privacy and account" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy and account"
           }
         }
       }
     },
-    "Permanently delete account?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permanently delete account?"
+    "Privacy policy" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy policy"
           }
         }
       }
     },
-    "Permissions are optional. The timer still works while Pomodorough is open.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permissions are optional. The timer still works while Pomodorough is open."
+    "Queued changes contain invalid sequence or trusted-time values." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Queued changes contain invalid sequence or trusted-time values."
           }
         }
       }
     },
-    "Persisted timer state contained corrupt operations that were skipped.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persisted timer state contained corrupt operations that were skipped."
+    "Queued local changes will be merged into account data. Conflicts or rejected changes are possible." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Queued local changes will be merged into account data. Conflicts or rejected changes are possible."
           }
         }
       }
     },
-    "Pomodoro progress": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pomodoro progress"
+    "Quit Pomodorough" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quit Pomodorough"
           }
         }
       }
     },
-    "Pomodorough": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pomodorough"
+    "ROOM INVITE" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ROOM INVITE"
           }
         }
       }
     },
-    "Pomodorough Cloud": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pomodorough Cloud"
+    "Ready for peers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ready for peers"
           }
         }
       }
     },
-    "Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy."
+    "Recover" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recover"
           }
         }
       }
     },
-    "Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy."
+    "Refresh arrivals" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refresh arrivals"
           }
         }
       }
     },
-    "Privacy and account": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Privacy and account"
+    "Remote history could not be checked. Local data remains unchanged." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote history could not be checked. Local data remains unchanged."
           }
         }
       }
     },
-    "Privacy policy": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Privacy policy"
+    "Repair required" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repair required"
           }
         }
       }
     },
-    "Queued changes contain invalid sequence or trusted-time values.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Queued changes contain invalid sequence or trusted-time values."
+    "Replacement room name (optional)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replacement room name (optional)"
           }
         }
       }
     },
-    "Queued local changes will be merged into account data. Conflicts or rejected changes are possible.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Queued local changes will be merged into account data. Conflicts or rejected changes are possible."
+    "Replication mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replication mode"
           }
         }
       }
     },
-    "Room %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room %@"
+    "Requested room operation was not found." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requested room operation was not found."
           }
         }
       }
     },
-    "ROOM INVITE": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ROOM INVITE"
+    "Reset" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset"
           }
         }
       }
     },
-    "Ready for peers": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ready for peers"
+    "Resolving history" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resolving history"
           }
         }
       }
     },
-    "Recover": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recover"
+    "Resume" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume"
           }
         }
       }
     },
-    "Refresh arrivals": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Refresh arrivals"
+    "Resume timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume timer"
           }
         }
       }
     },
-    "Remote history could not be checked. Local data remains unchanged.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote history could not be checked. Local data remains unchanged."
+    "Retries saved history resolution" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retries saved history resolution"
           }
         }
       }
     },
-    "Repair required": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Repair required"
+    "Retry" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry"
           }
         }
       }
     },
-    "Replacement room name (optional)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Replacement room name (optional)"
+    "Retry account deletion" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry account deletion"
           }
         }
       }
     },
-    "Replication mode": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Replication mode"
+    "Retry loading workspace" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry loading workspace"
           }
         }
       }
     },
-    "Requested room operation was not found.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requested room operation was not found."
+    "Returns to history choices without changing data" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returns to history choices without changing data"
           }
         }
       }
     },
-    "Reset": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reset"
+    "Review conflict" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review conflict"
           }
         }
       }
     },
-    "Resolving history": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Resolving history"
+    "Room %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room %@"
           }
         }
       }
     },
-    "Resume": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Resume"
+    "Room authentication failed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room authentication failed."
           }
         }
       }
     },
-    "Retries saved history resolution": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retries saved history resolution"
+    "Room contains two different operations with the same immutable ID." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room contains two different operations with the same immutable ID."
           }
         }
       }
     },
-    "Retry": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retry"
+    "Room invite" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room invite"
           }
         }
       }
     },
-    "Retry account deletion": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retry account deletion"
+    "Room join rollback failed: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room join rollback failed: %@"
           }
         }
       }
     },
-    "Retry loading workspace": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retry loading workspace"
+    "Room name (optional)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room name (optional)"
           }
         }
       }
     },
-    "Returns to history choices without changing data": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Returns to history choices without changing data"
+    "Room name must be 64 characters or fewer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room name must be 64 characters or fewer."
           }
         }
       }
     },
-    "Review conflict": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review conflict"
+    "Room repair needed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room repair needed"
           }
         }
       }
     },
-    "Room authentication failed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room authentication failed."
+    "Room secret cleanup failed: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room secret cleanup failed: %@"
           }
         }
       }
     },
-    "Room contains two different operations with the same immutable ID.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room contains two different operations with the same immutable ID."
+    "Rotating room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rotating room"
           }
         }
       }
     },
-    "Room invite": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room invite"
+    "Running" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running"
           }
         }
       }
     },
-    "Room name (optional)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room name (optional)"
+    "Saved" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved"
           }
         }
       }
     },
-    "Room name must be 64 characters or fewer.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room name must be 64 characters or fewer."
+    "Saved Iroh room data could not be decoded. Original file was left unchanged." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved Iroh room data could not be decoded. Original file was left unchanged."
           }
         }
       }
     },
-    "Room repair needed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room repair needed"
+    "Saved sequence or trusted-time state is invalid. No local change was saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved sequence or trusted-time state is invalid. No local change was saved."
           }
         }
       }
     },
-    "Rotating room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotating room"
+    "Section" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Section"
           }
         }
       }
     },
-    "Running": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Running"
+    "Selected" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selected"
           }
         }
       }
     },
-    "Saved": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved"
+    "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable."
           }
         }
       }
     },
-    "Synchronized State": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Synchronized State"
+    "Sends an alert and plays a sound until you dismiss it or start another timer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sends an alert and plays a sound until you dismiss it or start another timer."
           }
         }
       }
     },
-    "Saved Iroh room data could not be decoded. Original file was left unchanged.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved Iroh room data could not be decoded. Original file was left unchanged."
+    "Server resolved a duration change." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server resolved a duration change."
           }
         }
       }
     },
-    "Saved sequence or trusted-time state is invalid. No local change was saved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved sequence or trusted-time state is invalid. No local change was saved."
+    "Server resolved a selected-task change." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server resolved a selected-task change."
           }
         }
       }
     },
-    "Section": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Section"
+    "Server resolved a task change." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server resolved a task change."
           }
         }
       }
     },
-    "Selected": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected"
+    "Server resolved a timer action." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server resolved a timer action."
           }
         }
       }
     },
-    "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable."
+    "Server resolved an auto-start change." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server resolved an auto-start change."
           }
         }
       }
     },
-    "Sends an alert and plays a sound until you dismiss it or start another timer.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sends an alert and plays a sound until you dismiss it or start another timer."
+    "Server returned an invalid response." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server returned an invalid response."
           }
         }
       }
     },
-    "Server returned an invalid response.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server returned an invalid response."
+    "Session expired. Sign in again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session expired. Sign in again."
           }
         }
       }
     },
-    "Session expired. Sign in again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Session expired. Sign in again."
+    "Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings"
           }
         }
       }
     },
-    "Settings": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Settings"
+    "Settings, Pattern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings, Pattern"
           }
         }
       }
     },
-    "Settings, Pattern": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Settings, Pattern"
+    "Share invite" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share invite"
           }
         }
       }
     },
-    "Share invite": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Share invite"
+    "Shared core SHA-256 mismatch: expected %@, got %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core SHA-256 mismatch: expected %@, got %@."
           }
         }
       }
     },
-    "Shared core SHA-256 mismatch: expected %@, got %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core SHA-256 mismatch: expected %@, got %@."
+    "Shared core WebAssembly export has an invalid signature: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core WebAssembly export has an invalid signature: %@."
           }
         }
       }
     },
-    "Shared core WebAssembly export has an invalid signature: %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core WebAssembly export has an invalid signature: %@."
+    "Shared core WebAssembly export is missing: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core WebAssembly export is missing: %@."
           }
         }
       }
     },
-    "Shared core WebAssembly export is missing: %@.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core WebAssembly export is missing: %@."
+    "Shared core WebAssembly initialization failed: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core WebAssembly initialization failed: %@"
           }
         }
       }
     },
-    "Shared core WebAssembly initialization failed: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core WebAssembly initialization failed: %@"
+    "Shared core failed to allocate %lld bytes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core failed to allocate %lld bytes."
           }
         }
       }
     },
-    "Shared core failed to allocate %lld bytes.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core failed to allocate %lld bytes."
+    "Shared core input exceeds the 32-bit ABI length: %lld bytes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core input exceeds the 32-bit ABI length: %lld bytes."
           }
         }
       }
     },
-    "Shared core input exceeds the 32-bit ABI length: %lld bytes.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core input exceeds the 32-bit ABI length: %lld bytes."
+    "Shared core input is invalid: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core input is invalid: %@"
           }
         }
       }
     },
-    "Shared core input is invalid: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core input is invalid: %@"
+    "Shared core memory range %u..<%llu exceeds %lld bytes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core memory range %u..<%llu exceeds %lld bytes."
           }
         }
       }
     },
-    "Shared core memory range %u..<%llu exceeds %lld bytes.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core memory range %u..<%llu exceeds %lld bytes."
+    "Shared core rejected the operation: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core rejected the operation: %@"
           }
         }
       }
     },
-    "Shared core rejected the operation: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core rejected the operation: %@"
+    "Shared core returned an invalid ABI result: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core returned an invalid ABI result: %@"
           }
         }
       }
     },
-    "Shared core returned an invalid ABI result: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core returned an invalid ABI result: %@"
+    "Shared core returned an invalid response: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared core returned an invalid response: %@"
           }
         }
       }
     },
-    "Shared core returned an invalid response: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared core returned an invalid response: %@"
+    "Short after focus. Long every fourth completed focus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Short after focus. Long every fourth completed focus."
           }
         }
       }
     },
-    "Short after focus. Long every fourth completed focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Short after focus. Long every fourth completed focus."
+    "Short break" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Short break"
           }
         }
       }
     },
-    "Short break": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Short break"
+    "Short break complete" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Short break complete"
           }
         }
       }
     },
-    "Short break complete": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Short break complete"
+    "Shows completed focus time by task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows completed focus time by task"
           }
         }
       }
     },
-    "Shows completed focus time by task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shows completed focus time by task"
+    "Sign in" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in"
           }
         }
       }
     },
-    "Sign in": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign in"
+    "Sign in only if you want to sync this timer and its history across devices." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in only if you want to sync this timer and its history across devices."
           }
         }
       }
     },
-    "Sign in only if you want to sync this timer and its history across devices.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign in only if you want to sync this timer and its history across devices."
+    "Sign in to sync across devices" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to sync across devices"
           }
         }
       }
     },
-    "Sign in to sync across devices": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign in to sync across devices"
+    "Sign out" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign out"
           }
         }
       }
     },
-    "Sign out": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign out"
+    "Sign out of Pomodorough?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign out of Pomodorough?"
           }
         }
       }
     },
-    "Sign out of Pomodorough?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign out of Pomodorough?"
+    "Sign-out paused because its recovery state could not be saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign-out paused because its recovery state could not be saved."
           }
         }
       }
     },
-    "Sign-out paused because its recovery state could not be saved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign-out paused because its recovery state could not be saved."
+    "Signs in to sync your timer across devices" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signs in to sync your timer across devices"
           }
         }
       }
     },
-    "Signs in to sync your timer across devices": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Signs in to sync your timer across devices"
+    "Skip to %arg" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip to %arg"
           }
         }
       }
     },
-    "Skip to %arg": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skip to %arg"
+    "Start" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start"
           }
         }
       }
     },
-    "Start %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start %@"
+    "Start %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start %@"
           }
         }
       }
     },
-    "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus."
+    "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus."
           }
         }
       }
     },
-    "Stop sound": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop sound"
+    "Stop sound" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop sound"
           }
         }
       }
     },
-    "Stop the current timer to change this setting.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop the current timer to change this setting."
+    "Stop the current timer to change this setting." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop the current timer to change this setting."
           }
         }
       }
     },
-    "Superseded": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Superseded"
+    "Superseded" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Superseded"
           }
         }
       }
     },
-    "Switch and remove local data": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switch and remove local data"
+    "Switch and remove local data" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch and remove local data"
           }
         }
       }
     },
-    "Switch to %@?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switch to %@?"
+    "Switch to %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to %@?"
           }
         }
       }
     },
-    "Switching removes this device's previous timer, tasks, history, settings, and queued changes. Cancel keeps the previous workspace on this device and signs out of the new account.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switching removes this device's previous timer, tasks, history, settings, and queued changes. Cancel keeps the previous workspace on this device and signs out of the new account."
+    "Switching removes this device's previous timer, tasks, history, settings, and queued changes. Cancel keeps the previous workspace on this device and signs out of the new account." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching removes this device's previous timer, tasks, history, settings, and queued changes. Cancel keeps the previous workspace on this device and signs out of the new account."
           }
         }
       }
     },
-    "Sync": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sync"
+    "Sync" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync"
           }
         }
       }
     },
-    "Sync needs attention": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sync needs attention"
+    "Sync needs attention" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync needs attention"
           }
         }
       }
     },
-    "Sync needs attention. %@. Dismiss": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sync needs attention. %@. Dismiss"
+    "Sync needs attention. %@. Dismiss" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync needs attention. %@. Dismiss"
           }
         }
       }
     },
-    "Sync now": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sync now"
+    "Sync now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync now"
           }
         }
       }
     },
-    "Sync paused because queued changes failed local validation. No queued changes were sent or modified.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sync paused because queued changes failed local validation. No queued changes were sent or modified."
+    "Sync paused because queued changes failed local validation. No queued changes were sent or modified." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync paused because queued changes failed local validation. No queued changes were sent or modified."
           }
         }
       }
     },
-    "Sync paused because the server response did not match queued changes. %lld queued changes remain on this device.": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Sync paused because the server response did not match queued change. %lld queued change remains on this device."
+    "Sync paused because the server response did not match queued changes. %lld queued changes remain on this device." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Sync paused because the server response did not match queued change. %lld queued change remains on this device."
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Sync paused because the server response did not match queued changes. %lld queued changes remain on this device."
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Sync paused because the server response did not match queued changes. %lld queued changes remain on this device."
                 }
               }
             }
@@ -2927,191 +3198,226 @@
         }
       }
     },
-    "Sync status, %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sync status, %@"
+    "Sync status, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync status, %@"
           }
         }
       }
     },
-    "Synchronization limit exceeded: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Synchronization limit exceeded: %@"
+    "Synchronization limit exceeded: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronization limit exceeded: %@"
           }
         }
       }
     },
-    "Syncing": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Syncing"
+    "Synchronized State" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronized State"
           }
         }
       }
     },
-    "TASK": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TASK"
+    "Syncing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Syncing"
           }
         }
       }
     },
-    "TASK BOARD": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TASK BOARD"
+    "TASK" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TASK"
           }
         }
       }
     },
-    "TIME": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TIME"
+    "TASK BOARD" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TASK BOARD"
           }
         }
       }
     },
-    "Task": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Task"
+    "TIME" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIME"
           }
         }
       }
     },
-    "Task board": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Task board"
+    "Task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task"
           }
         }
       }
     },
-    "Tasks": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tasks"
+    "Task board" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task board"
           }
         }
       }
     },
-    "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry."
+    "Tasks" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tasks"
           }
         }
       }
     },
-    "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@"
+    "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry."
           }
         }
       }
     },
-    "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@"
+    "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@"
           }
         }
       }
     },
-    "These changes do not alter the running or paused timer.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "These changes do not alter the running or paused timer."
+    "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@"
           }
         }
       }
     },
-    "This device has %lld completed entries. Your account has %lld. Timers, tasks, or settings may also differ.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This device has %lld completed entries. Your account has %lld. Timers, tasks, or settings may also differ."
+    "These changes do not alter the running or paused timer." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These changes do not alter the running or paused timer."
           }
         }
       }
     },
-    "This device's timer, history, tasks, settings, and queued changes will be replaced by account data.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This device's timer, history, tasks, settings, and queued changes will be replaced by account data."
+    "This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This device has %1$@ completed entries. Your account has %2$@. Timers, tasks, or settings may also differ."
           }
         }
       }
     },
-    "This permanently deletes your account and cloud data, revokes every session, and removes account data stored by this app on this device. This cannot be undone.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This permanently deletes your account and cloud data, revokes every session, and removes account data stored by this app on this device. This cannot be undone."
+    "This device has %lld completed entries. Your account has %lld. Timers, tasks, or settings may also differ." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device has %lld completed entries. Your account has %lld. Timers, tasks, or settings may also differ."
           }
         }
       }
     },
-    "This timer changed on your iPhone. Refreshing status.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This timer changed on your iPhone. Refreshing status."
+    "This device's timer, history, tasks, settings, and queued changes will be replaced by account data." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device's timer, history, tasks, settings, and queued changes will be replaced by account data."
           }
         }
       }
     },
-    "This will discard %lld changes still waiting to sync.": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "This will discard %lld change still waiting to sync."
+    "This permanently deletes your account and cloud data, revokes every session, and removes account data stored by this app on this device. This cannot be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This permanently deletes your account and cloud data, revokes every session, and removes account data stored by this app on this device. This cannot be undone."
+          }
+        }
+      }
+    },
+    "This removes the task from the board. Completed focus runs stay in history." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This removes the task from the board. Completed focus runs stay in history."
+          }
+        }
+      }
+    },
+    "This timer changed on your iPhone. Refreshing status." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This timer changed on your iPhone. Refreshing status."
+          }
+        }
+      }
+    },
+    "This will discard %@ changes still waiting to sync." : {
+
+    },
+    "This will discard %lld changes still waiting to sync." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This will discard %lld change still waiting to sync."
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "This will discard %lld changes still waiting to sync."
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This will discard %lld changes still waiting to sync."
                 }
               }
             }
@@ -3119,281 +3425,312 @@
         }
       }
     },
-    "Time not recorded": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Time not recorded"
+    "Time not recorded" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Time not recorded"
           }
         }
       }
     },
-    "Timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer"
+    "Timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer"
           }
         }
       }
     },
-    "Timer alert limits": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer alert limits"
+    "Timer alert limits" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer alert limits"
           }
         }
       }
     },
-    "Timer alerts": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer alerts"
+    "Timer alerts" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer alerts"
           }
         }
       }
     },
-    "Timer continues in Pomodorough, but its system alarm could not be updated. %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer continues in Pomodorough, but its system alarm could not be updated. %@"
+    "Timer continues in Pomodorough, but its system alarm could not be updated. %@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer continues in Pomodorough, but its system alarm could not be updated. %@"
           }
         }
       }
     },
-    "Timer stays usable and saved on this device in every mode.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer stays usable and saved on this device in every mode."
+    "Timer stays usable and saved on this device in every mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer stays usable and saved on this device in every mode."
           }
         }
       }
     },
-    "Timer works without internet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Timer works without internet"
+    "Timer works without internet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer works without internet"
           }
         }
       }
     },
-    "Type DELETE": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Type DELETE"
+    "Total Pomodoro time" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total Pomodoro time"
           }
         }
       }
     },
-    "Unassigned": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unassigned"
+    "Total includes today’s completed Pomodoros and the current focus session." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total includes today’s completed Pomodoros and the current focus session."
           }
         }
       }
     },
-    "Unavailable": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unavailable"
+    "Type DELETE" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type DELETE"
           }
         }
       }
     },
-    "Unknown error": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unknown error"
+    "Unassigned" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unassigned"
           }
         }
       }
     },
-    "Unnamed room": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unnamed room"
+    "Unavailable" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unavailable"
           }
         }
       }
     },
-    "Validate and join": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Validate and join"
+    "Unknown error" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown error"
           }
         }
       }
     },
-    "Version %@ (%@)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Version %@ (%@)"
+    "Unnamed room" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unnamed room"
           }
         }
       }
     },
-    "Waiting for peers": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Waiting for peers"
+    "Validate and join" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Validate and join"
           }
         }
       }
     },
-    "Work": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work"
+    "Version %@ (%@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Version %@ (%@)"
           }
         }
       }
     },
-    "Workspace unavailable": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Workspace unavailable"
+    "View focus breakdown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View focus breakdown"
           }
         }
       }
     },
-    "Write release notes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Write release notes"
+    "Waiting for peers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for peers"
           }
         }
       }
     },
-    "You appear offline. Reconnect, then retry.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You appear offline. Reconnect, then retry."
+    "Work" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Work"
           }
         }
       }
     },
-    "You're already in this room.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You're already in this room."
+    "Workspace unavailable" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace unavailable"
           }
         }
       }
     },
-    "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe."
+    "Write release notes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Write release notes"
           }
         }
       }
     },
-    "Your first run appears here.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your first run appears here."
+    "You appear offline. Reconnect, then retry." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You appear offline. Reconnect, then retry."
           }
         }
       }
     },
-    "Your next Pomodorough interval is ready.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your next Pomodorough interval is ready."
+    "You're already in this room." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You're already in this room."
           }
         }
       }
     },
-    "duration.compact.hours": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lldh"
+    "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your %@ request could not be delivered yet. Local data remains unchanged. Retrying is safe."
           }
         }
       }
     },
-    "duration.compact.hours_minutes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lldh %2$lldm"
+    "Your first run appears here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your first run appears here."
           }
         }
       }
     },
-    "duration.compact.minutes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lldm"
+    "Your next Pomodorough interval is ready." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your next Pomodorough interval is ready."
           }
         }
       }
     },
-    "duration.spoken.hours": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld hour"
+    "duration.compact.hours" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lldh"
+          }
+        }
+      }
+    },
+    "duration.compact.hours_minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldh %2$lldm"
+          }
+        }
+      }
+    },
+    "duration.compact.minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lldm"
+          }
+        }
+      }
+    },
+    "duration.spoken.hours" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld hour"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld hours"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld hours"
                 }
               }
             }
@@ -3401,31 +3738,31 @@
         }
       }
     },
-    "duration.spoken.hours_minutes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld hours %2$lld minutes"
+    "duration.spoken.hours_minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld hours %2$lld minutes"
           }
         }
       }
     },
-    "duration.spoken.minutes": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld minute"
+    "duration.spoken.minutes" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld minute"
                 }
               },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld minutes"
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld minutes"
                 }
               }
             }
@@ -3433,336 +3770,58 @@
         }
       }
     },
-    "iPhone connection is not ready. Try again shortly.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "iPhone connection is not ready. Try again shortly."
+    "iPhone" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone"
           }
         }
       }
     },
-    "pomodorough1.…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "pomodorough1.…"
+    "iPhone connection is not ready. Try again shortly." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone connection is not ready. Try again shortly."
           }
         }
       }
     },
-    "timer.time.minutes_seconds": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$02lld:%2$02lld"
+    "pomodorough1.…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pomodorough1.…"
           }
         }
       }
     },
-    "%arg arrivals": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%arg arrivals"
+    "timer.time.minutes_seconds" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$02lld:%2$02lld"
           }
         }
       }
     },
-    "%arg completed of %arg runs": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%arg completed of %arg runs"
-          }
-        }
-      }
-    },
-    "%arg finished pomodoros, %arg spent": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%arg finished pomodoros, %arg spent"
-          }
-        }
-      }
-    },
-    "%arg of 4 toward the next long break, %arg completed today": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%arg of 4 toward the next long break, %arg completed today"
-          }
-        }
-      }
-    },
-    "Completed focus: %arg": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed focus: %arg"
-          }
-        }
-      }
-    },
-    "View focus breakdown": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "View focus breakdown"
-          }
-        }
-      }
-    },
-    "Delete task?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete task?"
-          }
-        }
-      }
-    },
-    "Delete “%arg”?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete “%arg”?"
-          }
-        }
-      }
-    },
-    "This removes the task from the board. Completed focus runs stay in history.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This removes the task from the board. Completed focus runs stay in history."
-          }
-        }
-      }
-    },
-    "Both": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Both"
-          }
-        }
-      }
-    },
-    "Current timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Current timer"
-          }
-        }
-      }
-    },
-    "Menu bar display": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Menu bar display"
-          }
-        }
-      }
-    },
-    "Open Pomodorough": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Pomodorough"
-          }
-        }
-      }
-    },
-    "Pause timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pause timer"
-          }
-        }
-      }
-    },
-    "Quit Pomodorough": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Quit Pomodorough"
-          }
-        }
-      }
-    },
-    "Resume timer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Resume timer"
-          }
-        }
-      }
-    },
-    "Total Pomodoro time": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Total Pomodoro time"
-          }
-        }
-      }
-    },
-    "Total includes today’s completed Pomodoros and the current focus session.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Total includes today’s completed Pomodoros and the current focus session."
-          }
-        }
-      }
-    },
-    "Σ %arg": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Σ %arg"
-          }
-        }
-      }
-    },
-    "%arg · Σ %arg": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%arg · Σ %arg"
-          }
-        }
-      }
-    },
-    "Open Pomodorough on iPhone to connect": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Pomodorough on iPhone to connect"
-          }
-        }
-      }
-    },
-    "Start": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start"
-          }
-        }
-      }
-    },
-    "iPhone": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "iPhone"
-          }
-        }
-      }
-    },
-    "Room join rollback failed: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room join rollback failed: %@"
-          }
-        }
-      }
-    },
-    "Server resolved a timer action.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a timer action."
-          }
-        }
-      }
-    },
-    "Server resolved a task change.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a task change."
-          }
-        }
-      }
-    },
-    "Server resolved a duration change.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a duration change."
-          }
-        }
-      }
-    },
-    "Server resolved an auto-start change.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved an auto-start change."
-          }
-        }
-      }
-    },
-    "Server resolved a selected-task change.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server resolved a selected-task change."
-          }
-        }
-      }
-    },
-    "Room secret cleanup failed: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Room secret cleanup failed: %@"
+    "Σ %arg" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Σ %arg"
           }
         }
       }
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }

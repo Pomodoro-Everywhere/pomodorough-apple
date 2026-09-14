@@ -583,7 +583,7 @@ struct SentryCaptureTests {
     }
 
     @Test @MainActor
-    func alarmScheduleFailureReportsAndCaptures() async throws {
+    func alarmScheduleFailureCapturesAndStaysSilent() async throws {
         let recorded = LockedTestValue<[String]>([])
         let suite = "PomodoroughTests.SentryAlarm.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -608,7 +608,7 @@ struct SentryCaptureTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(recorded.value.count == 1)
-        #expect(model.errorMessage != nil)
+        #expect(model.errorMessage == nil)
     }
 
     @Test @MainActor

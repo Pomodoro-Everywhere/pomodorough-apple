@@ -19,11 +19,18 @@ struct TimerScreen: View {
                 TimerScreenMacOSContent(model: model, layout: layout)
                 #else
                 if layout == .landscape {
-                    TimerScreenIOSLandscapeContent(
-                        model: model,
-                        layout: layout,
-                        landscapeHeight: max(220, geometry.size.height - 100)
-                    )
+                    #if os(iOS)
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        TimerScreenIPadLandscapeContent(model: model)
+                    } else {
+                        TimerScreenIOSLandscapeContent(
+                            model: model,
+                            layout: layout,
+                            landscapeHeight: max(220, geometry.size.height - 100),
+                            landscapeWidth: geometry.size.width
+                        )
+                    }
+                    #endif
                 } else {
                     ScrollView {
                         portraitContent(
@@ -81,7 +88,6 @@ struct TimerScreen: View {
         .padding(.top, topGap)
         // The offset card shadow extends seven points below its layout bounds.
         .padding(.bottom, 23)
-        .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
     }
 
@@ -112,10 +118,26 @@ private struct TimerScreenMacOSContent: View {
     }
 }
 
+private struct TimerScreenIPadLandscapeContent: View {
+    let model: AppModel
+
+    var body: some View {
+        VStack {
+            if let conflict = model.conflictMessage {
+                ConflictBanner(message: conflict, dismiss: model.dismissConflict)
+            }
+            TimerMachineCard(model: model, layout: .landscape)
+        }
+        .padding()
+        .timerChromeHidden(true)
+    }
+}
+
 private struct TimerScreenIOSLandscapeContent: View {
     let model: AppModel
     let layout: TimerLayout
     var landscapeHeight: CGFloat
+    var landscapeWidth: CGFloat
 
     var body: some View {
         // Scroll recovery: landscape height on small phones can
@@ -129,7 +151,8 @@ private struct TimerScreenIOSLandscapeContent: View {
                 TimerMachineCard(
                     model: model,
                     layout: layout,
-                    landscapeHeight: landscapeHeight
+                    landscapeHeight: landscapeHeight,
+                    landscapeWidth: landscapeWidth
                 )
             }
             .padding(.horizontal, 16)

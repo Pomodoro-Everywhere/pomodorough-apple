@@ -71,7 +71,6 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         assertVisible("Start focus")
         assertVisible("Skip to Short break")
         app.buttons["Start focus"].tap()
-        dismissAlarmFallbackIfPresent(in: app)
         assertVisible("Pause")
         assertVisible("Finish timer")
         assertVisible("Cancel timer")
@@ -90,6 +89,66 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         XCTAssertTrue(app.buttons["Timer"].waitForExistence(timeout: 5))
         assertVisible("Resume")
+    }
+
+    func testPadLandscapeFillsReadoutAboveBottomButtons() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Requires iPad")
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        app.launch()
+        if app.buttons["Cancel timer"].waitForExistence(timeout: 2) {
+            app.buttons["Cancel timer"].tap()
+        }
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in app.frame.width > app.frame.height }, object: app
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [landscape], timeout: 5), .completed)
+        let start = app.buttons["Start focus"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        waitForHittable(start, timeout: 5)
+        let dial = elements(labelled: "Focus timer", in: app).firstMatch
+        XCTAssertTrue(dial.waitForExistence(timeout: 5))
+        // The readout fills the card above the bottom control rows.
+        XCTAssertLessThanOrEqual(dial.frame.maxY, start.frame.minY)
+        XCTAssertGreaterThan(dial.frame.maxX, start.frame.minX)
+        XCTAssertLessThan(dial.frame.minX, start.frame.maxX)
+        XCTAssertTrue(start.isHittable)
+        assertPadBottomControls(["Start focus", "Skip to Short break"], in: app)
+        addLandscapeScreenshot(from: app)
+        start.tap()
+        assertPadBottomControls(["Pause", "Finish timer", "Cancel timer"], in: app)
+        app.buttons["Pause"].tap()
+        assertPadBottomControls(["Resume", "Finish timer", "Cancel timer"], in: app)
+        addLandscapeScreenshot(from: app)
+    }
+
+    private func assertPadBottomControls(_ labels: [String], in app: XCUIApplication) {
+        let buttons = labels.map { app.buttons[$0] }
+        for button in buttons {
+            waitForHittable(button, timeout: 5)
+            XCTAssertTrue(app.frame.contains(button.frame))
+            XCTAssertGreaterThan(button.frame.midY, app.frame.midY)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+        let row = buttons.reduce(CGRect.null) { $0.union($1.frame) }
+        XCTAssertGreaterThan(row.width, app.frame.width * 0.75)
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.isHittable)
+        XCTAssertLessThanOrEqual(picker.frame.maxY, row.minY)
+    }
+
+    private func addLandscapeScreenshot(from app: XCUIApplication) {
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     func testAccessibilityExtraExtraExtraLargeKeepsCoreTasksReachable() {
@@ -294,18 +353,6 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             object: element
         )
         XCTAssertEqual(XCTWaiter().wait(for: [hittable], timeout: timeout), .completed)
-    }
-
-    private func dismissAlarmFallbackIfPresent(in app: XCUIApplication) {
-        // Fresh sims leave notifications undetermined, so starting a timer
-        // raises the alarm-fallback alert over the controls; sims with a
-        // decided permission never show it.
-        let fallback = app.alerts.containing(
-            NSPredicate(format: "label CONTAINS %@", "system alarm could not be")
-        ).firstMatch
-        if fallback.waitForExistence(timeout: 5) {
-            fallback.buttons["OK"].tap()
-        }
     }
 
     private func makeApplication() -> XCUIApplication {

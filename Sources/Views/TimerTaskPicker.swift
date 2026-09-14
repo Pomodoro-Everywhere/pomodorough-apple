@@ -41,18 +41,21 @@ struct TimerTaskPicker: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .tint(PomodoroughTheme.ticket)
-            .lineLimit(wrappingLineLimit)
-            .minimumScaleFactor(0.75)
+            // The menu label is rendered by the system and ignores
+            // lineLimit, so cap its growth like the caption: otherwise
+            // the value wraps into a clipped second line.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+            .lineLimit(1)
+            .minimumScaleFactor(wrapsTaskText ? 0.5 : 0.75)
             .allowsTightening(true)
-            .fixedSize(horizontal: false, vertical: wrapsTaskText)
+            .fixedSize(horizontal: false, vertical: false)
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityHint("Applies to the current running focus timer and the next timer.")
     }
 
-    /// At accessibility sizes the menu label wraps instead of clipping.
+    /// At accessibility sizes the menu value stays on one line and shrinks
+    /// instead of wrapping into a clipped second line.
     private var wrapsTaskText: Bool { dynamicTypeSize.isAccessibilitySize }
-
-    private var wrappingLineLimit: Int { wrapsTaskText ? 3 : 1 }
 }
 
 #if DEBUG

@@ -9,6 +9,11 @@ struct TimerMachineCard: View {
     /// parent from available geometry. GeometryReader dials need a bounded
     /// height; inside a vertical ScrollView they collapse to zero.
     var landscapeHeight: CGFloat? = nil
+    /// Measured card width for the iOS phone landscape column, from the
+    /// same parent geometry. The picker/controls column takes a share of
+    /// measured width instead of a fixed width, so it scales across
+    /// phone sizes without device-specific constants.
+    var landscapeWidth: CGFloat? = nil
 
     /// iOS stretch rule: landscape fills the parent-measured bounded height;
     /// portrait sizes to content inside the vertical ScrollView, where an
@@ -22,7 +27,8 @@ struct TimerMachineCard: View {
             model: model,
             layout: layout,
             usesCompactDial: usesCompactDial,
-            landscapeHeight: landscapeHeight
+            landscapeHeight: landscapeHeight,
+            landscapeWidth: landscapeWidth
         )
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -47,6 +53,7 @@ private struct TimerMachineCardContent: View {
     let layout: TimerLayout
     var usesCompactDial = false
     var landscapeHeight: CGFloat? = nil
+    var landscapeWidth: CGFloat? = nil
 
     var body: some View {
         Group {
@@ -58,7 +65,8 @@ private struct TimerMachineCardContent: View {
                     model: model,
                     layout: layout,
                     usesCompactDial: usesCompactDial,
-                    landscapeHeight: landscapeHeight
+                    landscapeHeight: landscapeHeight,
+                    landscapeWidth: landscapeWidth
                 )
             } else {
                 TimerMachineIOSPortraitCard(model: model, layout: layout, usesCompactDial: usesCompactDial)
@@ -128,19 +136,46 @@ private struct TimerMachineIOSLandscapeCard: View {
     let layout: TimerLayout
     var usesCompactDial = false
     var landscapeHeight: CGFloat? = nil
+    var landscapeWidth: CGFloat? = nil
+
+    /// Size class cannot distinguish iPad from Pro Max landscape.
+    private var isPad: Bool {
+#if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+#else
+        false
+#endif
+    }
 
     var body: some View {
-        HStack(spacing: 14) {
-            TimerMachineDialSection(model: model, layout: .landscape, usesCompactDial: usesCompactDial)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            VStack(spacing: 12) {
+        // Phone landscape: dial on the left, picker and controls stacked
+        // in a side column on the right. iPad stacks instead (see isPad).
+        if isPad {
+            VStack {
+                TimerMachineDialSection(model: model, layout: .landscape)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 TimerTaskPicker(model: model, layout: layout)
                 TimerControls(model: model, layout: layout)
             }
-            .frame(width: 280)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+        } else {
+            HStack(spacing: 14) {
+                TimerMachineDialSection(model: model, layout: .landscape, usesCompactDial: usesCompactDial)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 12) {
+                    TimerTaskPicker(model: model, layout: layout)
+                    TimerControls(model: model, layout: layout)
+                }
+                // Share of measured card width; nil falls back to content
+                // sizing. No fixed width, so SE through Pro Max each get a
+                // proportional column while the height-bound dial keeps
+                // the rest.
+                .frame(width: landscapeWidth.map { $0 / 3 })
+            }
+            .frame(height: landscapeHeight)
+            .padding(14)
         }
-        .frame(height: landscapeHeight)
-        .padding(14)
     }
 }
 
