@@ -128,17 +128,23 @@ struct TimerControls: View {
     /// clipped "…" label (Finish/Cancel) is worse than a taller button.
     @ViewBuilder
     private func controlLabel(title: String, symbol: String) -> some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            Text(title)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .minimumScaleFactor(0.5)
-        } else {
-            Label(title, systemImage: symbol)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .allowsTightening(true)
+        // Hidden from accessibility: the button carries the label. The
+        // iOS 26 glass style otherwise exposes this inner text as a
+        // second small element under the same title.
+        let label: some View = Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                Text(title)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.5)
+            } else {
+                Label(title, systemImage: symbol)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .allowsTightening(true)
+            }
         }
+        label.accessibilityHidden(true)
     }
 
     @ViewBuilder
