@@ -2300,6 +2300,12 @@
         "value": "‏⟦Timer alerts⟧"
       }
     },
+    "Timer changed on another device. Syncing before finish.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Timer changed on another device. Syncing before finish.⟧"
+      }
+    },
     "Timer continues in Pomodorough, but its system alarm could not be updated. %@": {
       "stringUnit": {
         "state": "translated",

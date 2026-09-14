@@ -3507,6 +3507,16 @@
         }
       }
     },
+    "Timer changed on another device. Syncing before finish." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timer changed on another device. Syncing before finish."
+          }
+        }
+      }
+    },
     "Timer continues in Pomodorough, but its system alarm could not be updated. %@" : {
       "extractionState" : "stale",
       "localizations" : {
