@@ -41,7 +41,13 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             XCTAssertTrue(button.waitForExistence(timeout: 5))
             waitForHittable(button, timeout: 5)
             XCTAssertTrue(button.isHittable)
-            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+            // Glass matched-geometry morphs animate frame height after
+            // state changes; poll instead of single-sampling mid-flight.
+            let tallEnough = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in button.frame.height >= 44 },
+                object: app
+            )
+            XCTAssertEqual(XCTWaiter().wait(for: [tallEnough], timeout: 5), .completed)
             XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
             XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
             if aboveTabs {
