@@ -158,6 +158,9 @@ struct LogoutRevocationTests {
         try removalStore.append(first)
         let readsBeforeOverlap = security.readCount
         security.pauseNextRead()
+        // Always release the pause: an early failure must not leak a
+        // semaphore-blocked thread that wedges the whole runner.
+        defer { security.resumeRead() }
 
         let removal = Task.detached { try removalStore.remove(id: first.id) }
         for _ in 0..<1_000 where !security.isReadPaused { await Task.yield() }
@@ -649,7 +652,8 @@ private actor BlockingLogoutSession: LogoutRevoking, LogoutSessionDetaching {
     }
 
     func waitUntilRevocationBlocked() async {
-        while !isRevocationBlocked { await Task.yield() }
+        // Bounded: a starved runner must fail this test, never hang it.
+        for _ in 0..<100_000 where !isRevocationBlocked { await Task.yield() }
     }
 }
 
