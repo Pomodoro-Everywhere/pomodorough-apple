@@ -2589,10 +2589,10 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         request: [String: Any]?
     ) -> Data {
         if scenario.hasPrefix("sync-contract-alarm-") {
-            let status = scenario == "sync-contract-alarm-status"
+            let status = scenario.hasPrefix("sync-contract-alarm-status")
                 ? "paused"
                 : "running"
-            let elapsed = scenario == "sync-contract-alarm-elapsed"
+            let elapsed = scenario.hasPrefix("sync-contract-alarm-elapsed")
                 ? 20_000
                 : 10_000
             return syncResponse(

@@ -87,6 +87,8 @@ final class AppModel {
     private var projectedAutoStartBreaks = false
     private var projectedSelectedTaskID: UUID?
     @ObservationIgnored private var sceneIsActive = false
+    @ObservationIgnored private var foregroundSyncPending = false
+    @ObservationIgnored private var lastForegroundSyncAt: Date?
     @ObservationIgnored private lazy var roomReplicationController = makeRoomReplicationController()
     @ObservationIgnored let watchSync = WatchSyncService()
 
@@ -535,6 +537,15 @@ final class AppModel {
 
     var isTimerActive: Bool {
         canonicalTimer?.status == .running || canonicalTimer?.status == .paused
+    }
+
+    /// Background stale-alarm fix: backgrounded iOS runs no sync (streams
+    /// cancelled on scene inactive), so a wake must sync before finishing.
+    private var needsForegroundSync: Bool {
+        guard !isWorkspaceMutationBlocked else { return false }
+        if replicationMode == .offline { return false }
+        if replicationMode == .iroh { return roomStore.activeSnapshot != nil }
+        return isSignedIn || timerState.cachedUser != nil || timerState.bootstrapUser != nil
     }
 
     var hasActiveCompletionAlert: Bool { completionAlertTimerID != nil }
@@ -1374,6 +1385,10 @@ final class AppModel {
 
     func finish(at explicitDate: Date? = nil) {
         guard !isWorkspaceMutationBlocked else { return }
+        if foregroundSyncPending, needsForegroundSync {
+            errorMessage = String(localized: "Timer changed on another device. Syncing before finish.")
+            return
+        }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
         finish(at: date, cancelsAlarm: true)
     }
@@ -1386,6 +1401,7 @@ final class AppModel {
         automatic: Bool = false
     ) -> Bool {
         guard !isWorkspaceMutationBlocked else { return false }
+        if foregroundSyncPending, needsForegroundSync { return false }
         guard let timer = explicitTimer ?? canonicalTimer,
               timer.status == .running || timer.status == .paused else { return false }
         let localDate = effectivePhysicalNow() ?? now()
@@ -1543,16 +1559,22 @@ final class AppModel {
 
     func completeIfNeeded(timerID: String, at date: Date) {
         guard !isWorkspaceMutationBlocked else { return }
+        // Background stale-alarm fix: a fired-but-unacked OS alarm must not
+        // finish from a stale snapshot when sync is pending after background.
+        guard !foregroundSyncPending || !needsForegroundSync else { return }
         guard let timer = durableIrohTimerNeedingCompletion ?? canonicalTimer,
               timer.id == timerID,
               timer.status == .running,
               completionQueuedFor != timer.id else { return }
+        // Fire-time canonical revalidation: drop stale finish when paused or
+        // when canonical remaining is still positive post-sync.
+        guard timer.remaining(at: date) <= 0 else { return }
         if replicationMode == .iroh {
             completeIrohTimerIfNeeded(timer, at: date)
             return
         }
         if finish(at: date, cancelsAlarm: false, timer: timer, automatic: true) {
-            completionAlertTimerID = timer.id
+            noteCompletionAlert(timerID: timer.id)
             stopCompletionAlertIfTimerStarted()
             completionQueuedFor = canonicalTimer?.status == .running ? timer.id : nil
         }
@@ -1593,7 +1615,7 @@ final class AppModel {
         timerState = state
         rebuildOptimisticState()
         _ = persist()
-        completionAlertTimerID = timerID
+        noteCompletionAlert(timerID: timerID)
         stopCompletionAlertIfTimerStarted()
         watchSync.push()
     }
@@ -1630,7 +1652,7 @@ final class AppModel {
             scheduleTimerCompletion(minimumDelay: 5)
             return
         }
-        completionAlertTimerID = timer.id
+        noteCompletionAlert(timerID: timer.id)
         stopCompletionAlertIfTimerStarted()
         scheduleAlarm(for: preparation.automaticBreak)
     }
@@ -1890,6 +1912,8 @@ final class AppModel {
         reconcileAlarm(from: previousTimer, to: activeTimer, at: receivedAt)
         applyCoordinatorPublication(accountSessionCoordinator.markSyncSucceeded())
         errorMessage = nil
+        foregroundSyncPending = false
+        lastForegroundSyncAt = receivedAt
     }
 
     private func handleSyncFailure(
@@ -1917,6 +1941,19 @@ final class AppModel {
         guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         completionQueuedFor = nil
+        // Background stale-alarm fix: sync-first-then-reconcile. A remotely
+        // paused timer must converge via sync before any finish runs.
+        if needsForegroundSync {
+            let action = await roomReplicationController.refreshAfterForeground(
+                environment: roomReplicationEnvironment
+            )
+            if action == .synchronize { await sync(force: true) }
+            foregroundSyncPending = false
+            lastForegroundSyncAt = now()
+            reconcileTimerCompletion()
+            return
+        }
+        foregroundSyncPending = false
         reconcileTimerCompletion()
         let action = await roomReplicationController.refreshAfterForeground(
             environment: roomReplicationEnvironment
@@ -1928,7 +1965,14 @@ final class AppModel {
         sceneIsActive = active
         guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
-        if active { reconcileTimerCompletion() }
+        if !active {
+            foregroundSyncPending = true
+        } else if foregroundSyncPending, needsForegroundSync {
+            cancelTimerCompletion()
+            scheduleTimerCompletion()
+        } else {
+            reconcileTimerCompletion()
+        }
         roomReplicationController.setSceneActive(active, environment: roomReplicationEnvironment)
     }
 
@@ -2299,6 +2343,19 @@ final class AppModel {
 
     private func cancelAlarm(timerID: String) {
         executeAlarmEffects([.cancel(timerID: timerID)])
+    }
+
+    /// Marks an automatic phase completion: raises the completion alert and
+    /// plays the in-app chime when foreground (notification sounds are muted
+    /// by the silent switch, so without this the completion is banner-only).
+    private func noteCompletionAlert(timerID: String) {
+        completionAlertTimerID = timerID
+        guard CompletionChimePlayer.isForeground else { return }
+        CompletionChimePlayer.shared.play()
+        // The app itself is alerting; the still-pending system notification
+        // or AlarmKit alarm for this deadline would fire a second sound on
+        // top of the chime. Background completions keep it (only alert there).
+        cancelAlarm(timerID: timerID)
     }
 
     private func stopCompletionAlertIfTimerStarted() {
