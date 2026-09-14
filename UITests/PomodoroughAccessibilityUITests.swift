@@ -37,8 +37,14 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Timer"].waitForExistence(timeout: 5))
 
         func assertVisible(_ label: String, aboveTabs: Bool = true) {
-            let button = app.buttons[label]
-            XCTAssertTrue(button.waitForExistence(timeout: 5))
+            let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
+            XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
+            // The iOS 26 glass container can expose the inner label as a
+            // second small element under the same title; drive the
+            // tappable control, which is the tallest match.
+            let button = (0..<query.count).map { query.element(boundBy: $0) }.max(by: {
+                $0.frame.height < $1.frame.height
+            }) ?? query.firstMatch
             waitForHittable(button, timeout: 5)
             XCTAssertTrue(button.isHittable)
             // Glass transitions animate frame height after state changes;
