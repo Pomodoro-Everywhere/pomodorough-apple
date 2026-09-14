@@ -2352,14 +2352,13 @@ final class AppModel {
     /// Marks an automatic phase completion: raises the completion alert and
     /// plays the in-app chime when foreground (notification sounds are muted
     /// by the silent switch, so without this the completion is banner-only).
+    /// Stopping the pending system alarm stays with stopCompletionAlertIfTimerStarted:
+    /// every call site pairs the two, and both cancels would traverse the
+    /// same serialized alarm queue, so cancelling here only duplicates it.
     private func noteCompletionAlert(timerID: String) {
         completionAlertTimerID = timerID
         guard CompletionChimePlayer.isForeground else { return }
         CompletionChimePlayer.shared.play()
-        // The app itself is alerting; the still-pending system notification
-        // or AlarmKit alarm for this deadline would fire a second sound on
-        // top of the chime. Background completions keep it (only alert there).
-        cancelAlarm(timerID: timerID)
     }
 
     private func stopCompletionAlertIfTimerStarted() {
