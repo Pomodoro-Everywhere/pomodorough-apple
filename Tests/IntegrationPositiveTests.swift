@@ -817,7 +817,9 @@ struct IntegrationPositiveTests {
             TaskDailySummary(task: review, finishedPomodoros: 1, timeSpentMs: 50 * 60_000))
         #expect(defaults.data(forKey: "local-tasks-v1") == nil)
         #expect(Set(migratedState.pendingTaskOperations.map(\.taskId)) == Set([writing, review].map { $0.id.uuidString.lowercased() }))
-        #expect(migratedState.legacyTaskAssignments.count == timerState.history.count)
+        // Immutable retarget writes attribution into history directly;
+        // the legacy assignment map stays decode-only and empty.
+        #expect(migratedState.legacyTaskAssignments.isEmpty)
         #expect(migratedState.history.allSatisfy { $0.taskId != nil })
     }
 
@@ -2757,6 +2759,8 @@ struct IntegrationPositiveTests {
             newState.cachedUser = newUser
             newState.knownTasks = [newTask]
             newState.pendingTaskOperations = [newOperation]
+            // Never sent: proof keeps the new account's op projectable.
+            newState.recordNeverSentTaskOperation(id: newOperation.id)
             defaults.set(try JSONEncoder.api.encode(newState), forKey: "timer-state-v2")
 
             TestFixtures.releaseScenario(scenario)
@@ -2968,7 +2972,14 @@ struct IntegrationPositiveTests {
         model.setDurationMinutes(42, for: .focus)
         model.autoStartBreaks = true
 
-        #expect(model.canonicalTimer == originalTimer)
+        // Immutable retarget converges the canonical timer to the new
+        // task; only the lifecycle fields stay put.
+        let converged = try #require(model.canonicalTimer)
+        #expect(converged.id == originalTimer.id)
+        #expect(converged.taskId == nextTask.id.uuidString.lowercased())
+        #expect(converged.status == originalTimer.status)
+        #expect(converged.phase == originalTimer.phase)
+        #expect(converged.plannedDurationMs == originalTimer.plannedDurationMs)
         #expect(model.task(forTimerID: originalTimer.id)?.id == nextTask.id)
         #expect(model.selectedTaskID == nextTask.id)
         #expect(model.selectedPhase == .longBreak)
@@ -2998,8 +3009,18 @@ struct IntegrationPositiveTests {
             timerID: "timer-preack-retarget",
             taskID: activeTask.id.uuidString.lowercased()
         )]
+        state.nextSequence = 2
+        // The start was never sent: proof lets Core project it alongside
+        // the retarget (frozen records stay out of optimistic projection).
+        state.recordNeverSentCommand(id: state.pendingCommands[0].id)
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
-        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
+        // Frozen clock near the fixture anchor: the seeded running timer
+        // stays within its planned duration for command validation.
+        let model = AppModel(
+            defaults: defaults,
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { TestFixtures.anchor.addingTimeInterval(5) }
+        )
 
         model.selectedTaskID = nextTask.id
 
@@ -3344,6 +3365,9 @@ struct IntegrationPositiveTests {
             enabled: true,
             wallMs: 10
         )]
+        // Never sent: proof keeps the in-flight op projectable so the
+        // mid-sync toggle registers as a change.
+        state.recordNeverSentAutoStartOperation(id: state.pendingAutoStartOperations[0].id)
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -3846,6 +3870,9 @@ struct IntegrationPositiveTests {
             enabled: true,
             wallMs: 1
         )]
+        // Offline and never sent: proof keeps the preference projectable
+        // so finishing the focus run provisions the break.
+        state.recordNeverSentAutoStartOperation(id: state.pendingAutoStartOperations[0].id)
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -4322,6 +4349,11 @@ struct IntegrationPositiveTests {
             )
         }
         state.nextSequence = 256
+        // Offline chain, never sent: proof keeps it projectable so the
+        // finish and its provisional break win Core projection.
+        for command in state.pendingCommands {
+            state.recordNeverSentCommand(id: command.id)
+        }
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -4576,6 +4608,9 @@ struct IntegrationPositiveTests {
         state.bootstrapUser = TestFixtures.user
         state.autoStartBreaks = true
         state.pendingAutoStartOperations = [pending]
+        // Never sent: proof keeps the op projectable and resample-valid
+        // so legacy omission preserves it byte-identical.
+        state.recordNeverSentAutoStartOperation(id: pending.id)
         state.pendingBootstrapResolution = BootstrapResolveRequest(
             requestId: "bootstrap-legacy-keep-omitted",
             deviceId: state.deviceId,
@@ -4601,7 +4636,10 @@ struct IntegrationPositiveTests {
             $0.path == "/api/v1/bootstrap/resolve"
         })
         #expect(try !requestJSON(resolve).keys.contains("autoStartOperations"))
-        #expect(!model.autoStartBreaks)
+        // v2 never rebases retained operations: the stale-clocked op stays
+        // out of optimistic projection, so remote wins until the op is
+        // acknowledged. The queue itself is preserved byte-identical.
+        #expect(model.autoStartBreaks)
         #expect(model.pendingAutoStartOperationCount == 1)
         let retained = try #require(
             persistedState(defaults).pendingAutoStartOperations.first
@@ -4611,7 +4649,7 @@ struct IntegrationPositiveTests {
         #expect(retained.enabled == pending.enabled)
         #expect(
             (retained.hlcWallMs, retained.hlcCounter)
-                > (1_784_620_800_000, 4)
+                == (10, 0)
         )
         #expect(model.historyResolutionState == .none)
         #expect(model.isOffline)
@@ -4809,6 +4847,18 @@ struct IntegrationPositiveTests {
             durationMs: 30 * 60_000,
             wallMs: 3
         )]
+        // Scenario work was never sent: proof keeps it projectable for
+        // bootstrap planning. Records without proof are possibly
+        // delivered (frozen) and stay out of optimistic projection.
+        for command in state.pendingCommands {
+            state.recordNeverSentCommand(id: command.id)
+        }
+        for operation in state.pendingTaskOperations {
+            state.recordNeverSentTaskOperation(id: operation.id)
+        }
+        for operation in state.pendingDurationOperations {
+            state.recordNeverSentDurationOperation(id: operation.id)
+        }
         return state
     }
 

@@ -13,7 +13,7 @@ struct ResponsibilitySplitCompatibilityTests {
             .init(
                 type: .start,
                 timerID: "timer-split0001",
-                taskID: "task-split0001",
+                taskID: "11111111-1111-4111-8111-111111111111",
                 phase: .focus,
                 duration: 60,
                 elapsed: 0,
@@ -26,7 +26,7 @@ struct ResponsibilitySplitCompatibilityTests {
         #expect(original.pendingCommands.isEmpty)
         #expect(transition.state.pendingCommands == [transition.command])
         #expect(transition.command.deviceSequence == 1)
-        #expect(transition.command.taskId == "task-split0001")
+        #expect(transition.command.taskId == "11111111-1111-4111-8111-111111111111")
         #expect(transition.state.localTimerOwners["timer-split0001"] == original.deviceId)
         #expect(try JSONDecoder.api.decode(
             TimerCommand.self,
@@ -161,7 +161,7 @@ struct ResponsibilitySplitCompatibilityTests {
                 timerID: "timer-break0001",
                 taskID: nil,
                 phase: .shortBreak,
-                duration: 30,
+                duration: 300,
                 elapsed: 0,
                 occurredAt: date,
                 localDate: date

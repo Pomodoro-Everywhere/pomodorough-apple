@@ -557,8 +557,7 @@ struct SynchronizedMutationCoverageBehaviorTests {
         #expect(paused.state.pendingCommands.last?.type == .pause)
         #expect(pausedTimer.status == .paused)
         #expect(paused.effects.last == .alarm(
-            TimerSessionController.AlarmPlan(actions: [.pause(timerID: running.id)]),
-            cancelReportsError: true
+            TimerSessionController.AlarmPlan(actions: [.pause(timerID: running.id)])
         ))
 
         let resumed = try #require(try controller.plan(
@@ -587,8 +586,7 @@ struct SynchronizedMutationCoverageBehaviorTests {
         #expect(cleared.effects.suffix(2) == [
             .clearCompletionAlert(timerID: "timer-test0001"),
             .alarm(
-                TimerSessionController.AlarmPlan(actions: [.cancel(timerID: "timer-test0001")]),
-                cancelReportsError: false
+                TimerSessionController.AlarmPlan(actions: [.cancel(timerID: "timer-test0001")])
             )
         ])
     }

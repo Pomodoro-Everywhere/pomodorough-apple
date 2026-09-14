@@ -88,6 +88,9 @@ struct IntegrationNegativeTests {
         state.localTimerOwners[state.canonicalTimer!.id] = state.deviceId
         state.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
         state.nextSequence = 2
+        // Never sent: proof keeps the queued start projectable across
+        // the clock resample (no canonical head has been stored yet).
+        state.recordNeverSentCommand(id: state.pendingCommands[0].id)
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         defaults.resetTimerStateWrites()
         let model = AppModel(
@@ -473,6 +476,9 @@ struct IntegrationNegativeTests {
         )
         state.cachedUser = TestFixtures.user
         state.pendingAutoStartOperations = [operation]
+        // Never sent: proof keeps the op in optimistic projection while
+        // malformed acknowledgements preserve the queue.
+        state.recordNeverSentAutoStartOperation(id: operation.id)
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -1406,7 +1412,9 @@ struct IntegrationNegativeTests {
         await model.confirmHistoryResolution()
 
         #expect(model.historyResolutionState == .choosing)
-        #expect(model.history.map(\.id) == ["local-timer"])
+        // The resolve POST was transmitted (409): submitted work is
+        // frozen as possibly delivered and stays out of projection.
+        #expect(model.history.isEmpty)
         #expect(model.pendingCommandCount == 2)
         let persistedData = try #require(defaults.data(forKey: "timer-state-v2"))
         let persisted = try JSONDecoder.api.decode(PersistedTimerState.self, from: persistedData)
@@ -1437,6 +1445,9 @@ struct IntegrationNegativeTests {
         var state = PersistedTimerState.fresh()
         state.cachedUser = TestFixtures.user
         state.pendingTaskOperations = [operation]
+        // Never sent: proof keeps the op in optimistic projection while
+        // the missing acknowledgement preserves the queue.
+        state.recordNeverSentTaskOperation(id: operation.id)
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
@@ -1476,7 +1487,11 @@ struct IntegrationNegativeTests {
         let selectedPhase = model.selectedPhase
         let autoStartBreaks = model.autoStartBreaks
         let selectedTaskID = model.selectedTaskID
-        let taskID = try #require(model.tasks.first?.id)
+        // Submitted-but-unacknowledged work is frozen under v2: projected
+        // tasks stay empty until the resolve response lands. knownTasks
+        // still identifies the retained task for blocked-mutation checks.
+        #expect(model.tasks.isEmpty)
+        let taskID = try #require(initial.knownTasks.first?.id)
 
         model.start()
         model.setDurationMinutes(90, for: .focus)
@@ -1701,7 +1716,9 @@ struct IntegrationNegativeTests {
         #expect(model.isHistoryResolutionBlocking)
         #expect(!model.isOffline)
         #expect(model.errorMessage?.contains("server update") == true)
-        #expect(model.history.map(\.id) == ["local-timer"])
+        // Transmitted resolve (404): submitted work stays frozen out of
+        // projection while the exact claim is preserved for retry.
+        #expect(model.history.isEmpty)
         #expect(model.pendingChangeCount == 5)
         let persisted = try persistedState(defaults)
         #expect(persisted == initial)
@@ -1746,7 +1763,7 @@ struct IntegrationNegativeTests {
     }
 
     @Test @MainActor
-    func replaceRemote404RaceNeverFallsBackToSyncOrClearsLocalQueues() async throws {
+    func unresolvedMerge404RaceNeverFallsBackToSyncOrClearsLocalQueues() async throws {
         let scenario = "bootstrap-resolve-race-404"
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1764,15 +1781,18 @@ struct IntegrationNegativeTests {
 
         await model.restore()
 
-        #expect(model.historyResolutionState == .retryable(.replaceRemote))
+        // Uncertain pre-boot work plans merge, not replaceRemote: the
+        // persisted request was built (proof retired) before a possible
+        // crash, so the client cannot prove the server never saw it.
+        #expect(model.historyResolutionState == .retryable(.merge))
         #expect(model.isHistoryResolutionBlocking)
         #expect(!model.isOffline)
         #expect(model.errorMessage?.contains("server update") == true)
-        #expect(model.history.map(\.id) == ["local-timer"])
+        #expect(model.history.isEmpty)
         #expect(model.pendingChangeCount == 5)
         let persisted = try persistedState(defaults)
         let request = try #require(persisted.pendingBootstrapResolution)
-        #expect(request.strategy == .replaceRemote)
+        #expect(request.strategy == .merge)
         #expect(request.commands == initial.pendingCommands)
         #expect(request.taskOperations == initial.pendingTaskOperations)
         #expect(request.durationOperations == initial.pendingDurationOperations)

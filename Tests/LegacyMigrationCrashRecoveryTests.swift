@@ -310,7 +310,9 @@ private struct CrashMigrationFixture {
     func expectArchivedMetadata(in state: PersistedTimerState, archived: FocusTask) {
         #expect(state.knownTasks.contains(archived))
         #expect(!state.tasks.contains(archived))
-        #expect(state.legacyTaskAssignments["legacy-timer"] == archived.id)
+        // Immutable retarget converges attribution into history directly;
+        // the legacy map stays decode-only and empty.
+        #expect(state.legacyTaskAssignments["legacy-timer"] == nil)
         #expect(state.history.first { $0.timerId == "legacy-timer" }?.taskId == archived.id.uuidString.lowercased())
     }
 

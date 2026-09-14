@@ -666,6 +666,9 @@ struct SynchronizedWorkspaceMutationPlannerTests {
             hlcCounter: 0
         )
         state.pendingDurationOperations = [obsolete]
+        // Never sent: proof lets the planner supersede the obsolete op
+        // instead of freezing the whole domain queue.
+        state.recordNeverSentDurationOperation(id: obsolete.id)
         state.lastUuidV7 = UUID(uuidString: "018f24e8-7400-7000-8000-000000000001")
         state.hlcWallMs = obsolete.hlcWallMs
         let snapshot = makeSnapshot(state: state)
@@ -724,8 +727,7 @@ struct SynchronizedWorkspaceMutationPlannerTests {
                 timerID: command.timerId,
                 phase: command.phase,
                 duration: TimeInterval(command.plannedDurationMs) / 1_000
-            )]),
-            cancelReportsError: true
+            )])
         ))
     }
 

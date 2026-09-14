@@ -364,6 +364,9 @@ private struct SnapshotReplacementFixture {
     func seed() throws -> PersistedTimerState {
         var state = PersistedTimerState.fresh()
         state.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        // The seeded start was never sent: proof keeps it projectable.
+        // Records without proof are treated as possibly delivered (frozen).
+        state.recordNeverSentCommand(id: state.pendingCommands[0].id)
         state.nextSequence = 2
         let bytes = try JSONEncoder.api.encode(state)
         try AtomicDurableFileStore(fileURL: url).write(bytes)
@@ -423,6 +426,9 @@ private struct SnapshotReplacementFixture {
         ))
         var expected = previous
         expected.pendingDurationOperations = [replacement]
+        // v2 recovery compacts the never-sent proof to the replacement:
+        // the obsolete operation was discarded before it was ever sent.
+        expected.neverSentDurationOperationIDs = [replacement.id]
         expected.settings.setMinutes(15, for: .focus)
         expected.hlcCounter += 1
         expected.lastUuidV7 = replacementID
@@ -448,6 +454,9 @@ private struct SnapshotReplacementFixture {
     ) throws {
         var uncoalesced = compacted
         uncoalesced.pendingDurationOperations = previous.pendingDurationOperations + compacted.pendingDurationOperations
+        // Neither operation was ever sent, so the uncoalesced queue is
+        // safe to project: Core coalesces it to the same winner.
+        uncoalesced.neverSentDurationOperationIDs = Set(uncoalesced.pendingDurationOperations.map(\.id))
         let controller = TimerSessionController(sharedCoreProvider: { try SharedCore.bundled() })
         let date = TestFixtures.anchor.addingTimeInterval(5)
         let original = try controller.project(uncoalesced, replicationMode: .offline, physicalNow: date)

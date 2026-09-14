@@ -14,7 +14,7 @@ struct PersistedStateDecouplingCompatibilityTests {
 
         #expect(fixture["formatVersion"] as? Int == 1)
         #expect(Self.sha256(encoded) == fixture["canonicalSHA256"] as? String)
-        #expect(encoded.count == 839)
+        #expect(encoded.count == 1005)
     }
 
     @Test

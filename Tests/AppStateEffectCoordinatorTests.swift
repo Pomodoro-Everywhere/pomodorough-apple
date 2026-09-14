@@ -314,7 +314,7 @@ struct AppStateEffectCoordinatorTests {
         )
         #expect(completion.alertTimerID == nil)
         #expect(completion.effects == [
-            .cancelAlarm(timerID: "timer-completed", reportsError: false)
+            .cancelAlarm(timerID: "timer-completed")
         ])
     }
 
@@ -328,11 +328,10 @@ struct AppStateEffectCoordinatorTests {
             for: .init(actions: [
                 .cancel(timerID: "timer-focus"),
                 .schedule(timerID: "timer-break", phase: .shortBreak, duration: 300)
-            ]),
-            cancelReportsError: false
+            ])
         )
         #expect(effects == [
-            .cancel(timerID: "timer-focus", reportsError: false),
+            .cancel(timerID: "timer-focus"),
             .schedule(timerID: "timer-break", phase: .shortBreak, duration: 300)
         ])
 
