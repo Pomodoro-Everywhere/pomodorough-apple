@@ -767,6 +767,17 @@ final class AppModel {
         statePublisher.displayTask(for: timer, snapshot: publicationSnapshot)
     }
 
+    /// Title of the selected focus task, whatever phase is running.
+    /// `displayTask` is nil for breaks by design; the widget needs the
+    /// selection itself. Falls back to known tasks when the projection has
+    /// not converged the selection yet.
+    func selectedTaskTitle() -> String? {
+        guard let id = selectedTaskID else { return nil }
+        let snapshot = publicationSnapshot
+        return snapshot.tasks.first(where: { $0.id == id })?.title
+            ?? snapshot.state.knownTasks.first(where: { $0.id == id })?.title
+    }
+
     func taskSummaries(for date: Date = .now, calendar: Calendar = .current) -> [TaskDailySummary] {
         statePublisher.taskSummaries(
             for: date,

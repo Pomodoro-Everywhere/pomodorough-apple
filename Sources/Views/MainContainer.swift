@@ -33,10 +33,16 @@ struct MainContainer: View {
             .onOpenURL { url in
                 if url.scheme == "pomodorough", url.host == "timer" {
                     selectedTab = .timer
-                    let wantsToggle = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                        .queryItems?.contains(where: { $0.name == "toggle" }) == true
-                    if wantsToggle {
+                    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                    if items.contains(where: { $0.name == "toggle" }) {
                         model.toggleTimer()
+                    } else if let action = items.first(where: { $0.name == "action" })?.value {
+                        switch action {
+                        case "finish": model.finish()
+                        case "cancel": model.cancel()
+                        case "skip": model.selectPhase(model.skipDestinationFromFocus())
+                        default: break
+                        }
                     }
                 }
             }

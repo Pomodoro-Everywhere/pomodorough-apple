@@ -134,9 +134,14 @@ struct TimerLiveActivityModifier: ViewModifier {
     @State private var coordinator = TimerLiveActivityCoordinator()
 
     private var taskTitle: String? {
-        model.canonicalTimer.flatMap { timer in
-            model.displayTask(for: timer)?.title
+        // Prefer the task attached to the running focus timer; fall back to
+        // the selected focus task so breaks still name it (displayTask is
+        // nil for break phases by design).
+        if let timer = model.canonicalTimer,
+           let attached = model.displayTask(for: timer)?.title {
+            return attached
         }
+        return model.selectedTaskTitle()
     }
 
     func body(content: Content) -> some View {

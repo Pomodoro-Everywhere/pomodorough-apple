@@ -49,17 +49,21 @@ struct TimerWidgetProvider: TimelineProvider {
 private enum WidgetURLs {
     static let open = URL(string: "pomodorough://timer")!
     static let toggle = URL(string: "pomodorough://timer?toggle=1")!
+    static let finish = URL(string: "pomodorough://timer?action=finish")!
+    static let cancel = URL(string: "pomodorough://timer?action=cancel")!
+    static let skip = URL(string: "pomodorough://timer?action=skip")!
 }
 
 private struct WidgetTimerDisplay {
     let phase: String?
     let taskTitle: String?
-    /// Live count-up range while running; nil when paused/complete/idle.
-    let countUpInterval: ClosedRange<Date>?
-    /// Seconds passed since the phase started. The dial fills with elapsed
-    /// time, starting empty, instead of draining the time left.
-    let elapsed: TimeInterval
+    /// Live countdown range while running; nil when paused/complete/idle.
+    let countdownInterval: ClosedRange<Date>?
+    /// Seconds left in the phase. The dial fills with elapsed time,
+    /// starting empty, while the digits count down to zero.
+    let remaining: TimeInterval
     let duration: TimeInterval
+    /// Elapsed fraction (0 = just started, 1 = done).
     let progress: Double
     let paused: Bool
     let complete: Bool
@@ -74,19 +78,19 @@ private struct WidgetTimerDisplay {
         if let timer {
             duration = max(0, timer.endsAt.timeIntervalSince(timer.startedAt))
             if timer.isPaused {
-                elapsed = max(0, min(duration, duration - timer.remaining))
+                remaining = max(0, min(duration, timer.remaining))
             } else if timer.endsAt <= date {
-                elapsed = duration
+                remaining = 0
             } else {
-                elapsed = max(0, min(duration, date.timeIntervalSince(timer.startedAt)))
+                remaining = max(0, min(duration, timer.endsAt.timeIntervalSince(date)))
             }
-            progress = duration > 0 ? elapsed / duration : 0
-            countUpInterval = !timer.isPaused && !complete ? timer.startedAt...timer.endsAt : nil
+            progress = duration > 0 ? 1 - remaining / duration : 0
+            countdownInterval = !timer.isPaused && !complete ? timer.startedAt...timer.endsAt : nil
         } else {
             duration = 0
-            elapsed = 0
+            remaining = 0
             progress = 0
-            countUpInterval = nil
+            countdownInterval = nil
         }
     }
 
@@ -134,7 +138,17 @@ struct TimerStandByWidget: Widget {
         }
         .configurationDisplayName("Pomodorough Timer")
         .description("Your current focus or break timer, on your Home Screen or in StandBy.")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
+        .supportedFamilies(TimerStandByWidget.families)
+    }
+
+    /// iOS 27 adds the tall portrait `.systemExtraLargePortrait` family;
+    /// older systems keep the four classic families.
+    static var families: [WidgetFamily] {
+        if #available(iOS 27, *) {
+            [.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge, .systemExtraLargePortrait]
+        } else {
+            [.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge]
+        }
     }
 }
 
@@ -147,29 +161,44 @@ private struct TimerWidgetView: View {
     }
 
     var body: some View {
-        switch family {
-        case .systemMedium:
-            mediumLayout
-        case .systemLarge:
-            largeLayout
-        case .systemExtraLarge:
-            extraLargeLayout
-        default:
-            smallLayout
+        Group {
+            if #available(iOS 27, *), family == .systemExtraLargePortrait {
+                portraitLayout
+            } else {
+                switch family {
+                case .systemMedium:
+                    mediumLayout
+                case .systemLarge:
+                    // Same full-tile circular dial as the 2x2 small widget.
+                    smallLayout
+                case .systemExtraLarge:
+                    extraLargeLayout
+                default:
+                    smallLayout
+                }
+            }
         }
     }
 
     private var smallLayout: some View {
         GeometryReader { geometry in
-            let gap = max(6, geometry.size.height * 0.05)
-            let diameter = min(geometry.size.width, max(0, geometry.size.height - 44 - gap))
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
+            // The dial takes the full widget height; the toggle is a
+            // small circular icon button overlapping the bottom corner.
+            let diameter = min(geometry.size.width, geometry.size.height)
+            ZStack(alignment: .bottomTrailing) {
                 TimerDialView(display: display)
                     .frame(width: diameter, height: diameter)
-                Spacer(minLength: gap)
-                WidgetToggleButton(display: display, compact: true)
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Link(destination: WidgetURLs.toggle) {
+                    Image(systemName: display.buttonSymbol)
+                        .font(.system(size: diameter * 0.11, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(width: diameter * 0.26, height: diameter * 0.26)
+                        .background(display.tint, in: Circle())
+                }
+                .accessibilityLabel(Text(display.buttonTitle))
+                .accessibilityHint("Opens the app and toggles the timer")
+                .padding(max(2, diameter * 0.02))
             }
         }
         .accessibilityElement(children: .combine)
@@ -177,49 +206,52 @@ private struct TimerWidgetView: View {
     }
 
     private var mediumLayout: some View {
-        HStack(spacing: 12) {
-            TimerDialView(display: display)
-                .frame(maxWidth: .infinity)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(display.title)
-                    .font(.headline)
-                    .foregroundStyle(display.tint)
-                    .lineLimit(1)
-                WidgetStatusLines(display: display)
-                Spacer(minLength: 0)
-                WidgetToggleButton(display: display, compact: false)
+        GeometryReader { geometry in
+            // Compact dial: big digits with the progress stroke running
+            // around a rounded-rectangle perimeter; toggle is a small
+            // circular icon button in the corner, like the small widget.
+            let height = geometry.size.height
+            ZStack(alignment: .bottomTrailing) {
+                WidgetCompactDial(display: display)
+                Link(destination: WidgetURLs.toggle) {
+                    Image(systemName: display.buttonSymbol)
+                        .font(.system(size: height * 0.13, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(width: height * 0.3, height: height * 0.3)
+                        .background(display.tint, in: Circle())
+                }
+                .accessibilityLabel(Text(display.buttonTitle))
+                .accessibilityHint("Opens the app and toggles the timer")
+                .padding(max(2, height * 0.06))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(display.title))
     }
 
-    private var largeLayout: some View {
-        VStack(spacing: 8) {
-            Text(display.title)
-                .font(.headline)
-                .foregroundStyle(display.tint)
-                .lineLimit(1)
+    private var extraLargeLayout: some View {
+        VStack {
             TimerDialView(display: display)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             WidgetStatusLines(display: display, centered: true)
             WidgetToggleButton(display: display, compact: false)
+            HStack(spacing: 8) {
+                WidgetSecondaryButton(title: "Finish", symbol: "checkmark", url: WidgetURLs.finish)
+                WidgetSecondaryButton(title: "Cancel", symbol: "xmark", url: WidgetURLs.cancel)
+                WidgetSecondaryButton(title: "Skip", symbol: "forward.fill", url: WidgetURLs.skip)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var extraLargeLayout: some View {
-        HStack(spacing: 20) {
+    /// Tall 4x6 portrait tile (iOS 27+): full circular dial up top taking
+    /// all leftover height, status lines plus full-width toggle below.
+    private var portraitLayout: some View {
+        VStack {
             TimerDialView(display: display)
-                .frame(maxWidth: .infinity)
-            VStack(alignment: .leading, spacing: 8) {
-                Text(display.title)
-                    .font(.title2.bold())
-                    .foregroundStyle(display.tint)
-                    .lineLimit(1)
-                WidgetStatusLines(display: display)
-                Spacer(minLength: 0)
-                WidgetToggleButton(display: display, compact: false)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            WidgetStatusLines(display: display, centered: true)
+            WidgetToggleButton(display: display, compact: false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -252,6 +284,13 @@ private struct TimerDialView: View {
                         .foregroundStyle(display.tint)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
+                    if let task = display.taskTitle, !task.isEmpty {
+                        Text(verbatim: task)
+                            .font(.system(size: max(7, diameter * 0.07), weight: .medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
                 .padding(max(4, diameter * 0.14))
             }
@@ -284,17 +323,160 @@ private struct WidgetTickMarks: Shape {
     }
 }
 
+/// Walks a rounded-rectangle perimeter clockwise starting at top-center.
+/// Returns the point and inward normal at fraction `t` in 0..<1.
+private func roundedRectPoint(at t: CGFloat, width w: CGFloat, height h: CGFloat, radius r: CGFloat) -> (point: CGPoint, normal: CGVector) {
+    let a = max(0, w / 2 - r) // top-edge half
+    let c = max(0, h - 2 * r) // vertical edge
+    let d = max(0, w - 2 * r) // bottom edge
+    let b = CGFloat.pi * r / 2 // quarter arc
+    let total = max(1, 2 * a + 2 * c + d + 4 * b)
+    var dist = (t.truncatingRemainder(dividingBy: 1) + 1).truncatingRemainder(dividingBy: 1) * total
+    // Top edge, top-center to top-right corner.
+    if dist < a { return (CGPoint(x: w / 2 + dist, y: 0), CGVector(dx: 0, dy: 1)) }
+    dist -= a
+    let corners: [(center: CGPoint, start: CGFloat)] = [
+        (CGPoint(x: w - r, y: r), -.pi / 2), // top-right
+        (CGPoint(x: w - r, y: h - r), 0), // bottom-right
+        (CGPoint(x: r, y: h - r), .pi / 2), // bottom-left
+        (CGPoint(x: r, y: r), .pi), // top-left
+    ]
+    // Top-right corner, then right edge.
+    if dist < b {
+        let ang = corners[0].start + dist / max(1, r)
+        return (CGPoint(x: corners[0].center.x + cos(ang) * r, y: corners[0].center.y + sin(ang) * r), CGVector(dx: -cos(ang), dy: -sin(ang)))
+    }
+    dist -= b
+    if dist < c { return (CGPoint(x: w, y: r + dist), CGVector(dx: -1, dy: 0)) }
+    dist -= c
+    // Bottom-right corner, then bottom edge right-to-left.
+    if dist < b {
+        let ang = corners[1].start + dist / max(1, r)
+        return (CGPoint(x: corners[1].center.x + cos(ang) * r, y: corners[1].center.y + sin(ang) * r), CGVector(dx: -cos(ang), dy: -sin(ang)))
+    }
+    dist -= b
+    if dist < d { return (CGPoint(x: w - r - dist, y: h), CGVector(dx: 0, dy: -1)) }
+    dist -= d
+    // Bottom-left corner, then left edge bottom-up.
+    if dist < b {
+        let ang = corners[2].start + dist / max(1, r)
+        return (CGPoint(x: corners[2].center.x + cos(ang) * r, y: corners[2].center.y + sin(ang) * r), CGVector(dx: -cos(ang), dy: -sin(ang)))
+    }
+    dist -= b
+    if dist < c { return (CGPoint(x: 0, y: h - r - dist), CGVector(dx: 1, dy: 0)) }
+    dist -= c
+    // Top-left corner, then top edge back to top-center.
+    if dist < b {
+        let ang = corners[3].start + dist / max(1, r)
+        return (CGPoint(x: corners[3].center.x + cos(ang) * r, y: corners[3].center.y + sin(ang) * r), CGVector(dx: -cos(ang), dy: -sin(ang)))
+    }
+    dist -= b
+    // Top edge back to top-center: from (r, 0) to (w / 2, 0).
+    return (CGPoint(x: r + min(dist, a), y: 0), CGVector(dx: 0, dy: 1))
+}
+
+/// Progress stroke around a rounded rectangle starting at top-center and
+/// running clockwise. All sizes derive from the rect.
+private struct WidgetTopStartProgress: Shape {
+    var cornerRadius: CGFloat
+    var fraction: Double
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let p = max(0, min(1, fraction))
+        guard p > 0 else { return path }
+        let r = min(cornerRadius, rect.width / 2, rect.height / 2)
+        let steps = max(8, Int(p * 120))
+        let start = roundedRectPoint(at: 0, width: rect.width, height: rect.height, radius: r)
+        path.move(to: start.point)
+        for i in 1...steps {
+            path.addLine(to: roundedRectPoint(at: p * CGFloat(i) / CGFloat(steps), width: rect.width, height: rect.height, radius: r).point)
+        }
+        return path
+    }
+}
+
+/// Minute notches around a rounded-rectangle perimeter, mirroring the
+/// circular WidgetTickMarks. Every fifth notch runs longer.
+private struct WidgetRoundedRectTicks: Shape {
+    var cornerRadius: CGFloat
+    var count: Int
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = min(cornerRadius, rect.width / 2, rect.height / 2)
+        let total = max(1, count)
+        let len = min(rect.width, rect.height)
+        for index in 0..<total {
+            let (point, normal) = roundedRectPoint(at: CGFloat(index) / CGFloat(total), width: rect.width, height: rect.height, radius: r)
+            let inner = index.isMultiple(of: 5) ? len * 0.07 : len * 0.035
+            path.move(to: point)
+            path.addLine(to: CGPoint(x: point.x + normal.dx * inner, y: point.y + normal.dy * inner))
+        }
+        return path
+    }
+}
+
+/// Compact dial for the medium widget: big countdown digits with the
+/// elapsed progress stroke running around a rounded-rectangle perimeter.
+/// All sizes derive from the rect.
+private struct WidgetCompactDial: View {
+    let display: WidgetTimerDisplay
+
+    var body: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            let line = max(4, min(geometry.size.width, height) * 0.09)
+            let radius = min(height * 0.3, geometry.size.width / 2, height / 2)
+            ZStack {
+                RoundedRectangle(cornerRadius: radius)
+                    .stroke(.white.opacity(0.12), lineWidth: line)
+                WidgetRoundedRectTicks(
+                    cornerRadius: radius,
+                    count: max(1, Int((display.duration / 60).rounded()))
+                )
+                .stroke(.white.opacity(0.3), lineWidth: max(1, line * 0.18))
+                WidgetTopStartProgress(cornerRadius: radius, fraction: display.progress)
+                    .stroke(display.tint, style: StrokeStyle(lineWidth: line, lineCap: .round))
+                VStack(spacing: max(1, height * 0.03)) {
+                    WidgetCountdown(display: display)
+                        .font(.system(size: height * 0.38, weight: .bold))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                        .foregroundStyle(Color(red: 0.97, green: 0.82, blue: 0.34))
+                    Text(display.title)
+                        .font(.system(size: max(8, height * 0.13), weight: .semibold))
+                        .foregroundStyle(display.tint)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    if let task = display.taskTitle, !task.isEmpty {
+                        Text(verbatim: task)
+                            .font(.system(size: max(7, height * 0.1), weight: .medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .padding(height * 0.16)
+            }
+            .padding(line / 2)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 private struct WidgetCountdown: View {
     let display: WidgetTimerDisplay
 
     var body: some View {
         Group {
-            if let interval = display.countUpInterval {
-                Text(timerInterval: interval, countsDown: false)
+            if let interval = display.countdownInterval {
+                Text(timerInterval: interval)
             } else if !display.hasTimer {
                 Text("Ready")
             } else {
-                Text(Duration.seconds(max(0, Int(display.elapsed.rounded(.down)))).formatted(.time(pattern: display.elapsed >= 3600 ? .hourMinuteSecond : .minuteSecond)))
+                Text(Duration.seconds(max(0, Int(display.remaining.rounded(.up)))).formatted(.time(pattern: display.remaining >= 3600 ? .hourMinuteSecond : .minuteSecond)))
             }
         }
     }
@@ -314,7 +496,7 @@ private struct WidgetStatusLines: View {
             if let task = display.taskTitle, !task.isEmpty {
                 Text(verbatim: task)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.8))
                     .lineLimit(2)
             }
         }
@@ -335,6 +517,24 @@ private struct WidgetToggleButton: View {
                 .background(display.tint, in: Capsule())
         }
         .accessibilityHint("Opens the app and toggles the timer")
+    }
+}
+
+/// Secondary timer actions for the roomy tiles. Each opens the app, which
+/// performs the action on arrival; extensions cannot drive the timer engine.
+private struct WidgetSecondaryButton: View {
+    let title: LocalizedStringKey
+    let symbol: String
+    let url: URL
+
+    var body: some View {
+        Link(destination: url) {
+            Label(title, systemImage: symbol)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 34)
+                .background(.white.opacity(0.15), in: Capsule())
+        }
     }
 }
 
@@ -380,6 +580,13 @@ private func widgetPreviewEntry(
 }
 
 #Preview(as: .systemExtraLarge) {
+    TimerStandByWidget()
+} timeline: {
+    widgetPreviewEntry()
+}
+
+@available(iOS 27, *)
+#Preview(as: .systemExtraLargePortrait) {
     TimerStandByWidget()
 } timeline: {
     widgetPreviewEntry()

@@ -19,6 +19,8 @@ struct TimerControls: View {
     let layout: TimerLayout
     var compact = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Namespace private var glassNamespace
 
@@ -41,16 +43,34 @@ struct TimerControls: View {
         return String(localized: "Start \(model.selectedPhase.title.lowercased())")
     }
 
+    /// One button row only where there is room for it: iPad and mac.
+    /// Phones always stack the primary control full-width on its own
+    /// first row with the rest on the second, so Finish/Cancel never
+    /// share the primary row or get squeezed into a "..." truncation.
+    private var singleRow: Bool {
+#if os(macOS)
+        return true
+#else
+        return horizontalSizeClass == .regular
+#endif
+    }
+
     @ViewBuilder
     private func controls(glass: Bool) -> some View {
-        // One row when the buttons fit side by side, stacked rows when
-        // they don't. Width is always bounded (even inside the scroll
-        // view), so the fit is honest on phones, iPad, and large text.
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                primaryButton(glass: glass)
-                secondaryInlineButtons(glass: glass)
+        if singleRow {
+            // One row when the buttons fit side by side, stacked rows
+            // when they don't (large text, narrow multitasking width).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) {
+                    primaryButton(glass: glass)
+                    secondaryInlineButtons(glass: glass)
+                }
+                VStack(spacing: 14) {
+                    primaryButton(glass: glass)
+                    secondaryStackedButtons(glass: glass)
+                }
             }
+        } else {
             VStack(spacing: 14) {
                 primaryButton(glass: glass)
                 secondaryStackedButtons(glass: glass)
@@ -205,10 +225,13 @@ struct TimerControls: View {
     ) -> some View {
         if #available(iOS 26, macOS 26, *), glass {
             if prominent {
+                // Same .glass family as the secondaries so control-size
+                // padding matches exactly; .glassProminent takes the
+                // phase tint instead of a hand-rolled glass effect.
                 button
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.black)
-                    .glassEffect(.regular.tint(phaseAccent).interactive(), in: Capsule())
+                    .buttonStyle(.glassProminent)
+                    .tint(phaseAccent)
+                    .foregroundStyle(buttonText)
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     // Materialize, not matched geometry: morphing the
@@ -220,7 +243,7 @@ struct TimerControls: View {
                 button
                     .buttonStyle(.glass)
                     .tint(PomodoroughTheme.porcelain.opacity(0.16))
-                    .foregroundStyle(Color.black)
+                    .foregroundStyle(buttonText)
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(.materialize)
@@ -229,18 +252,29 @@ struct TimerControls: View {
             button
                 .buttonStyle(.borderedProminent)
                 .tint(prominent ? phaseAccent : PomodoroughTheme.sky)
-                .foregroundStyle(Color.black)
+                .foregroundStyle(buttonText)
                 .controlSize(compact ? .regular : .large)
         }
+    }
+
+    /// Button labels follow the system scheme explicitly: white on dark,
+    /// black on light. (.primary stays white in both here because the
+    /// glass styles resolve it against their own tint, not the screen.)
+    private var buttonText: Color {
+        colorScheme == .dark ? .white : .black
     }
 
     /// Frame after the style: the iOS 26 glass style imposes its own
     /// content sizing and discards an earlier minHeight, shrinking the
     /// hittable frame below the 44pt touch target. Enforcing here keeps
     /// every control reachable on every glass release.
+    private var rowMinHeight: CGFloat {
+        compact ? 44 : layout == .landscape ? 54 : 58
+    }
+
     private func sizedButton<Styled: View>(_ styled: Styled, accessibilityTitle: String) -> some View {
         styled
-            .frame(maxWidth: .infinity, minHeight: compact ? 44 : layout == .landscape ? 54 : 58)
+            .frame(maxWidth: .infinity, minHeight: rowMinHeight)
             .buttonBorderShape(.capsule)
             // Combine so the glass style's inner label is not exposed as
             // a second small element under the same title.
