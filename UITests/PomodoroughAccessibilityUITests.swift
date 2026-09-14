@@ -37,11 +37,12 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Timer"].waitForExistence(timeout: 5))
 
         func assertVisible(_ label: String, aboveTabs: Bool = true) {
-            let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
+            // CONTAINS, not ==: the iOS 26 glass container can expose the
+            // control under a decorated label variant while also leaking
+            // the inner text as a second small element. Drive the tallest
+            // match, which is the tappable control.
+            let query = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", label))
             XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
-            // The iOS 26 glass container can expose the inner label as a
-            // second small element under the same title; drive the
-            // tappable control, which is the tallest match.
             let button = (0..<query.count).map { query.element(boundBy: $0) }.max(by: {
                 $0.frame.height < $1.frame.height
             }) ?? query.firstMatch
@@ -62,7 +63,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
                 attachment.lifetime = .keepAlways
                 attachment.name = "short-button-\(label)"
                 add(attachment)
-                print("SHORTBUTTON label=\(label) frame=\(button.frame) hittable=\(button.isHittable)")
+                print("SHORTBUTTON label=\(label) matches=\(query.count) frame=\(button.frame) hittable=\(button.isHittable)")
             }
             XCTAssertEqual(waited, .completed)
             XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
