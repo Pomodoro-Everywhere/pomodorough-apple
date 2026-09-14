@@ -20,4 +20,5 @@ Supporting/SentryDSN.local
 *.mobileprovision
 .cache_ggshield
 .ruff_cache/
+.pytest_cache/
 /.audit/
