@@ -6,7 +6,7 @@ struct AlarmEffectCoordinator {
         case schedule(timerID: String, phase: TimerPhase, duration: TimeInterval)
         case pause(timerID: String)
         case resume(timerID: String, phase: TimerPhase, duration: TimeInterval)
-        case cancel(timerID: String, reportsError: Bool)
+        case cancel(timerID: String)
     }
 
     struct FinishInput: Sendable {
@@ -73,8 +73,7 @@ struct AlarmEffectCoordinator {
     }
 
     func effects(
-        for plan: TimerSessionController.AlarmPlan,
-        cancelReportsError: Bool = true
+        for plan: TimerSessionController.AlarmPlan
     ) -> [Effect] {
         plan.actions.map { action in
             switch action {
@@ -85,7 +84,7 @@ struct AlarmEffectCoordinator {
             case .resume(let timerID, let phase, let duration):
                 return .resume(timerID: timerID, phase: phase, duration: duration)
             case .cancel(let timerID):
-                return .cancel(timerID: timerID, reportsError: cancelReportsError)
+                return .cancel(timerID: timerID)
             }
         }
     }
@@ -93,8 +92,8 @@ struct AlarmEffectCoordinator {
     func effects(for publicationEffects: [AppStatePublisher.Effect]) -> [Effect] {
         publicationEffects.map { effect in
             switch effect {
-            case .cancelAlarm(let timerID, let reportsError):
-                return .cancel(timerID: timerID, reportsError: reportsError)
+            case .cancelAlarm(let timerID):
+                return .cancel(timerID: timerID)
             }
         }
     }
@@ -153,9 +152,5 @@ struct AlarmEffectCoordinator {
             completedAt: decision.completedAt,
             nextPhase: generatedBreakPhase
         )
-    }
-
-    static func errorMessage(for error: Error) -> String {
-        String(localized: "Timer continues in Pomodorough, but its system alarm could not be updated. \(error.localizedDescription)")
     }
 }

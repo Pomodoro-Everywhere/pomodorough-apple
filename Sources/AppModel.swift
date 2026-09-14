@@ -877,7 +877,7 @@ final class AppModel {
             authenticatedUser: user
         ) else { return }
         if let timer = canonicalTimer {
-            cancelAlarm(timerID: timer.id, reportsError: false)
+            cancelAlarm(timerID: timer.id)
         }
         applyCoordinatorPublication(accountSessionCoordinator.publication)
         let saved = accountSessionCoordinator.persist(state, to: .local)
@@ -1146,7 +1146,7 @@ final class AppModel {
 
     private func quarantineAccountDeletion() {
         if let timer = canonicalTimer {
-            cancelAlarm(timerID: timer.id, reportsError: false)
+            cancelAlarm(timerID: timer.id)
         }
         applyAccountReset(accountSessionCoordinator.completeDeletion())
         timerState = .fresh()
@@ -1515,7 +1515,7 @@ final class AppModel {
     func stopSound() {
         guard let alertTimerID = completionAlertTimerID else { return }
         completionAlertTimerID = nil
-        cancelAlarm(timerID: alertTimerID, reportsError: false)
+        cancelAlarm(timerID: alertTimerID)
     }
 
     func completeIfNeeded(timerID: String, at date: Date) {
@@ -2186,8 +2186,8 @@ final class AppModel {
             timerState.hasExplicitPhaseSelection = value
         case .clearCompletionAlert(let timerID):
             if completionAlertTimerID == timerID { completionAlertTimerID = nil }
-        case .alarm(let plan, let cancelReportsError):
-            executeAlarmPlan(plan, cancelReportsError: cancelReportsError)
+        case .alarm(let plan):
+            executeAlarmPlan(plan)
         }
         return true
     }
@@ -2266,8 +2266,7 @@ final class AppModel {
                 ownsCurrentTimer: currentTimer.map {
                     ownsAutomaticCompletion(for: $0.id)
                 } ?? false
-            ),
-            cancelReportsError: false
+            )
         )
     }
 
@@ -2275,11 +2274,8 @@ final class AppModel {
         performWorkspaceMutation(.task(type, task))
     }
 
-    private func cancelAlarm(timerID: String, reportsError: Bool = true) {
-        executeAlarmEffects([.cancel(
-            timerID: timerID,
-            reportsError: reportsError
-        )])
+    private func cancelAlarm(timerID: String) {
+        executeAlarmEffects([.cancel(timerID: timerID)])
     }
 
     private func stopCompletionAlertIfTimerStarted() {
@@ -2297,13 +2293,9 @@ final class AppModel {
     }
 
     private func executeAlarmPlan(
-        _ plan: TimerSessionController.AlarmPlan,
-        cancelReportsError: Bool = true
+        _ plan: TimerSessionController.AlarmPlan
     ) {
-        executeAlarmEffects(alarmEffectCoordinator.effects(
-            for: plan,
-            cancelReportsError: cancelReportsError
-        ))
+        executeAlarmEffects(alarmEffectCoordinator.effects(for: plan))
     }
 
     private func executeAlarmEffects(_ effects: [AlarmEffectCoordinator.Effect]) {
@@ -2339,8 +2331,8 @@ final class AppModel {
                         duration: max(1, timer.remaining(at: now))
                     )
                 }
-            case .cancel(let timerID, let reportsError):
-                enqueueAlarmOperation(reportsError: reportsError) { [alarmScheduler] in
+            case .cancel(let timerID):
+                enqueueAlarmOperation { [alarmScheduler] in
                     try await alarmScheduler.cancel(timerID: timerID)
                 }
             }
@@ -2348,21 +2340,19 @@ final class AppModel {
     }
 
     private func enqueueAlarmOperation(
-        reportsError: Bool = true,
         _ operation: @escaping @MainActor () async throws -> Void
     ) {
         let previousOperation = alarmOperationTask
-        alarmOperationTask = Task { [weak self] in
+        alarmOperationTask = Task {
             await previousOperation?.value
             guard !Task.isCancelled else { return }
             do {
                 try await operation()
             } catch {
+                // Alarm failures stay silent: the timer continues in
+                // Pomodorough. Sentry still captures the failure.
                 Self.logger.error("alarmOperation failed: \(error.localizedDescription, privacy: .public)")
                 SentryCapture.capture(error)
-                if reportsError {
-                    self?.errorMessage = AlarmEffectCoordinator.errorMessage(for: error)
-                }
             }
         }
     }

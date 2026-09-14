@@ -28,7 +28,7 @@ final class SynchronizedWorkspaceMutationController {
         case launchSync
         case setExplicitPhaseSelection(Bool)
         case clearCompletionAlert(timerID: String)
-        case alarm(TimerSessionController.AlarmPlan, cancelReportsError: Bool)
+        case alarm(TimerSessionController.AlarmPlan)
     }
 
     struct Transition: Equatable, Sendable {
@@ -143,7 +143,7 @@ private extension SynchronizedWorkspaceMutationController {
             state,
             Requirements(timerCommandIDs: [command.command.id]),
             snapshot: snapshot,
-            afterSync: [cancelAlarm(timer.id, reportsError: false)]
+            afterSync: [cancelAlarm(timer.id)]
         )
     }
 
@@ -184,7 +184,12 @@ private extension SynchronizedWorkspaceMutationController {
     }
 
     func planAutoStart(_ enabled: Bool, snapshot: Snapshot) throws -> Transition? {
-        guard enabled != snapshot.projectedAutoStartBreaks else { return nil }
+        // Compare against the latest queued intent, not the projection:
+        // a frozen or stale pending op no longer projects, but the user
+        // changing their mind past it is still a real change.
+        let latestIntent = snapshot.state.pendingAutoStartOperations.last?.enabled
+            ?? snapshot.projectedAutoStartBreaks
+        guard enabled != latestIntent else { return nil }
         var state = snapshot.state
         let occurredAt = try occurrenceDate(snapshot)
         try state.advanceClock(at: occurredAt)
@@ -198,9 +203,24 @@ private extension SynchronizedWorkspaceMutationController {
             hlcCounter: state.hlcCounter
         ))
         state.recordNeverSentAutoStartOperation(id: operationID)
+        let key = operationID.uuidString.lowercased()
+        guard state.safeProjectionAutoStartOperations().contains(where: { $0.id == operationID }) else {
+            // Unacked same-domain work shadows the new op out of optimistic
+            // projection. The op itself is proven never-sent, so queue it
+            // durably for the follow-up sync instead of dropping the toggle.
+            return Transition(
+                state: state,
+                projection: nil,
+                requirements: Requirements(),
+                effects: [
+                    .persistAtomically(previous: snapshot.state, rebuildsOnRollback: true),
+                    .launchSync
+                ]
+            )
+        }
         return try synchronized(
             state,
-            Requirements(autoStartOperationIDs: [operationID.uuidString.lowercased()]),
+            Requirements(autoStartOperationIDs: [key]),
             snapshot: snapshot
         )
     }
@@ -228,7 +248,7 @@ private extension SynchronizedWorkspaceMutationController {
             )
             state = command.state
             commandIDs.insert(command.command.id)
-            effects.append(cancelAlarm(timer.id, reportsError: false))
+            effects.append(cancelAlarm(timer.id))
         }
         try state.advanceClock(at: occurredAt)
         let operationID = "duration-operation-\(try state.reserveUuidV7()[0].uuidString.lowercased())"
@@ -292,7 +312,7 @@ private extension SynchronizedWorkspaceMutationController {
             afterSync: [
                 .setExplicitPhaseSelection(false),
                 .persist,
-                .alarm(alarm, cancelReportsError: true)
+                .alarm(alarm)
             ]
         )
     }
@@ -311,8 +331,7 @@ private extension SynchronizedWorkspaceMutationController {
             Requirements(timerCommandIDs: [command.command.id]),
             snapshot: snapshot,
             afterSync: [.alarm(
-                timerSessionController.alarmPlan(for: .pause(timerID: timer.id)),
-                cancelReportsError: true
+                timerSessionController.alarmPlan(for: .pause(timerID: timer.id))
             )]
         )
     }
@@ -335,7 +354,7 @@ private extension SynchronizedWorkspaceMutationController {
             command.state,
             Requirements(timerCommandIDs: [command.command.id]),
             snapshot: snapshot,
-            afterSync: [.alarm(alarm, cancelReportsError: true)]
+            afterSync: [.alarm(alarm)]
         )
     }
 
@@ -362,7 +381,7 @@ private extension SynchronizedWorkspaceMutationController {
             clear.state,
             Requirements(timerCommandIDs: [cancel.command.id, clear.command.id]),
             snapshot: snapshot,
-            afterSync: [cancelAlarm(timer.id, reportsError: true)]
+            afterSync: [cancelAlarm(timer.id)]
         )
     }
 
@@ -381,7 +400,7 @@ private extension SynchronizedWorkspaceMutationController {
             snapshot: snapshot,
             afterSync: [
                 .clearCompletionAlert(timerID: timer.id),
-                cancelAlarm(timer.id, reportsError: false)
+                cancelAlarm(timer.id)
             ]
         )
     }
@@ -496,10 +515,9 @@ private extension SynchronizedWorkspaceMutationController {
         timer.status == .running || timer.status == .paused
     }
 
-    func cancelAlarm(_ timerID: String, reportsError: Bool) -> Effect {
+    func cancelAlarm(_ timerID: String) -> Effect {
         .alarm(
-            timerSessionController.alarmPlan(for: .cancel(timerID: timerID)),
-            cancelReportsError: reportsError
+            timerSessionController.alarmPlan(for: .cancel(timerID: timerID))
         )
     }
 }

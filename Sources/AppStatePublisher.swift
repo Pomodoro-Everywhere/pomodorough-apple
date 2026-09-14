@@ -9,7 +9,7 @@ struct AppStatePublisher: Sendable {
     }
 
     enum Effect: Equatable, Sendable {
-        case cancelAlarm(timerID: String, reportsError: Bool)
+        case cancelAlarm(timerID: String)
     }
 
     struct Publication: Equatable, Sendable {
@@ -69,7 +69,7 @@ struct AppStatePublisher: Sendable {
         }
         return CompletionPresentation(
             alertTimerID: nil,
-            effects: [.cancelAlarm(timerID: alertTimerID, reportsError: false)]
+            effects: [.cancelAlarm(timerID: alertTimerID)]
         )
     }
 
@@ -96,6 +96,9 @@ struct AppStatePublisher: Sendable {
         forTimerID timerID: String,
         snapshot: Snapshot
     ) -> FocusTask? {
+        // Attribution follows the canonical timer and history. Pending
+        // retargets converge through Core projection, never through a
+        // client-side overlay (Core immutable-delivery rule 5).
         let taskID = snapshot.canonicalTimer.flatMap { $0.id == timerID ? $0.taskId : nil }
             ?? snapshot.history.first(where: { $0.timerId == timerID })?.taskId
             ?? snapshot.state.pendingCommands.first(where: {
