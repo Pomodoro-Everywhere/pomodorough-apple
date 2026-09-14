@@ -6,6 +6,7 @@ import WidgetKit
 @main
 struct PomodoroughActivityBundle: WidgetBundle {
     var body: some Widget {
+        TimerStandByWidget()
         TimerLiveActivity()
         if #available(iOS 26.0, *) {
             TimerAlarmLiveActivity()

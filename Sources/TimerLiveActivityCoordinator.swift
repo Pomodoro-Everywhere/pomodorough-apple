@@ -3,6 +3,7 @@ import ActivityKit
 import AlarmKit
 import OSLog
 import SwiftUI
+import WidgetKit
 
 extension TimerActivityAttributes.ContentState {
     init(timer: CanonicalTimer, taskTitle: String?) {
@@ -154,11 +155,28 @@ struct TimerLiveActivityModifier: ViewModifier {
     }
 
     private func synchronize() {
+        publishWidget()
         coordinator.synchronize(
             timer: model.canonicalTimer,
             taskTitle: taskTitle,
             canStart: scenePhase == .active
         )
+    }
+
+    private func publishWidget() {
+        let timer = model.canonicalTimer.flatMap { timer in
+            timer.status == .running || timer.status == .paused
+                ? TimerActivityAttributes.ContentState(timer: timer, taskTitle: taskTitle) : nil
+        }
+        do {
+            let data = try JSONEncoder().encode(TimerWidgetSnapshot(timer: timer))
+            guard let defaults = UserDefaults(suiteName: TimerWidgetSnapshot.appGroup) else { return }
+            guard defaults.data(forKey: TimerWidgetSnapshot.storageKey) != data else { return }
+            defaults.set(data, forKey: TimerWidgetSnapshot.storageKey)
+            WidgetCenter.shared.reloadTimelines(ofKind: TimerWidgetSnapshot.kind)
+        } catch {
+            SentryCapture.captureOnce(key: "widget-snapshot", error: error)
+        }
     }
 }
 #endif

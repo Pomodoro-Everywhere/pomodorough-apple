@@ -118,6 +118,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough
+        CODE_SIGN_ENTITLEMENTS: Supporting/TimerWidget.entitlements
         PRODUCT_NAME: Pomodorough
         TARGETED_DEVICE_FAMILY: "1,2"
         DEVELOPMENT_TEAM: PTT6GCQ699
@@ -140,6 +141,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.liveactivity
+        CODE_SIGN_ENTITLEMENTS: Supporting/TimerWidget.entitlements
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
