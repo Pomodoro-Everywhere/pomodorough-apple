@@ -12,6 +12,8 @@ struct BackgroundStaleAlarmTests {
         let scheduler = RecordingAlarmScheduler()
         let model = fixture.makeModel(alarmScheduler: scheduler)
         model.setSceneActive(false)
+        #expect(model.testForegroundSyncPending == true)
+        #expect(model.testNeedsForegroundSync == true)
         fixture.clock.elapsed = 90
         model.setSceneActive(true)
         #expect(model.completedFocusCount == 0)
@@ -58,7 +60,8 @@ struct BackgroundStaleAlarmTests {
         #expect(model.canonicalTimer?.status == .paused)
         model.errorMessage = nil
         model.finish(at: fixture.clock.now)
-        #expect(model.completedFocusCount == 1)
+        #expect(model.completedFocusCount == 0)
+        #expect(model.canonicalTimer?.status == .paused)
     }
 
     @Test @MainActor
@@ -150,6 +153,7 @@ private struct StaleAlarmFixture {
 
     func seedRunningTimer() throws {
         var initial = TestFixtures.syncContractState(includesPendingOperations: false)
+        initial.history = []
         initial.canonicalTimer = CanonicalTimer(
             id: "alarm-correction-timer",
             taskId: nil,

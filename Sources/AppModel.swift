@@ -548,6 +548,10 @@ final class AppModel {
         return isSignedIn || timerState.cachedUser != nil || timerState.bootstrapUser != nil
     }
 
+    // Test seam for background stale-alarm regressions.
+    var testForegroundSyncPending: Bool { foregroundSyncPending }
+    var testNeedsForegroundSync: Bool { needsForegroundSync }
+
     var hasActiveCompletionAlert: Bool { completionAlertTimerID != nil }
 
     var activeTimer: CanonicalTimer? {
