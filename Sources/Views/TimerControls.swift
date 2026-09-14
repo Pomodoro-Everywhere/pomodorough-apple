@@ -117,6 +117,12 @@ struct TimerControls: View {
         TimerAlarmScheduler.stopSoundTitle
     }
 
+    /// Prominent-button tint follows the selected phase so Start/Pause/
+    /// Resume leaves red behind on breaks, matching the dial ring.
+    private var phaseAccent: Color {
+        PomodoroughTheme.accent(for: model.selectedPhase)
+    }
+
     /// At accessibility sizes the icon is dropped and the title may take
     /// two lines: icon + headline text no longer fits side by side, and a
     /// clipped "…" label (Finish/Cancel) is worse than a taller button.
@@ -196,7 +202,7 @@ struct TimerControls: View {
                 button
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.black)
-                    .glassEffect(.regular.tint(PomodoroughTheme.signal).interactive(), in: Capsule())
+                    .glassEffect(.regular.tint(phaseAccent).interactive(), in: Capsule())
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     // Materialize, not matched geometry: morphing the
@@ -216,7 +222,7 @@ struct TimerControls: View {
         } else {
             button
                 .buttonStyle(.borderedProminent)
-                .tint(prominent ? PomodoroughTheme.signal : PomodoroughTheme.sky)
+                .tint(prominent ? phaseAccent : PomodoroughTheme.sky)
                 .foregroundStyle(Color.black)
                 .controlSize(compact ? .regular : .large)
         }
@@ -230,6 +236,9 @@ struct TimerControls: View {
         styled
             .frame(maxWidth: .infinity, minHeight: compact ? 44 : layout == .landscape ? 54 : 58)
             .buttonBorderShape(.capsule)
+            // Combine so the glass style's inner label is not exposed as
+            // a second small element under the same title.
+            .accessibilityElement(children: .combine)
             .accessibilityLabel(accessibilityTitle)
     }
 }
