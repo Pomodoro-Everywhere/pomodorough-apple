@@ -12,6 +12,7 @@ import re
 FIELDS = {"CORE_RELEASE_TAG": r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
           "CORE_COMMIT": r"[0-9a-f]{40}", "CORE_SHA256": r"[0-9a-f]{64}"}
 SHARDS = ("ios-simulator", "ios-device", "macos", "test-ios", "test-macos")
+BUILD_SHARDS = ("ios-simulator", "ios-device", "macos")
 
 
 def unique_object(pairs):
@@ -86,9 +87,9 @@ def export_provenance(core, products, output, shard):
     (output / "CORE_EXECUTION.json").write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
 
 
-def compare_provenance(root):
+def compare_provenance(root, shards=SHARDS):
     expected = None
-    for shard in SHARDS:
+    for shard in shards:
         directory = root / f"core-provenance-{shard}"
         identity = core_identity(directory)
         if any(path.is_symlink() for path in directory.rglob("*")):
@@ -112,13 +113,19 @@ def compare_provenance(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compare", type=Path)
+    parser.add_argument("--shards", default="",
+                        help="comma-separated subset of shards for --compare (default: all)")
     parser.add_argument("--core", type=Path, default=Path("Resources/SharedCore"))
     parser.add_argument("--product", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--shard", choices=SHARDS)
     args = parser.parse_args()
     if args.compare:
-        compare_provenance(args.compare)
+        shards = tuple(dict.fromkeys(args.shards.split(","))) if args.shards else SHARDS
+        unknown = set(shards) - set(SHARDS)
+        if not shards or unknown:
+            parser.error(f"--shards must be a subset of {','.join(SHARDS)}")
+        compare_provenance(args.compare, shards)
     elif args.output and args.shard:
         export_provenance(args.core, args.product, args.output, args.shard)
     elif args.product:

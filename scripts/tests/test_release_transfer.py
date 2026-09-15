@@ -12,10 +12,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-# test-ios-18-se runs non-gating (0.40.0 SE failures, see backlog): the job
-# must exist, but the publish gate must not need it.
+# test-ios-18-se runs non-gating (0.40.0 SE failures, see suite backlog ../backlog.md):
+# the job must exist, but the publish gate must not need it.
 GATES = {"preflight", "selftest", "test-ios", "test-macos",
          "build-ios-simulator", "build-ios-device", "build-macos", "package"}
+# Package starts as soon as the three builds plus the parallel SBOM finish;
+# tests run alongside package and gate only the publish.
+PACKAGE_NEEDS = {"build-ios-simulator", "build-ios-device", "build-macos", "package-sbom"}
 
 
 def job(workflow, name):
@@ -33,11 +36,15 @@ class ReleaseTransferTests(unittest.TestCase):
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)",
                                workflow, re.MULTILINE | re.DOTALL))
         package, publish = jobs["package"], jobs["package-and-release"]
-        for body, expected in ((package, GATES - {"preflight", "selftest", "package"}),
+        for body, expected in ((package, PACKAGE_NEEDS),
                                (publish, GATES)):
             needs = body.split("    needs:\n", 1)[1].split("    runs-on:", 1)[0]
             self.assertEqual(set(re.findall(r"^      - ([\w-]+)$", needs, re.MULTILINE)), expected)
             self.assertNotRegex(body, r"(?m)^\s+(?:if|continue-on-error):")
+        # Package must not wait for the long test shards; publish must.
+        self.assertNotIn("- test-ios\n", package.split("    runs-on:", 1)[0])
+        self.assertNotIn("- test-macos\n", package.split("    runs-on:", 1)[0])
+        self.assertIn("- package-sbom\n", package)
         self.assertIn("contents: read", package)
         self.assertNotIn("gh release", package)
         self.assertNotIn("attest-build-provenance", package)
@@ -56,6 +63,12 @@ class ReleaseTransferTests(unittest.TestCase):
             with self.subTest(gate=gate):
                 prefix, publish = workflow.split("\n  package-and-release:", 1)
                 mutated = prefix + "\n  package-and-release:" + publish.replace(f"      - {gate}\n", "", 1)
+                with self.assertRaises(AssertionError):
+                    self.assert_contract(mutated)
+        for gate in PACKAGE_NEEDS:
+            with self.subTest(package_gate=gate):
+                prefix, package = workflow.split("\n  package:\n", 1)
+                mutated = prefix + "\n  package:\n" + package.replace(f"      - {gate}\n", "", 1)
                 with self.assertRaises(AssertionError):
                     self.assert_contract(mutated)
         for mutation in ("    if: always()\n", "    continue-on-error: true\n"):

@@ -46,6 +46,35 @@ class CoreProvenanceTests(unittest.TestCase):
     def test_all_five_shards_agree(self):
         self.export_shards()
         self.assertEqual(provenance.compare_provenance(self.root), self.identity)
+        self.assertEqual(provenance.compare_provenance(self.root, provenance.BUILD_SHARDS), self.identity)
+
+    def test_build_subset_ignores_test_skew_but_rejects_build_skew(self):
+        self.export_shards()
+        directory = self.root / "core-provenance-test-ios"
+        original = (directory / "CORE_EXECUTION.json").read_bytes()
+        record = json.loads(original)
+        record["core"]["CORE_COMMIT"] = "d" * 40
+        (directory / "CORE_COMMIT").write_text("d" * 40)
+        (directory / "CORE_EXECUTION.json").write_text(json.dumps(record))
+        try:
+            with self.assertRaisesRegex(ValueError, "Core shard mismatch"):
+                provenance.compare_provenance(self.root)
+            self.assertEqual(provenance.compare_provenance(self.root, provenance.BUILD_SHARDS), self.identity)
+        finally:
+            (directory / "CORE_COMMIT").write_text(self.identity["CORE_COMMIT"])
+            (directory / "CORE_EXECUTION.json").write_bytes(original)
+        build_dir = self.root / "core-provenance-macos"
+        build_original = (build_dir / "CORE_EXECUTION.json").read_bytes()
+        build_record = json.loads(build_original)
+        build_record["core"]["CORE_COMMIT"] = "d" * 40
+        (build_dir / "CORE_COMMIT").write_text("d" * 40)
+        (build_dir / "CORE_EXECUTION.json").write_text(json.dumps(build_record))
+        try:
+            with self.assertRaisesRegex(ValueError, "Core shard mismatch"):
+                provenance.compare_provenance(self.root, provenance.BUILD_SHARDS)
+        finally:
+            (build_dir / "CORE_COMMIT").write_text(self.identity["CORE_COMMIT"])
+            (build_dir / "CORE_EXECUTION.json").write_bytes(build_original)
 
     def test_all_builds_agree_but_either_test_differs(self):
         self.export_shards()
@@ -153,12 +182,26 @@ class CoreProvenanceTests(unittest.TestCase):
     def test_workflow_gates_all_exports_before_packaging(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release.yml").read_text()
         package = workflow.split("  package:")[1].split("  package-and-release:")[0]
-        for shard in provenance.SHARDS:
-            job = shard if shard.startswith("test-") else "build-" + shard
-            self.assertIn(f"      - {job}\n", package)
+        publish = workflow.split("  package-and-release:")[1]
+        # Package fail-fasts on the three build shards while tests still run;
+        # the full five-shard skew gate blocks publish, not packaging.
+        for shard in provenance.BUILD_SHARDS:
+            self.assertIn(f"      - build-{shard}\n", package)
             self.assertIn(f"name: shared-core-provenance-{shard}\n", package)
-        self.assertLess(package.index("Compare all tested and built Core provenance"),
+        for shard in ("test-ios", "test-macos"):
+            self.assertNotIn(f"      - {shard}\n", package.split("    runs-on:", 1)[0])
+        self.assertIn("Compare built Core provenance", package)
+        self.assertIn('--shards ios-simulator,ios-device,macos', package)
+        self.assertLess(package.index("Compare built Core provenance"),
                         package.index("Package simulator and unsigned non-notarized apps"))
+        for shard in provenance.SHARDS:
+            self.assertIn(f"name: shared-core-provenance-{shard}\n", publish)
+        self.assertIn("Compare all tested and built Core provenance", publish)
+        self.assertIn("Compare sealed release with agreed Core", publish)
+        self.assertLess(publish.index("Compare all tested and built Core provenance"),
+                        publish.index("Attest artifact provenance"))
+        self.assertLess(publish.index("Verify and restore sealed release"),
+                        publish.index("Compare all tested and built Core provenance"))
 
 
 if __name__ == "__main__":

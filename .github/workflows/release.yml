@@ -44,6 +44,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/fetch_shared_core.sh
 
+      - name: Upload shared core bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shared-core-bundle
+          path: Resources/SharedCore/
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Check documentation links
         run: python3 scripts/check_docs.py
 
@@ -180,6 +188,7 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -v
 
   test-ios:
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -204,18 +213,46 @@ jobs:
             printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
           fi
 
-      - name: Resolve latest shared core release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/fetch_shared_core.sh
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       # Cache is performance-only. resolve_swift_packages.py byte-compare and
-      # the attestation-verified shared core fetch above still run fail-closed
-      # after restore, so a stale cache can only fail loudly, never silently
-      # build wrong bits.
+      # the preflight-attested shared core bundle install above still run
+      # fail-closed after restore, so a stale cache can only fail loudly,
+      # never silently build wrong bits. DerivedData keys are unified across
+      # the gating jobs so Debug/Release and iOS/macOS intermediates share
+      # hits instead of recompiling per shard.
       - name: Cache SwiftPM checkouts
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -231,9 +268,9 @@ jobs:
             ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
             ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
             ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
-          key: release-deriveddata-test-ios-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            release-deriveddata-test-ios-macos-26-xcode-26.6-rust-1.97.1-
+            release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-
 
       - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
@@ -273,6 +310,7 @@ jobs:
           retention-days: 7
 
   test-macos:
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -297,18 +335,46 @@ jobs:
             printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
           fi
 
-      - name: Resolve latest shared core release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/fetch_shared_core.sh
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       # Cache is performance-only. resolve_swift_packages.py byte-compare and
-      # the attestation-verified shared core fetch above still run fail-closed
-      # after restore, so a stale cache can only fail loudly, never silently
-      # build wrong bits.
+      # the preflight-attested shared core bundle install above still run
+      # fail-closed after restore, so a stale cache can only fail loudly,
+      # never silently build wrong bits. DerivedData keys are unified across
+      # the gating jobs so Debug/Release and iOS/macOS intermediates share
+      # hits instead of recompiling per shard.
       - name: Cache SwiftPM checkouts
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -324,9 +390,9 @@ jobs:
             ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
             ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
             ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
-          key: release-deriveddata-test-macos-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            release-deriveddata-test-macos-macos-26-xcode-26.6-rust-1.97.1-
+            release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-
 
       - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
@@ -371,6 +437,7 @@ jobs:
   # Runs the UI bundle on an iPhone SE (2nd generation) iOS 18 simulator in
   # dark appearance (doubling as the AP116 dark-mode evidence).
   test-ios-18-se:
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -383,10 +450,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve latest shared core release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/fetch_shared_core.sh
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -490,6 +583,20 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           build-for-testing
 
+      - name: Warm up SE simulator install and first launch
+        run: |
+          set -euo pipefail
+          app="$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Pomodorough.app"
+          udid="${{ steps.se-sim.outputs.udid }}"
+          # Fresh iOS 18 runtimes can refuse the first test-session
+          # install ("Unknown application display identifier",
+          # kAXErrorServerNotFound on the opening test). Pre-installing
+          # plus one launch/terminate makes test-time install a no-op.
+          xcrun simctl install "$udid" "$app"
+          xcrun simctl launch "$udid" me.egigoka.pomodorough || true
+          sleep 15
+          xcrun simctl terminate "$udid" me.egigoka.pomodorough || true
+
       - name: Test UI bundle on SE iOS 18
         run: >-
           xcodebuild
@@ -514,6 +621,7 @@ jobs:
           retention-days: 7
 
   build-ios-simulator:
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -538,18 +646,46 @@ jobs:
             printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
           fi
 
-      - name: Resolve latest shared core release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/fetch_shared_core.sh
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       # Cache is performance-only. resolve_swift_packages.py byte-compare and
-      # the attestation-verified shared core fetch above still run fail-closed
-      # after restore, so a stale cache can only fail loudly, never silently
-      # build wrong bits.
+      # the preflight-attested shared core bundle install above still run
+      # fail-closed after restore, so a stale cache can only fail loudly,
+      # never silently build wrong bits. DerivedData keys are unified across
+      # the gating jobs so Debug/Release and iOS/macOS intermediates share
+      # hits instead of recompiling per shard.
       - name: Cache SwiftPM checkouts
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -565,9 +701,9 @@ jobs:
             ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
             ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
             ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
-          key: release-deriveddata-build-ios-sim-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            release-deriveddata-build-ios-sim-macos-26-xcode-26.6-rust-1.97.1-
+            release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-
 
       - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
@@ -616,6 +752,7 @@ jobs:
           retention-days: 7
 
   build-ios-device:
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -640,18 +777,46 @@ jobs:
             printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
           fi
 
-      - name: Resolve latest shared core release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/fetch_shared_core.sh
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       # Cache is performance-only. resolve_swift_packages.py byte-compare and
-      # the attestation-verified shared core fetch above still run fail-closed
-      # after restore, so a stale cache can only fail loudly, never silently
-      # build wrong bits.
+      # the preflight-attested shared core bundle install above still run
+      # fail-closed after restore, so a stale cache can only fail loudly,
+      # never silently build wrong bits. DerivedData keys are unified across
+      # the gating jobs so Debug/Release and iOS/macOS intermediates share
+      # hits instead of recompiling per shard.
       - name: Cache SwiftPM checkouts
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -667,9 +832,9 @@ jobs:
             ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
             ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
             ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
-          key: release-deriveddata-build-ios-device-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            release-deriveddata-build-ios-device-macos-26-xcode-26.6-rust-1.97.1-
+            release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-
 
       - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
@@ -718,6 +883,7 @@ jobs:
           retention-days: 7
 
   build-macos:
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -742,18 +908,46 @@ jobs:
             printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >> "$GITHUB_ENV"
           fi
 
-      - name: Resolve latest shared core release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/fetch_shared_core.sh
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       # Cache is performance-only. resolve_swift_packages.py byte-compare and
-      # the attestation-verified shared core fetch above still run fail-closed
-      # after restore, so a stale cache can only fail loudly, never silently
-      # build wrong bits.
+      # the preflight-attested shared core bundle install above still run
+      # fail-closed after restore, so a stale cache can only fail loudly,
+      # never silently build wrong bits. DerivedData keys are unified across
+      # the gating jobs so Debug/Release and iOS/macOS intermediates share
+      # hits instead of recompiling per shard.
       - name: Cache SwiftPM checkouts
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -769,9 +963,9 @@ jobs:
             ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
             ${{ env.DERIVED_DATA_PATH }}/Build/Intermediates.noindex
             ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
-          key: release-deriveddata-build-macos-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-${{ hashFiles('Pomodorough.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            release-deriveddata-build-macos-macos-26-xcode-26.6-rust-1.97.1-
+            release-deriveddata-macos-26-xcode-26.6-rust-1.97.1-
 
       - name: Resolve Swift packages without trusting a broken sandbox
         run: >-
@@ -820,14 +1014,76 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # SBOM scans the source tree only, not the built apps, so it runs in
+  # parallel with the builds/tests instead of serializing package. Package
+  # downloads the SBOM artifact and only refreshes checksums.
+  package-sbom:
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download shared core bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-bundle
+          path: ${{ runner.temp }}/shared-core-bundle
+
+      - name: Install shared core bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/shared-core-bundle"
+          tag="$(cat "$bundle/CORE_RELEASE_TAG")"
+          commit="$(cat "$bundle/CORE_COMMIT")"
+          sha="$(cat "$bundle/CORE_SHA256")"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          python3 - "$bundle/pomodorough_core.wasm" "$sha" <<'PY'
+          import hashlib
+          import sys
+          wasm_path, expected = sys.argv[1], sys.argv[2]
+          with open(wasm_path, "rb") as handle:
+              raw = handle.read()
+          if not raw.startswith(b"\0asm\x01\0\0\0"):
+              raise SystemExit("shared core bundle is not a WebAssembly module")
+          if hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("shared core bundle SHA mismatch")
+          PY
+          rm -rf Resources/SharedCore
+          cp -R "$bundle" Resources/SharedCore
+
+      - name: Export SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ runner.temp }}/pomodorough-apple.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Upload SPDX SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-sbom
+          path: ${{ runner.temp }}/pomodorough-apple.spdx.json
+          if-no-files-found: error
+          retention-days: 1
+
   package:
     needs:
-      - test-ios
-      # test-ios-18-se deferred (0.40.0 SE failures, see backlog): runs non-gating.
-      - test-macos
       - build-ios-simulator
       - build-ios-device
       - build-macos
+      - package-sbom
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -881,20 +1137,17 @@ jobs:
           name: shared-core-provenance-macos
           path: ${{ runner.temp }}/core-provenance-macos
 
-      - name: Download tested Core provenance (iOS)
+      - name: Download SPDX SBOM
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: shared-core-provenance-test-ios
-          path: ${{ runner.temp }}/core-provenance-test-ios
+          name: release-sbom
+          path: ${{ runner.temp }}/release-sbom
 
-      - name: Download tested Core provenance (macOS)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: shared-core-provenance-test-macos
-          path: ${{ runner.temp }}/core-provenance-test-macos
-
-      - name: Compare all tested and built Core provenance
-        run: python3 scripts/verify_shared_core_provenance.py --compare "$RUNNER_TEMP"
+      # Tests run in parallel with package; the full five-shard skew gate
+      # runs in package-and-release before publishing. Package fail-fasts on
+      # build skew so a bad build never pays for packaging.
+      - name: Compare built Core provenance
+        run: python3 scripts/verify_shared_core_provenance.py --compare "$RUNNER_TEMP" --shards ios-simulator,ios-device,macos
 
       - name: Package simulator and unsigned non-notarized apps
         shell: bash
@@ -938,12 +1191,19 @@ jobs:
           fi
 
           mkdir -p "$RELEASE_DIR"
-          ditto -c -k --sequesterRsrc --keepParent "$ios_simulator_staged_app" "$ios_simulator_zip"
+          # The three archives are independent; compress in parallel and join.
+          ditto -c -k --sequesterRsrc --keepParent "$ios_simulator_staged_app" "$ios_simulator_zip" &
+          sim_pid=$!
           (
             cd "$ios_device_staging"
             ditto -c -k --sequesterRsrc --keepParent Payload "$ios_device_ipa"
-          )
-          ditto -c -k --sequesterRsrc --keepParent "$macos_staged_app" "$macos_zip"
+          ) &
+          device_pid=$!
+          ditto -c -k --sequesterRsrc --keepParent "$macos_staged_app" "$macos_zip" &
+          macos_pid=$!
+          wait "$sim_pid"
+          wait "$device_pid"
+          wait "$macos_pid"
 
           cd "$RELEASE_DIR"
           shasum -a 256 ./*.ipa ./*.zip > SHA256SUMS.txt
@@ -994,19 +1254,12 @@ jobs:
           fi
           xcrun simctl terminate "$device_id" "$bundle_id"
 
-      - name: Export SPDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: .
-          format: spdx-json
-          output-file: ${{ env.RELEASE_DIR }}/pomodorough-apple.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
-
       - name: Refresh checksums with SBOM
         shell: bash
         run: |
           set -euo pipefail
+          # SBOM was built in parallel in package-sbom; stage it here.
+          cp "$RUNNER_TEMP/release-sbom/pomodorough-apple.spdx.json" "$RELEASE_DIR/pomodorough-apple.spdx.json"
           cd "$RELEASE_DIR"
           shasum -a 256 ./*.ipa ./*.zip ./*.spdx.json > SHA256SUMS.txt
 
@@ -1038,7 +1291,7 @@ jobs:
       - preflight
       - selftest
       - test-ios
-      # test-ios-18-se deferred (0.40.0 SE failures, see backlog): runs non-gating.
+      # test-ios-18-se deferred (0.40.0 SE failures, see suite backlog ../backlog.md): runs non-gating.
       - test-macos
       - build-ios-simulator
       - build-ios-device
@@ -1079,6 +1332,52 @@ jobs:
           mv "$transfer/core-provenance-ios-simulator" "$RUNNER_TEMP/core-provenance-ios-simulator"
           cd "$RELEASE_DIR"
           shasum -a 256 -c SHA256SUMS.txt
+
+      - name: Download tested Core provenance (iOS)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-test-ios
+          path: ${{ runner.temp }}/verify-provenance/core-provenance-test-ios
+
+      - name: Download tested Core provenance (macOS)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-test-macos
+          path: ${{ runner.temp }}/verify-provenance/core-provenance-test-macos
+
+      - name: Download built Core provenance (iOS simulator)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-ios-simulator
+          path: ${{ runner.temp }}/verify-provenance/core-provenance-ios-simulator
+
+      - name: Download built Core provenance (iOS device)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-ios-device
+          path: ${{ runner.temp }}/verify-provenance/core-provenance-ios-device
+
+      - name: Download built Core provenance (macOS)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: shared-core-provenance-macos
+          path: ${{ runner.temp }}/verify-provenance/core-provenance-macos
+
+      # Publish gate: all five shards (3 builds + 2 tests) must agree, and
+      # the sealed bundle's provenance must match that agreement. Package
+      # already fail-fasted on build skew; this blocks publish on test skew.
+      - name: Compare all tested and built Core provenance
+        run: python3 scripts/verify_shared_core_provenance.py --compare "$RUNNER_TEMP/verify-provenance"
+
+      - name: Compare sealed release with agreed Core
+        shell: bash
+        run: |
+          set -euo pipefail
+          for shard in ios-simulator ios-device macos test-ios test-macos; do
+            cmp "$RUNNER_TEMP/verify-provenance/core-provenance-$shard/CORE_SHA256" "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_SHA256"
+            cmp "$RUNNER_TEMP/verify-provenance/core-provenance-$shard/CORE_RELEASE_TAG" "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_RELEASE_TAG"
+            cmp "$RUNNER_TEMP/verify-provenance/core-provenance-$shard/CORE_COMMIT" "$RUNNER_TEMP/core-provenance-ios-simulator/CORE_COMMIT"
+          done
 
       - name: Attest artifact provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2

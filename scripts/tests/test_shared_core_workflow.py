@@ -70,6 +70,22 @@ class SharedCoreWorkflowTests(unittest.TestCase):
             self.assertNotIn("releases/download/", workflow)
             self.assertNotIn("Check out pinned shared core", workflow)
             self.assertNotIn("Verify pinned source", workflow)
+        # Release fetches once in preflight and shares via artifact; the
+        # gating shards install the bundle fail-closed instead of refetching.
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(release.count("bash scripts/fetch_shared_core.sh"), 1)
+        self.assertIn("name: shared-core-bundle\n", release)
+        self.assertEqual(release.count("Download shared core bundle"), 7)
+        self.assertEqual(release.count("Install shared core bundle"), 7)
+        import re as _re
+        jobs = dict(_re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)",
+                                release, _re.MULTILINE | _re.DOTALL))
+        for job in ("test-ios", "test-macos", "test-ios-18-se",
+                    "build-ios-simulator", "build-ios-device", "build-macos",
+                    "package-sbom"):
+            body = jobs[job]
+            self.assertIn("Download shared core bundle", body)
+            self.assertNotIn("bash scripts/fetch_shared_core.sh", body)
 
     def test_fetch_script_resolves_verifies_and_records_provenance(self) -> None:
         script = FETCH_SCRIPT.read_text(encoding="utf-8")
@@ -111,7 +127,9 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         self.assertIn('test "$actual_sha" = "$expected_sha"', workflow)
         release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(release.count('--output "$RUNNER_TEMP/core-provenance"'), 5)
-        self.assertIn('verify_shared_core_provenance.py --compare "$RUNNER_TEMP"', release)
+        self.assertIn('verify_shared_core_provenance.py --compare "$RUNNER_TEMP/verify-provenance"', release)
+        self.assertIn('verify_shared_core_provenance.py --compare "$RUNNER_TEMP" --shards ios-simulator,ios-device,macos',
+                      release)
 
     def test_release_rejects_shard_skew_and_checks_packaged_apps(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -124,6 +142,18 @@ class SharedCoreWorkflowTests(unittest.TestCase):
         staged = workflow.split("- name: Verify shared core in staged release applications")[1].split("- name:")[0]
         self.assertEqual(staged.count("--product "), 3)
         self.assertIn("SWIFT_SUPPRESS_WARNINGS=NO", workflow)
+        # Bundle install is fail-closed: format gates plus wasm magic/sha.
+        self.assertIn("shared core bundle SHA mismatch", workflow)
+        self.assertIn("shared core bundle is not a WebAssembly module", workflow)
+        import re as _re
+        jobs = dict(_re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)",
+                                workflow, _re.MULTILINE | _re.DOTALL))
+        for job in ("test-ios", "test-macos", "test-ios-18-se",
+                    "build-ios-simulator", "build-ios-device", "build-macos",
+                    "package-sbom"):
+            with self.subTest(job=job):
+                self.assertIn("shared core bundle SHA mismatch", jobs[job])
+                self.assertIn("shared core bundle is not a WebAssembly module", jobs[job])
 
     def test_release_packages_ad_hoc_signed_simulator_app_and_smokes_exact_archive(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
