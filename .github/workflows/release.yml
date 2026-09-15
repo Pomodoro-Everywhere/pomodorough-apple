@@ -372,7 +372,7 @@ jobs:
   # dark appearance (doubling as the AP116 dark-mode evidence).
   test-ios-18-se:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughReleaseDerivedDataSE18
@@ -391,6 +391,37 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Download iOS 18 simulator runtime
+        run: |
+          set -euo pipefail
+          has_ios18="$(xcrun simctl list runtimes --json | python3 -c '
+          import json
+          import sys
+          runtimes = json.load(sys.stdin)["runtimes"]
+          print("yes" if any(
+              runtime["name"].startswith("iOS 18.")
+              and runtime.get("isAvailable", True)
+              for runtime in runtimes
+          ) else "")
+          ')"
+          if [[ -n "$has_ios18" ]]; then
+            echo "iOS 18 simulator runtime already installed"
+            exit 0
+          fi
+          # Hosted macos-26 runners ship only the latest runtime, so fetch
+          # the newest iOS 18 simulator runtime from Apple on demand (~9 GB).
+          # Unavailable build versions fail fast before any download, so walk
+          # down the 18.x line until the catalog serves one.
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          for build in 18.6 18.5 18.4 18.3 18.2 18.1 18.0; do
+            if sudo xcodebuild -downloadPlatform iOS -buildVersion "$build"; then
+              echo "Downloaded iOS simulator runtime $build"
+              exit 0
+            fi
+          done
+          echo "No iOS 18 simulator runtime available for download" >&2
+          exit 1
+
       - name: Provision iPhone SE iOS 18 simulator
         id: se-sim
         run: |
@@ -407,7 +438,7 @@ jobs:
           print(sorted(ios18, key=lambda runtime: runtime["version"])[-1]["identifier"] if ios18 else "")
           ')"
           if [[ -z "$runtime_id" ]]; then
-            echo "No installed iOS 18 simulator runtime on this runner; install one via Xcode -> Settings -> Platforms, then rerun." >&2
+            echo "No installed iOS 18 simulator runtime and the on-demand download did not provide one." >&2
             exit 1
           fi
           echo "Using simulator runtime $runtime_id"

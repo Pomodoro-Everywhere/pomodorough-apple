@@ -25,7 +25,7 @@ BASE = "https://api.github.com/repos/example/apple"
 SIGNED = "https://production.blob.core.windows.net/logs/job?signature=fake"
 SUCCESSOR_BOUNDARY = "\n  retain-completed-native-log:\n"
 # Reviewed additions: xcresult/Core exports before both native artifact uploads.
-WORKFLOW_PREFIX_SHA256 = "9aa84eb8209021d5b51b845fd9b66bebdb13b49d809ebb31822f16c2ec8801c4"
+WORKFLOW_PREFIX_SHA256 = "64332ea39b6e34b9825398c9372fd742baaad6719fb8e80710a3569ac0072e11"
 SUCCESSOR_SOURCE = '''    name: <name>
     if: <condition>
     needs: <needs>
