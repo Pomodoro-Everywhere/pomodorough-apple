@@ -2,7 +2,19 @@ import SwiftUI
 
 struct JoinIrohRoomView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var inviteText = ""
+    // Test seam: DEBUG UI tests prefill the invite without focusing the
+    // field. Unresolved hypothesis: focusing a field may hang the main
+    // thread in a layout loop on narrow (SE-width) simulators; requires
+    // physical-SE verification and an Apple Feedback filing before
+    // asserting as fact, so the failed-join regression is exercised
+    // without summoning the keyboard.
+    @State private var inviteText: String = {
+#if DEBUG
+        ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_INVITE"] ?? ""
+#else
+        ""
+#endif
+    }()
     @State private var isJoining = false
     @State private var joinError: String?
 

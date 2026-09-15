@@ -470,6 +470,12 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         app.launch()
         // Cold simulators can take well over ten seconds from install to
         // first frame; waiting longer here only delays genuine failures.
+        if app.buttons["Start focus"].waitForExistence(timeout: 30) { return }
+        // Fresh runtimes can refuse the very first install/launch
+        // ("Unknown application display identifier", SE/iOS 18 release
+        // runs); one bounded relaunch converges once install settles.
+        app.terminate()
+        app.launch()
         XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 30))
     }
 

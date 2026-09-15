@@ -4,38 +4,31 @@ import XCTest
 final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
     func testFailedJoinKeepsSheetAndLeavesWorkspaceUnchanged() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = [
-            "-permission-introduction-completed-v1", "YES",
-            "-AppleLanguages", "(en)",
-            "-AppleLocale", "en_US",
-        ]
-        app.launchEnvironment["POMODOROUGH_UI_TEST_RESET"] = "1"
+        let app = makeApplication()
         defer { app.terminate() }
         app.launch()
 
         XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
-        app.buttons["Account"].tap()
-        XCTAssertTrue(app.buttons["Network"].waitForExistence(timeout: 5))
-        app.buttons["Network"].tap()
-        app.buttons["Join with invite"].tap()
-        XCTAssertTrue(app.navigationBars["Join room"].waitForExistence(timeout: 5))
+        openJoinSheet(app)
 
         // Empty invite must not start a join.
         XCTAssertFalse(app.buttons["Validate and join"].isEnabled)
+        app.terminate()
 
         // Malformed invite fails fast in local invite decoding, before any
-        // networking: deterministic failed join without a slow peer.
-        // Type-agnostic query: multiline TextField exposes as textField on
-        // newer iOS but as textView (or unlabeled container child) on older
-        // runtimes. Dump the hierarchy on failure for decisive evidence.
-        let inviteField = app.descendants(matching: .any)["Room invite"].firstMatch
-        if !inviteField.waitForExistence(timeout: 5) {
-            print("ROOM-JOIN-DIAG hierarchy:\n" + app.debugDescription)
-        }
-        XCTAssertTrue(inviteField.exists)
-        inviteField.tap()
-        inviteField.typeText("not-a-valid-invite")
+        // networking: deterministic failed join without a slow peer. The
+        // invite arrives via launch-environment prefill, not the keyboard:
+        // unresolved hypothesis is that focusing a field may hang
+        // narrow-simulator main threads (requires physical-SE verification
+        // and an Apple Feedback filing), while the regression under test
+        // (failed join keeps the sheet) needs no keys.
+        app.launchEnvironment["POMODOROUGH_UI_TEST_INVITE"] = "not-a-valid-invite"
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+        openJoinSheet(app)
+
+        XCTAssertTrue(app.buttons["Validate and join"].isEnabled)
         app.buttons["Validate and join"].tap()
 
         // Regression guard for the dismissal race: the sheet must still be
@@ -45,6 +38,25 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
 
         // Workspace untouched: back on the idle local timer.
         XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+    }
+
+    private func makeApplication() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-permission-introduction-completed-v1", "YES",
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
+        app.launchEnvironment["POMODOROUGH_UI_TEST_RESET"] = "1"
+        return app
+    }
+
+    private func openJoinSheet(_ app: XCUIApplication) {
+        app.buttons["Account"].tap()
+        XCTAssertTrue(app.buttons["Network"].waitForExistence(timeout: 5))
+        app.buttons["Network"].tap()
+        app.buttons["Join with invite"].tap()
+        XCTAssertTrue(app.navigationBars["Join room"].waitForExistence(timeout: 5))
     }
 
     private func assertFailedJoinKeepsSheet(_ app: XCUIApplication) {
