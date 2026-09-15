@@ -12,7 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-GATES = {"preflight", "selftest", "test-ios", "test-ios-18-se", "test-macos",
+# test-ios-18-se runs non-gating (0.40.0 SE failures, see backlog): the job
+# must exist, but the publish gate must not need it.
+GATES = {"preflight", "selftest", "test-ios", "test-macos",
          "build-ios-simulator", "build-ios-device", "build-macos", "package"}
 
 

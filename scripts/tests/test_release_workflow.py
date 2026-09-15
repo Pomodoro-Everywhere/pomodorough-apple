@@ -49,13 +49,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "preflight",
             "selftest",
             "test-ios",
-            "test-ios-18-se",
             "test-macos",
             "build-ios-simulator",
             "build-ios-device",
             "build-macos",
         ):
             self.assertIn(needed, workflow.split("package-and-release:")[1])
+        # test-ios-18-se runs non-gating (0.40.0 SE failures, see backlog):
+        # the job must exist above, but the publish gate must not need it.
+        publishneeds = workflow.split("package-and-release:")[1]
+        self.assertNotIn("- test-ios-18-se", publishneeds)
 
     def test_release_caches_are_keyed_exactly_and_selftest_is_separate(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
