@@ -1967,6 +1967,15 @@ final class AppModel {
         if action == .synchronize { await sync(force: true) }
     }
 
+    /// S1 OOM relief (POMODOROUGH-37): drops cached WasmKit runtimes after
+    /// a memory warning. Next sync/identity operation lazily reloads them;
+    /// in-flight operations hold their own references and are unaffected.
+    func releaseMemoryPressure() {
+        taskIdentityCore?.releaseRuntimeForMemoryPressure()
+        taskIdentityCore = nil
+        accountSessionCoordinator.releaseMemoryPressure()
+    }
+
     func setSceneActive(_ active: Bool) {
         sceneIsActive = active
         guard snapshotLoadFailure == nil else { return }

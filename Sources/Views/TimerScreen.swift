@@ -2,10 +2,54 @@ import SwiftUI
 
 struct TimerScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
     @State private var syncStatusBottom: CGFloat = 0
 
     @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Regular x regular (iPad full-screen, unfolded Duo) stacks the
+    /// landscape card; compact width (phones, split-view, half-folded Duo)
+    /// or compact height (landscape phones) uses the measured side-column
+    /// card with scroll recovery.
+    static func usesStackedLandscape(
+        horizontal: UserInterfaceSizeClass?,
+        vertical: UserInterfaceSizeClass?
+    ) -> Bool {
+        horizontal == .regular && vertical == .regular
+    }
+
+    /// Floor for the phone-landscape card height: short landscape
+    /// screens (SE/12 mini, ~375pt) keep a usable dial instead of
+    /// collapsing to the raw geometry remainder.
+    static let landscapeMinimumHeight: CGFloat = 220
+
+    /// Width below which the side column takes a larger share: a fixed
+    /// third of SE/12-mini landscape (~667-740pt) squeezes the picker
+    /// and controls, so narrow cards give the column 42% and the dial
+    /// keeps the rest.
+    static let narrowLandscapeWidth: CGFloat = 700
+    static let narrowColumnFraction: CGFloat = 0.42
+
+    /// Bounded phone-landscape card height from available geometry.
+    /// GeometryReader dials need a bounded height; inside the vertical
+    /// ScrollView they collapse to zero without it.
+    static func landscapeCardHeight(for size: CGSize) -> CGFloat {
+        max(landscapeMinimumHeight, size.height - 100)
+    }
+
+    /// Proportional side-column share of the measured card width. Nil
+    /// falls back to content sizing so the height-bound dial keeps the
+    /// remainder on every phone size with no device constants.
+    static func landscapeColumnWidth(for totalWidth: CGFloat) -> CGFloat? {
+        guard totalWidth > 0 else { return nil }
+        return totalWidth < narrowLandscapeWidth
+            ? totalWidth * narrowColumnFraction
+            : totalWidth / 3
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -20,13 +64,16 @@ struct TimerScreen: View {
                 #else
                 if layout == .landscape {
                     #if os(iOS)
-                    if UIDevice.current.userInterfaceIdiom == .pad {
+                    if Self.usesStackedLandscape(
+                        horizontal: horizontalSizeClass,
+                        vertical: verticalSizeClass
+                    ) {
                         TimerScreenIPadLandscapeContent(model: model)
                     } else {
                         TimerScreenIOSLandscapeContent(
                             model: model,
                             layout: layout,
-                            landscapeHeight: max(220, geometry.size.height - 100),
+                            landscapeHeight: Self.landscapeCardHeight(for: geometry.size),
                             landscapeWidth: geometry.size.width
                         )
                     }

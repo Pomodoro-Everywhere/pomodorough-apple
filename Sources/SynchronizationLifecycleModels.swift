@@ -187,6 +187,17 @@ enum RemotePolling {
     }
 }
 
+/// S1 (POMODOROUGH-37 watchdog OOM): the 5s poller fired 57KB syncs even
+/// while backgrounded or while a sync was already in flight, stacking
+/// concurrent wasm reconciliations until the watchdog killed the app.
+/// Poll only when foregrounded and idle; foreground restart and revision
+/// hints still drive freshness.
+enum CentralizedPolling {
+    static func shouldSync(isSceneActive: Bool, isSyncing: Bool) -> Bool {
+        isSceneActive && !isSyncing
+    }
+}
+
 enum RevisionStreamResponse {
     static func isValid(statusCode: Int, contentType: String?) -> Bool {
         guard statusCode == 200, let contentType else { return false }

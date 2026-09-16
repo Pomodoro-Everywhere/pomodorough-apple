@@ -21,6 +21,7 @@ struct TimerControls: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Namespace private var glassNamespace
 
@@ -51,8 +52,36 @@ struct TimerControls: View {
 #if os(macOS)
         return true
 #else
-        return horizontalSizeClass == .regular
+        return Self.shouldUseSingleRow(
+            horizontal: horizontalSizeClass,
+            vertical: verticalSizeClass
+        )
 #endif
+    }
+
+    /// Size-class gate for the single-row control layout. Regular width
+    /// attempts one row (ViewThatFits still falls back to stacked rows
+    /// when large text overflows); compact width stacks because split-view,
+    /// half-folded Duo, and portrait phones lack the horizontal room. A
+    /// hinge spanning the control row forces stacked rows so buttons never
+    /// straddle the gap on unfolded Duo; unfolded Duo without a spanning
+    /// hinge keeps the single row. Vertical compact (landscape phones)
+    /// keeps the single row to save scarce vertical space.
+    static func shouldUseSingleRow(
+        horizontal: UserInterfaceSizeClass?,
+        vertical: UserInterfaceSizeClass?,
+        spansHinge: Bool = false
+    ) -> Bool {
+        guard !spansHinge else { return false }
+        guard horizontal == .regular else { return false }
+        switch vertical {
+        case .regular, .compact:
+            return true
+        case nil:
+            return true
+        @unknown default:
+            return true
+        }
     }
 
     @ViewBuilder

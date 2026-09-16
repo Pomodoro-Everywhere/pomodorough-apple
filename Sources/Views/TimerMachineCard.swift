@@ -22,6 +22,19 @@ struct TimerMachineCard: View {
         layout == .landscape ? .infinity : nil
     }
 
+    /// Share of the macOS landscape card width reserved for the dial; the
+    /// picker/controls column takes the remainder. Proportional so narrow
+    /// windows shrink both instead of collapsing the dial to zero.
+    static let macDialWidthFraction: CGFloat = 0.6
+
+    /// macOS landscape dial diameter from measured geometry: a proportion
+    /// of the card width, capped by the card height so the dial never
+    /// overflows vertically. No fixed-point deduction.
+    static func macDialDiameter(for size: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0 else { return 0 }
+        return max(0, min(size.width * macDialWidthFraction, size.height))
+    }
+
     var body: some View {
         TimerMachineCardContent(
             model: model,
@@ -109,7 +122,7 @@ private struct TimerMachineMacOSCard: View {
         VStack(spacing: layout == .landscape ? 8 : 18) {
             if layout == .landscape {
                 GeometryReader { geometry in
-                    let diameter = max(0, min(geometry.size.width - 288, geometry.size.height))
+                    let diameter = TimerMachineCard.macDialDiameter(for: geometry.size)
                     HStack(spacing: 28) {
                         TimerMachineDialSection(model: model, layout: .portrait, usesCompactDial: usesCompactDial)
                             .frame(width: diameter)
@@ -117,7 +130,7 @@ private struct TimerMachineMacOSCard: View {
                             TimerTaskPicker(model: model, layout: layout)
                             TimerControls(model: model, layout: layout)
                         }
-                        .frame(width: 260)
+                        .frame(maxWidth: .infinity)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -137,20 +150,23 @@ private struct TimerMachineIOSLandscapeCard: View {
     var usesCompactDial = false
     var landscapeHeight: CGFloat? = nil
     var landscapeWidth: CGFloat? = nil
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
 
-    /// Size class cannot distinguish iPad from Pro Max landscape.
-    private var isPad: Bool {
-#if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .pad
-#else
-        false
-#endif
+    #if os(iOS)
+    private var stacksLandscape: Bool {
+        TimerScreen.usesStackedLandscape(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
     }
+    #else
+    private var stacksLandscape: Bool { false }
+    #endif
 
     var body: some View {
         // Phone landscape: dial on the left, picker and controls stacked
-        // in a side column on the right. iPad stacks instead (see isPad).
-        if isPad {
+        // in a side column on the right. Regular x regular stacks instead.
+        if stacksLandscape {
             VStack {
                 TimerMachineDialSection(model: model, layout: .landscape)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -167,11 +183,12 @@ private struct TimerMachineIOSLandscapeCard: View {
                     TimerTaskPicker(model: model, layout: layout)
                     TimerControls(model: model, layout: layout)
                 }
-                // Share of measured card width; nil falls back to content
-                // sizing. No fixed width, so SE through Pro Max each get a
-                // proportional column while the height-bound dial keeps
-                // the rest.
-                .frame(width: landscapeWidth.map { $0 / 3 })
+                // Proportional share of the measured card width; nil falls
+                // back to content sizing. Narrow landscape (SE/12 mini)
+                // takes a larger share so the picker and controls never
+                // squeeze into a fixed third, while the height-bound dial
+                // keeps the remainder.
+                .frame(width: landscapeWidth.flatMap(TimerScreen.landscapeColumnWidth))
             }
             .frame(height: landscapeHeight)
             .padding(14)

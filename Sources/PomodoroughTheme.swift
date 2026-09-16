@@ -7,21 +7,26 @@ import AppKit
 #endif
 
 enum PomodoroughTheme {
-    static let platform = Color(red: 20 / 255, green: 44 / 255, blue: 92 / 255)
-    static let platformDeep = Color(red: 12 / 255, green: 27 / 255, blue: 57 / 255)
-    // sRGB components double as the AP116 contrast-audit source, so the
+    // sRGB components double as the contrast-audit source, so the
     // shipped Colors below cannot drift from the pinned values.
+    static let platformSRGB = (red: 20.0 / 255, green: 44.0 / 255, blue: 92.0 / 255)
+    static let platformDeepSRGB = (red: 12.0 / 255, green: 27.0 / 255, blue: 57.0 / 255)
+    static let porcelainSRGB = (red: 247.0 / 255, green: 248.0 / 255, blue: 242.0 / 255)
+    static let steelSRGB = (red: 143.0 / 255, green: 168.0 / 255, blue: 184.0 / 255)
+    static let dangerSRGB = (red: 195.0 / 255, green: 61.0 / 255, blue: 56.0 / 255)
+    static let platform = Color(red: platformSRGB.red, green: platformSRGB.green, blue: platformSRGB.blue)
+    static let platformDeep = Color(red: platformDeepSRGB.red, green: platformDeepSRGB.green, blue: platformDeepSRGB.blue)
     static let signalSRGB = (red: 255.0 / 255, green: 96.0 / 255, blue: 79.0 / 255)
     static let mintSRGB = (red: 168.0 / 255, green: 217.0 / 255, blue: 203.0 / 255)
     static let ticketSRGB = (red: 245.0 / 255, green: 208.0 / 255, blue: 91.0 / 255)
     static let signal = Color(red: signalSRGB.red, green: signalSRGB.green, blue: signalSRGB.blue)
     static let ticket = Color(red: ticketSRGB.red, green: ticketSRGB.green, blue: ticketSRGB.blue)
     static let sky = Color(red: 220 / 255, green: 234 / 255, blue: 241 / 255)
-    static let porcelain = Color(red: 247 / 255, green: 248 / 255, blue: 242 / 255)
+    static let porcelain = Color(red: porcelainSRGB.red, green: porcelainSRGB.green, blue: porcelainSRGB.blue)
     static let track = Color(red: 17 / 255, green: 25 / 255, blue: 35 / 255)
-    static let steel = Color(red: 143 / 255, green: 168 / 255, blue: 184 / 255)
+    static let steel = Color(red: steelSRGB.red, green: steelSRGB.green, blue: steelSRGB.blue)
     static let mint = Color(red: mintSRGB.red, green: mintSRGB.green, blue: mintSRGB.blue)
-    static let danger = Color(red: 195 / 255, green: 61 / 255, blue: 56 / 255)
+    static let danger = Color(red: dangerSRGB.red, green: dangerSRGB.green, blue: dangerSRGB.blue)
     static let night = Color(red: 13 / 255, green: 23 / 255, blue: 34 / 255)
     static let nightSurface = Color(red: 23 / 255, green: 36 / 255, blue: 48 / 255)
 

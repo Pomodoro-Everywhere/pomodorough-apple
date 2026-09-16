@@ -24,11 +24,22 @@ struct TimerTaskPicker: View {
         .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
     }
 
+    /// Full Dynamic Type range: the picker wraps to two lines at
+    /// accessibility sizes instead of shrinking to an unreadable scale.
+    static func pickerLineLimit(for dynamicTypeSize: DynamicTypeSize) -> Int? {
+        dynamicTypeSize.isAccessibilitySize ? nil : 1
+    }
+
+    /// No sub-0.75 shrink: accessibility sizes wrap at full scale,
+    /// standard sizes tighten slightly before ViewThatFits stacks.
+    static func pickerScaleFactor(for dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 1.0 : 0.75
+    }
+
     @ViewBuilder
     private var pickerContent: some View {
             Label("FOCUS TASK", systemImage: "checklist")
                 .font(.caption.monospaced().bold())
-                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 .foregroundStyle(PomodoroughTheme.sky)
                 .labelStyle(.titleAndIcon)
                 .accessibilityHidden(true)
@@ -41,21 +52,16 @@ struct TimerTaskPicker: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .tint(PomodoroughTheme.ticket)
-            // The menu label is rendered by the system and ignores
-            // lineLimit, so cap its growth like the caption: otherwise
-            // the value wraps into a clipped second line.
-            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-            .lineLimit(1)
-            .minimumScaleFactor(wrapsTaskText ? 0.5 : 0.75)
+            // The menu label is system-rendered: at accessibility sizes it
+            // wraps to a second line at full scale inside the scrolling
+            // parent instead of clipping; standard sizes stay one line.
+            .lineLimit(Self.pickerLineLimit(for: dynamicTypeSize))
+            .minimumScaleFactor(Self.pickerScaleFactor(for: dynamicTypeSize))
             .allowsTightening(true)
-            .fixedSize(horizontal: false, vertical: false)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityHint("Applies to the current running focus timer and the next timer.")
     }
-
-    /// At accessibility sizes the menu value stays on one line and shrinks
-    /// instead of wrapping into a clipped second line.
-    private var wrapsTaskText: Bool { dynamicTypeSize.isAccessibilitySize }
 }
 
 #if DEBUG

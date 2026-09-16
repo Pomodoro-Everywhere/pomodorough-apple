@@ -15,22 +15,8 @@ struct HistoryScreen: View {
     var body: some View {
         Group {
             if model.history.isEmpty {
-                ScrollView {
-                    ContentUnavailableView(
-                        "No arrivals yet",
-                        systemImage: "clock.badge.questionmark",
-                        description: Text("Your first run appears here.")
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 80)
-                    .accessibilityRepresentation {
-                        Text("No arrivals yet")
-                            .accessibilityValue("Your first run appears here.")
-                    }
-                }
-                .refreshable { await model.refreshForPull() }
-                .accessibilityAction(named: Text("Refresh arrivals")) {
-                    Task { await model.refreshForPull() }
+                GeometryReader { proxy in
+                    emptyHistory(topPadding: Self.emptyTopPadding(forHeight: proxy.size.height))
                 }
                 .accessibilityIdentifier("history.empty-scroll")
             } else {
@@ -56,6 +42,35 @@ struct HistoryScreen: View {
             }
         }
         .primaryRouteAccountToolbar(model: model)
+    }
+
+    /// Empty-state top offset follows the visible height — 12% of the
+    /// container, floored for short landscape and capped for tall iPad —
+    /// instead of a fixed 80pt that crowds short screens and strands
+    /// tall ones.
+    static func emptyTopPadding(forHeight height: CGFloat) -> CGFloat {
+        guard height > 0 else { return 24 }
+        return min(max(height * 0.12, 24), 120)
+    }
+
+    private func emptyHistory(topPadding: CGFloat) -> some View {
+        ScrollView {
+            ContentUnavailableView(
+                "No arrivals yet",
+                systemImage: "clock.badge.questionmark",
+                description: Text("Your first run appears here.")
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, topPadding)
+            .accessibilityRepresentation {
+                Text("No arrivals yet")
+                    .accessibilityValue("Your first run appears here.")
+            }
+        }
+        .refreshable { await model.refreshForPull() }
+        .accessibilityAction(named: Text("Refresh arrivals")) {
+            Task { await model.refreshForPull() }
+        }
     }
 
     private var completedFocusBreakdownControl: some View {

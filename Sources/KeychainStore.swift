@@ -1,5 +1,26 @@
 import Foundation
+import OSLog
 import Security
+
+/// Benign Keychain unavailability: -34018 (errSecMissingEntitlement) means
+/// the running target has no Keychain entitlement (simulator without the
+/// capability, test host, or mis-provisioned dev build). Loads fall back to
+/// absent (nil/[]) so the app continues offline; saves still throw so
+/// callers know persistence failed, but reporters must skip Sentry for
+/// this status (see KeychainError.isBenignUnavailable). Prod S3
+/// (POMODOROUGH-19, 1757 events): never block or spam on -34018.
+enum KeychainAvailability {
+    static let missingEntitlementStatus: OSStatus = -34018
+
+    static func isUnavailable(_ status: OSStatus) -> Bool {
+        status == missingEntitlementStatus
+    }
+}
+
+private let keychainFallbackLogger = Logger(
+    subsystem: "me.egigoka.pomodorough",
+    category: "Keychain"
+)
 
 protocol TokenStoring: Sendable {
     // size-exception: protocol requirement is one declaration; the audit span includes a separate conformer's body.
@@ -32,6 +53,10 @@ struct KeychainLogoutRevocationStore: LogoutRevocationStoring {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         let result = security.copyMatching(query)
         if result.status == errSecItemNotFound { return [] }
+        if KeychainAvailability.isUnavailable(result.status) {
+            keychainFallbackLogger.notice("logout revocation load fell back to empty (keychain unavailable)")
+            return []
+        }
         guard result.status == errSecSuccess, let data = result.data else {
             throw error(operation: "load", status: result.status)
         }
@@ -177,6 +202,10 @@ struct KeychainStore: TokenStoring {
         let result = security.copyMatching(query)
         let status = result.status
         if status == errSecItemNotFound { return nil }
+        if KeychainAvailability.isUnavailable(status) {
+            keychainFallbackLogger.notice("token load fell back to nil (keychain unavailable)")
+            return nil
+        }
         guard status == errSecSuccess, let data = result.data else {
             throw error(operation: "load", status: status)
         }
@@ -239,6 +268,10 @@ struct IrohEndpointKeychainStore: IrohEndpointKeyStoring {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         let result = security.copyMatching(query)
         if result.status == errSecItemNotFound { return nil }
+        if KeychainAvailability.isUnavailable(result.status) {
+            keychainFallbackLogger.notice("endpoint key load fell back to nil (keychain unavailable)")
+            return nil
+        }
         guard result.status == errSecSuccess, let data = result.data, data.count == 32 else {
             throw error(operation: "load", status: result.status)
         }
@@ -293,6 +326,10 @@ struct IrohRoomSecretKeychainStore: IrohRoomSecretStoring {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         let result = security.copyMatching(query)
         if result.status == errSecItemNotFound { return nil }
+        if KeychainAvailability.isUnavailable(result.status) {
+            keychainFallbackLogger.notice("room secret load fell back to nil (keychain unavailable)")
+            return nil
+        }
         guard result.status == errSecSuccess, let data = result.data, data.count == 32 else {
             throw error(operation: "load", status: result.status)
         }
@@ -332,6 +369,10 @@ struct IrohRoomSecretKeychainStore: IrohRoomSecretStoring {
         ]
         let result = security.copyAccounts(query)
         if result.status == errSecItemNotFound { return [] }
+        if KeychainAvailability.isUnavailable(result.status) {
+            keychainFallbackLogger.notice("room secret enumerate fell back to empty (keychain unavailable)")
+            return []
+        }
         guard result.status == errSecSuccess else {
             throw error(operation: "enumerate", status: result.status)
         }
@@ -371,6 +412,12 @@ struct KeychainError: LocalizedError, Equatable {
     let operation: String
     let status: OSStatus
     let message: String
+
+    /// True for -34018 missing-entitlement: benign, must not reach Sentry.
+    /// Callers keep the diagnostic but skip capture for this status.
+    var isBenignUnavailable: Bool {
+        KeychainAvailability.isUnavailable(status)
+    }
 
     var errorDescription: String? {
         return String(localized: "Keychain \(operation) failed (OSStatus \(status)): \(message)")

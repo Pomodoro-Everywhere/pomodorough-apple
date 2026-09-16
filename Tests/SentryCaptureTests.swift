@@ -27,6 +27,90 @@ struct SentryCaptureTests {
     }
 
     @Test
+    func watchAppNotInstalledDropsWithoutBurningOnceBudget() {
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let benign = NSError(
+            domain: SentryCapture.watchAppNotInstalledDomain,
+            code: SentryCapture.watchAppNotInstalledCode,
+            userInfo: [NSLocalizedDescriptionKey: "Watch app is not installed"]
+        )
+        let real = URLError(.notConnectedToInternet)
+        SentryCapture.capture(benign)
+        SentryCapture.captureOnce(key: "sentry-7006-once", error: benign)
+        SentryCapture.captureRecurring(key: "sentry-7006-recurring", limit: 1, error: benign)
+        #expect(recorded.value.isEmpty)
+        SentryCapture.captureOnce(key: "sentry-7006-once", error: real)
+        SentryCapture.captureRecurring(key: "sentry-7006-recurring", limit: 1, error: real)
+        SentryCapture.capture(real)
+        #expect(recorded.value.count == 3)
+    }
+
+    @Test
+    func otherWatchErrorsStillReport() {
+        #expect(SentryCapture.shouldDrop(domain: "WCErrorDomain", code: 7006) == true)
+        #expect(SentryCapture.shouldDrop(domain: "WCErrorDomain", code: 7003) == false)
+        #expect(SentryCapture.shouldDrop(domain: "OtherDomain", code: 7006) == false)
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let other = NSError(domain: "WCErrorDomain", code: 7003, userInfo: [:])
+        SentryCapture.capture(other)
+        SentryCapture.capture(URLError(.timedOut))
+        #expect(recorded.value.count == 2)
+    }
+
+    @Test
+    func counterpartNotReachableDropsWithoutBurningOnceBudget() {
+        #expect(SentryCapture.shouldDrop(domain: "WCErrorDomain", code: 7007) == true)
+        #expect(SentryCapture.shouldDrop(domain: "WCErrorDomain", code: 7006) == true)
+        #expect(SentryCapture.shouldDrop(domain: "WCErrorDomain", code: 7003) == false)
+        #expect(SentryCapture.shouldDrop(domain: "OtherDomain", code: 7007) == false)
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        defer { SentryCapture.resetForTesting() }
+        let benign = NSError(
+            domain: SentryCapture.watchAppNotInstalledDomain,
+            code: SentryCapture.counterpartNotReachableCode,
+            userInfo: [NSLocalizedDescriptionKey: "WatchConnectivity session on paired device is not reachable."]
+        )
+        let real = URLError(.notConnectedToInternet)
+        SentryCapture.capture(benign)
+        SentryCapture.captureOnce(key: "sentry-7007-once", error: benign)
+        SentryCapture.captureRecurring(key: "sentry-7007-recurring", limit: 1, error: benign)
+        #expect(recorded.value.isEmpty)
+        SentryCapture.captureOnce(key: "sentry-7007-once", error: real)
+        SentryCapture.captureRecurring(key: "sentry-7007-recurring", limit: 1, error: real)
+        SentryCapture.capture(real)
+        #expect(recorded.value.count == 3)
+        WatchSyncService.reportSendFailed(benign)
+        #expect(recorded.value.count == 3)
+        WatchSyncService.reportSendFailed(URLError(.timedOut))
+        #expect(recorded.value.count == 4)
+    }
+
+    @Test
+    func environmentGateSuppressesSimulatorOrTestOnly() {
+        #expect(SentryCapture.shouldSuppressForEnvironment(isSimulator: false, isTestProcess: false) == false)
+        #expect(SentryCapture.shouldSuppressForEnvironment(isSimulator: true, isTestProcess: false) == true)
+        #expect(SentryCapture.shouldSuppressForEnvironment(isSimulator: false, isTestProcess: true) == true)
+        #expect(SentryCapture.shouldSuppressForEnvironment(isSimulator: true, isTestProcess: true) == true)
+    }
+
+    @Test
     func resetClearsOnceKeysForTestIsolation() {
         let recorded = LockedTestValue<[String]>([])
         SentryCapture.setTestBackend { error in

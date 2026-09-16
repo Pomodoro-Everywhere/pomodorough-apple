@@ -329,6 +329,7 @@ actor SessionRevocationController {
         Self.logger.error(
             "Logout revocation persist failed: \(operation, privacy: .public)"
         )
+        guard (error as? KeychainError)?.isBenignUnavailable != true else { return }
         SentryCapture.captureOnce(key: "logout-revocation-persist", error: error)
     }
 
@@ -400,6 +401,7 @@ actor SessionRevocationController {
             Self.logger.error(
                 "Pending logout credentials remain unreadable: \(diagnostic.message, privacy: .public)"
             )
+            guard (error as? KeychainError)?.isBenignUnavailable != true else { return diagnostic }
             SentryCapture.captureOnce(key: "logout-revocation-storage-read", error: error)
         }
         return diagnostic

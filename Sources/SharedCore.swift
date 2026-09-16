@@ -48,15 +48,33 @@ final class SharedCore: @unchecked Sendable {
     }
 
     static func bundledModuleURL(in bundle: Bundle = .main) throws -> URL {
-        let url = bundle.url(
+        if let url = moduleURL(in: bundle) { return url }
+        // S5 (POMODOROUGH-C, 1162 dev events): unit-test and preview hosts
+        // run with Bundle.main pointing at the runner, not the app, while
+        // the app bundle on disk still carries the wasm. Search the other
+        // loaded bundles before failing so dev/test noise does not mask a
+        // real prod packaging regression.
+        for candidate in Bundle.allBundles where candidate != bundle {
+            if let url = moduleURL(in: candidate) { return url }
+        }
+        throw SharedCoreError.resourceMissing
+    }
+
+    private static func moduleURL(in bundle: Bundle) -> URL? {
+        bundle.url(
             forResource: "pomodorough_core",
             withExtension: "wasm",
             subdirectory: "SharedCore"
         ) ?? bundle.url(forResource: "pomodorough_core", withExtension: "wasm")
-        guard let url else {
-            throw SharedCoreError.resourceMissing
-        }
-        return url
+    }
+
+    /// S1 OOM relief: drops the cached WasmKit Store/Memory so the next
+    /// dispatch lazily reloads the 1.2MB module. Call on memory warning;
+    /// in-flight dispatches hold their own Runtime value and are unaffected.
+    func releaseRuntimeForMemoryPressure() {
+        lock.lock()
+        defer { lock.unlock() }
+        runtime = nil
     }
 
     func dispatch<Output: Decodable & Sendable>(

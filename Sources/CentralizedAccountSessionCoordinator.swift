@@ -10,6 +10,12 @@ final class CentralizedAccountSessionCoordinator {
 
     typealias Operation = AccountLifecycleController.Operation
 
+    /// S1 OOM relief: drops the cached WasmKit runtime after a memory
+    /// warning. Next sync lazily reloads it; in-flight syncs are unaffected.
+    func releaseMemoryPressure() {
+        synchronization.releaseCachedCoreForMemoryPressure()
+    }
+
     private let lifecycle: AccountLifecycleController
     private let synchronization: AccountSynchronization
     private let persistence: AppStatePersistenceCoordinator

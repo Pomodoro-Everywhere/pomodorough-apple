@@ -1,5 +1,8 @@
 import SwiftUI
 import OSLog
+#if os(iOS)
+import UIKit
+#endif
 
 @main
 struct PomodoroughApp: App {
@@ -51,6 +54,17 @@ struct PomodoroughApp: App {
                         Task { await model.refreshAfterForeground() }
                     }
                 }
+#if os(iOS)
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: UIApplication.didReceiveMemoryWarningNotification
+                    )
+                ) { _ in
+                    // S1 OOM relief: drop cached WasmKit runtimes under
+                    // pressure; next sync lazily reloads them.
+                    model.releaseMemoryPressure()
+                }
+#endif
         }
 #if os(macOS)
         .defaultSize(width: 920, height: 760)

@@ -50,6 +50,14 @@ final class AccountSynchronization {
         self.sharedCoreProvider = sharedCoreProvider
     }
 
+    /// S1 OOM relief: releases the cached WasmKit runtime (Store/Memory)
+    /// after a memory warning. Next sync lazily reloads it. Safe to call
+    /// mid-sync: in-flight reconciliations hold their own reference.
+    func releaseCachedCoreForMemoryPressure() {
+        sharedCore?.releaseRuntimeForMemoryPressure()
+        sharedCore = nil
+    }
+
     func makeSyncPlan(state: PersistedTimerState) -> SyncPlan {
         let batch = SyncBatch(
             commands: uploadableCommands(in: state, limit: 256),

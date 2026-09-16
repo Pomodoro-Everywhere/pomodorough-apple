@@ -10,10 +10,12 @@ struct TaskSummaryRow: View {
     let delete: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            summaryContent
-                .frame(maxWidth: .infinity, alignment: .leading)
-            deleteButton
+        Group {
+            if usesStackedLayout {
+                stackedRow
+            } else {
+                columnRow
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -21,30 +23,46 @@ struct TaskSummaryRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    @ViewBuilder
-    private var summaryContent: some View {
-        if usesStackedLayout {
+    private var stackedRow: some View {
+        HStack(spacing: TaskBoardColumns.spacing) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(summary.task.title)
                     .font(.body.weight(.semibold))
                 Text("\(summary.finishedPomodoros) finished pomodoros")
                 Text(TaskTimeText.spoken(summary.timeSpentMs))
             }
-        } else {
-            HStack(spacing: 10) {
-                Text(summary.task.title)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 10) {
-                    Text("\(summary.finishedPomodoros)")
-                        .frame(width: 68, alignment: .center)
-                    Text(TaskTimeText.compact(summary.timeSpentMs))
-                        .frame(width: 70, alignment: .center)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(summaryAccessibilityLabel)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            deleteButton
+        }
+    }
+
+    private var columnRow: some View {
+        HStack(spacing: TaskBoardColumns.spacing) {
+            Text(summary.task.title)
+                .font(.body.weight(.semibold))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: TaskBoardColumns.spacing) {
+                Text("\(summary.finishedPomodoros)")
+                    .containerRelativeFrame(
+                        .horizontal,
+                        count: TaskBoardColumns.totalSpans,
+                        span: TaskBoardColumns.finishedSpan,
+                        spacing: TaskBoardColumns.spacing,
+                        alignment: .center
+                    )
+                Text(TaskTimeText.compact(summary.timeSpentMs))
+                    .containerRelativeFrame(
+                        .horizontal,
+                        count: TaskBoardColumns.totalSpans,
+                        span: TaskBoardColumns.timeSpan,
+                        spacing: TaskBoardColumns.spacing,
+                        alignment: .center
+                    )
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(summaryAccessibilityLabel)
+            deleteButton
         }
     }
 
@@ -62,7 +80,7 @@ struct TaskSummaryRow: View {
 
     @ViewBuilder
     private var deleteButton: some View {
-        if dynamicTypeSize.isAccessibilitySize {
+        if usesStackedLayout {
             Button("Delete \(summary.task.title)", systemImage: "trash", role: .destructive, action: delete)
                 .foregroundStyle(PomodoroughTheme.danger)
                 .labelStyle(.iconOnly)
@@ -71,7 +89,14 @@ struct TaskSummaryRow: View {
             Button("Delete \(summary.task.title)", systemImage: "trash", role: .destructive, action: delete)
                 .labelStyle(.iconOnly)
                 .foregroundStyle(PomodoroughTheme.danger)
-                .frame(width: 52, height: 44)
+                .containerRelativeFrame(
+                    .horizontal,
+                    count: TaskBoardColumns.totalSpans,
+                    span: TaskBoardColumns.actionSpan,
+                    spacing: TaskBoardColumns.spacing,
+                    alignment: .center
+                )
+                .frame(minWidth: 44, minHeight: 44)
         }
     }
 }

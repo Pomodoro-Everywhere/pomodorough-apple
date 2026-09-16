@@ -533,6 +533,7 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
     private let updateStatus: OSStatus
     private let addStatus: OSStatus
     private var accountNames: [String]
+    private let copyAccountsStatus: OSStatus?
     private let deleteStatus: OSStatus
     private let deleteStatusesByAccount: [String: OSStatus]
     private let removesDeletedAccounts: Bool
@@ -547,6 +548,7 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
         updateStatus: OSStatus = errSecSuccess,
         addStatus: OSStatus = errSecSuccess,
         accountNames: [String] = [],
+        copyAccountsStatus: OSStatus? = nil,
         deleteStatus: OSStatus = errSecSuccess,
         deleteStatusesByAccount: [String: OSStatus] = [:],
         removesDeletedAccounts: Bool = true
@@ -556,6 +558,7 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
         self.updateStatus = updateStatus
         self.addStatus = addStatus
         self.accountNames = accountNames
+        self.copyAccountsStatus = copyAccountsStatus
         self.deleteStatus = deleteStatus
         self.deleteStatusesByAccount = deleteStatusesByAccount
         self.removesDeletedAccounts = removesDeletedAccounts
@@ -574,6 +577,7 @@ final class RecordingKeychainSecurity: KeychainSecurityOperating, @unchecked Sen
     func copyAccounts(_ query: [String: Any]) -> (status: OSStatus, accounts: [String]) {
         lock.withLock {
             storedCopyQueries.append(KeychainQuerySnapshot(query))
+            if let override = copyAccountsStatus { return (override, []) }
             return accountNames.isEmpty ? (errSecItemNotFound, []) : (errSecSuccess, accountNames)
         }
     }

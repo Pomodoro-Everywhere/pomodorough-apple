@@ -647,6 +647,16 @@ final class RoomReplicationController {
                 return
             }
             guard !Task.isCancelled, ownsCurrent(owner) else { return }
+            let state = dependencies.centralizedState()
+            guard CentralizedPolling.shouldSync(
+                isSceneActive: sceneIsActive,
+                isSyncing: state.isSyncing
+            ) else {
+                // Backgrounded pollers stop (foreground restarts them);
+                // a busy sync just skips this tick and retries next interval.
+                guard sceneIsActive else { return }
+                continue
+            }
             await operationHandler(.synchronize(force: true, showsActivity: false))
         }
     }
