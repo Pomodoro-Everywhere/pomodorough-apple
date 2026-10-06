@@ -866,6 +866,12 @@
         "value": "‏⟦Connect to your iPhone to start a timer. Start was not queued.⟧"
       }
     },
+    "Continue offline": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Continue offline⟧"
+      }
+    },
     "Continues without timer alerts. The timer still works while Pomodorough is open.": {
       "stringUnit": {
         "state": "translated",
@@ -2364,6 +2370,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Unnamed room⟧"
+      }
+    },
+    "Uses the local timer offline and keeps account recovery pending": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Uses the local timer offline and keeps account recovery pending⟧"
       }
     },
     "Validate and join": {
