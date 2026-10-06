@@ -834,6 +834,17 @@ struct CoreTimerDependency: Codable, Equatable, Sendable {
         self.sourceDayStart = sourceDayStart
         self.sourceDayEnd = sourceDayEnd
     }
+
+    // Core omits false generatedBreak (serde skip_serializing_if), so a
+    // strict decode rejects core-returned edges. Mirror core's serde defaults.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        operationId = try values.decode(String.self, forKey: .operationId)
+        dependsOnOperationId = try values.decode(String.self, forKey: .dependsOnOperationId)
+        generatedBreak = try values.decodeIfPresent(Bool.self, forKey: .generatedBreak) ?? false
+        sourceDayStart = try values.decodeIfPresent(Date.self, forKey: .sourceDayStart)
+        sourceDayEnd = try values.decodeIfPresent(Date.self, forKey: .sourceDayEnd)
+    }
 }
 
 struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {

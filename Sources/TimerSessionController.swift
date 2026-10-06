@@ -756,8 +756,18 @@ private extension TimerSessionController {
             tasks: state.tasks,
             durationsMs: state.settings.durationsMs,
             autoStartBreaks: state.autoStartBreaks,
-            selectedTaskId: state.selectedTaskID?.uuidString.lowercased()
+            selectedTaskId: materializedSelectedTaskID(in: state)
         )
+    }
+
+    /// Core rejects a base selection absent from base tasks. Pending task
+    /// upserts have not materialized into state.tasks yet, so project the
+    /// materialized selection only; pending selection operations still
+    /// converge through the pending queues.
+    private func materializedSelectedTaskID(in state: PersistedTimerState) -> String? {
+        guard let selected = state.selectedTaskID,
+              state.tasks.contains(where: { $0.id == selected }) else { return nil }
+        return selected.uuidString.lowercased()
     }
 
     private func projectionPending(

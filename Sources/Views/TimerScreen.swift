@@ -26,18 +26,14 @@ struct TimerScreen: View {
     /// GeometryReader coordinate space with margins included. Filters
     /// inactive folds so flat keeps existing layout; physical positions
     /// stay fixed across layout directions because the fold does not move.
+    ///
+    /// Fold detection needs the iOS 27.1 SDK (GeometryProxy.reservedRegions),
+    /// but release and CI pin Xcode 26.6, whose SDK lacks that symbol, so any
+    /// reference fails compile even inside `#available`. Return the empty
+    /// flat-layout set until the toolchain bump; TimerHingeLayout already
+    /// treats [] as unfolded.
     static func measuredDivisions(in proxy: GeometryProxy) -> [CGRect] {
-#if os(iOS)
-        if #available(iOS 27.1, *) {
-            proxy.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed)
-                .filter(\.isActive)
-                .map(\.frame)
-        } else {
-            []
-        }
-#else
         []
-#endif
     }
 
     /// Measured hinge from container size plus active divisions.
