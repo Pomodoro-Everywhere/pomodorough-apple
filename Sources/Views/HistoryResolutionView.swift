@@ -191,6 +191,14 @@ struct HistoryResolutionView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .accessibilityHint("Retries saved history resolution")
+            if model.isHistoryResolutionOfflineEscapeAllowed {
+                Button("Continue offline") {
+                    model.continueHistoryResolutionOffline()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .accessibilityHint("Uses the local timer offline and keeps account recovery pending")
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity)

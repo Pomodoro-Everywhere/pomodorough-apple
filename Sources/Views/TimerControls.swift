@@ -18,6 +18,7 @@ struct TimerControls: View {
     let model: AppModel
     let layout: TimerLayout
     var compact = false
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -54,7 +55,8 @@ struct TimerControls: View {
 #else
         return Self.shouldUseSingleRow(
             horizontal: horizontalSizeClass,
-            vertical: verticalSizeClass
+            vertical: verticalSizeClass,
+            hinge: hinge
         )
 #endif
     }
@@ -82,6 +84,22 @@ struct TimerControls: View {
         @unknown default:
             return true
         }
+    }
+
+    /// Production single-row gate from measured division regions.
+    /// Book vertical divisions force stacked rows so Finish never
+    /// straddles the fold; flat keeps the size-class decision.
+    static func shouldUseSingleRow(
+        horizontal: UserInterfaceSizeClass?,
+        vertical: UserInterfaceSizeClass?,
+        hinge: TimerHingeLayout
+    ) -> Bool {
+        TimerHingeLayout.shouldUseSingleRow(
+            horizontal: horizontal,
+            vertical: vertical,
+            containerSize: hinge.containerSize,
+            divisions: hinge.divisions
+        )
     }
 
     @ViewBuilder
@@ -119,7 +137,7 @@ struct TimerControls: View {
             controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
         } else {
             controlButton(skipTitle, symbol: "forward.fill", glassID: .skip, prominent: false, glass: glass) {
-                model.selectPhase(skipDestination)
+                model.selectPhase(model.skipDestination)
             }
         }
     }
@@ -145,21 +163,13 @@ struct TimerControls: View {
             // Finished timers land here too: the next Start replaces
             // them, so no Dismiss control is needed.
             controlButton(skipTitle, symbol: "forward.fill", glassID: .skip, prominent: false, glass: glass) {
-                model.selectPhase(skipDestination)
+                model.selectPhase(model.skipDestination)
             }
         }
     }
 
-    /// Idle Skip follows the same break the current focus would earn
-    /// from the core cycle (long break every fourth completed focus,
-    /// so the 4th/8th/12th focus skips to the long break). Breaks
-    /// return to focus. Nothing starts.
-    private var skipDestination: TimerPhase {
-        model.selectedPhase.isBreak ? .focus : model.skipDestinationFromFocus()
-    }
-
     private var skipTitle: String {
-        String(localized: "Skip to \(skipDestination.title)")
+        String(localized: "Skip to \(model.skipDestination.title)")
     }
 
     private var stopSoundTitle: String {

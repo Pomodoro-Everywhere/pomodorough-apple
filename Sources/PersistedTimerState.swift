@@ -2,6 +2,13 @@ import Foundation
 import OSLog
 
 extension PersistedTimerState {
+    mutating func pruneLegacyUnresolvedCommandsToPending() {
+        legacyUnresolvedCommandIDs.formIntersection(pendingCommands.map(\.id))
+        if legacyUnresolvedCommandIDs.isEmpty && !hasCorruptPendingOperations {
+            legacyTimerDependencyUpgrade = false
+        }
+    }
+
     mutating func prepare(for authenticatedUser: User) {
         if let previousUser = cachedUser, previousUser.id != authenticatedUser.id {
             let existingDeviceID = deviceId

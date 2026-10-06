@@ -22,6 +22,31 @@ struct TimerScreen: View {
         horizontal == .regular && vertical == .regular
     }
 
+    /// Active division frames from measured reserved regions, in the
+    /// GeometryReader coordinate space with margins included. Filters
+    /// inactive folds so flat keeps existing layout; physical positions
+    /// stay fixed across layout directions because the fold does not move.
+    static func measuredDivisions(in proxy: GeometryProxy) -> [CGRect] {
+#if os(iOS)
+        if #available(iOS 27.1, *) {
+            proxy.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed)
+                .filter(\.isActive)
+                .map(\.frame)
+        } else {
+            []
+        }
+#else
+        []
+#endif
+    }
+
+    /// Measured hinge from container size plus active divisions.
+    /// GeometryReader re-evaluates on fold, rotation, and multitasking
+    /// changes, so Book pose arrives without cached state.
+    static func measuredHinge(in proxy: GeometryProxy) -> TimerHingeLayout {
+        TimerHingeLayout(containerSize: proxy.size, divisions: measuredDivisions(in: proxy))
+    }
+
     /// Floor for the phone-landscape card height: short landscape
     /// screens (SE/12 mini, ~375pt) keep a usable dial instead of
     /// collapsing to the raw geometry remainder.
@@ -57,40 +82,12 @@ struct TimerScreen: View {
                 size: geometry.size,
                 usesAccessibleLayout: dynamicTypeSize.isAccessibilitySize
             )
-
-            ZStack {
-                #if os(macOS)
-                TimerScreenMacOSContent(model: model, layout: layout)
-                #else
-                if layout == .landscape {
-                    #if os(iOS)
-                    if Self.usesStackedLandscape(
-                        horizontal: horizontalSizeClass,
-                        vertical: verticalSizeClass
-                    ) {
-                        TimerScreenIPadLandscapeContent(model: model)
-                    } else {
-                        TimerScreenIOSLandscapeContent(
-                            model: model,
-                            layout: layout,
-                            landscapeHeight: Self.landscapeCardHeight(for: geometry.size),
-                            landscapeWidth: geometry.size.width
-                        )
-                    }
-                    #endif
-                } else {
-                    ScrollView {
-                        portraitContent(
-                            compactDial: usesCompactDial(for: geometry.size),
-                            availableHeight: geometry.size.height,
-                            topGap: Self.portraitTopGap(syncStatusBottom: syncStatusBottom, globalMinY: geometry.frame(in: .global).minY)
-                        )
-                    }
-                    .timerChromeHidden(false)
-                }
-                #endif
-            }
-            .animation(reduceMotion ? nil : .default, value: layout)
+            let hinge = Self.measuredHinge(in: geometry)
+            timerStack(layout: layout, hinge: hinge, geometry: geometry)
+                .animation(reduceMotion ? nil : .default, value: layout)
+            #if DEBUG && os(iOS)
+                .overlay(alignment: .topLeading) { layoutTestProbe(size: geometry.size) }
+            #endif
         }
         .background(TimerBackdrop())
         .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Timer" : "Pomodorough")
@@ -99,6 +96,69 @@ struct TimerScreen: View {
         .primaryRouteAccountToolbar(model: model)
         .onPreferenceChange(SyncToolbarBottomPreferenceKey.self) { syncStatusBottom = $0 }
     }
+
+    @ViewBuilder
+    private func timerStack(layout: TimerLayout, hinge: TimerHingeLayout, geometry: GeometryProxy) -> some View {
+        ZStack {
+#if os(macOS)
+            TimerScreenMacOSContent(model: model, layout: layout)
+#else
+            if layout == .landscape {
+#if os(iOS)
+                if Self.usesStackedLandscape(horizontal: horizontalSizeClass, vertical: verticalSizeClass) {
+                    TimerScreenIPadLandscapeContent(model: model, hinge: hinge)
+                } else {
+                    TimerScreenIOSLandscapeContent(
+                        model: model,
+                        layout: layout,
+                        landscapeHeight: Self.landscapeCardHeight(for: geometry.size),
+                        landscapeWidth: geometry.size.width,
+                        hinge: hinge
+                    )
+                }
+#endif
+            } else {
+                ScrollView {
+                    portraitContent(
+                        compactDial: usesCompactDial(for: geometry.size),
+                        availableHeight: geometry.size.height,
+                        topGap: Self.portraitTopGap(syncStatusBottom: syncStatusBottom, globalMinY: geometry.frame(in: .global).minY),
+                        hinge: hinge
+                    )
+                }
+                .timerChromeHidden(false)
+            }
+#endif
+        }
+    }
+
+    #if DEBUG && os(iOS)
+    // XCTest cannot read the app's SwiftUI size classes. Report raw inputs,
+    // never chrome visibility, so eligibility cannot mask a chrome regression.
+    @ViewBuilder
+    private func layoutTestProbe(size: CGSize) -> some View {
+        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_LAYOUT"] == "1" {
+            Text(verbatim: "AP01")
+                .font(.caption2)
+                .accessibilityIdentifier("AP01-layout")
+                .accessibilityValue(Text(verbatim: [
+                    String(Double(size.width)), String(Double(size.height)),
+                    sizeClassName(horizontalSizeClass), sizeClassName(verticalSizeClass),
+                    String(dynamicTypeSize.isAccessibilitySize)
+                ].joined(separator: "|")))
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func sizeClassName(_ sizeClass: UserInterfaceSizeClass?) -> String {
+        switch sizeClass {
+        case .compact: "compact"
+        case .regular: "regular"
+        case nil: "unspecified"
+        @unknown default: "unknown"
+        }
+    }
+    #endif
 
     /// Top gap keeps the portrait card clear of the sync-status toolbar row.
     /// Both inputs share global space: syncStatusBottom is the toolbar row's
@@ -119,7 +179,7 @@ struct TimerScreen: View {
         max(0, availableHeight - topGap - 23)
     }
 
-    private func portraitContent(compactDial: Bool, availableHeight: CGFloat, topGap: CGFloat) -> some View {
+    private func portraitContent(compactDial: Bool, availableHeight: CGFloat, topGap: CGFloat, hinge: TimerHingeLayout) -> some View {
         VStack(spacing: 20) {
             if let conflict = model.conflictMessage {
                 ConflictBanner(message: conflict, dismiss: model.dismissConflict)
@@ -128,7 +188,8 @@ struct TimerScreen: View {
                 model: model,
                 layout: .portrait,
                 usesCompactDial: compactDial,
-                minimumHeight: model.conflictMessage == nil ? Self.portraitMinimumHeight(availableHeight: availableHeight, topGap: topGap) : nil
+                minimumHeight: model.conflictMessage == nil ? Self.portraitMinimumHeight(availableHeight: availableHeight, topGap: topGap) : nil,
+                hinge: hinge
             )
         }
         .padding(.horizontal, 16)
@@ -167,16 +228,19 @@ private struct TimerScreenMacOSContent: View {
 
 private struct TimerScreenIPadLandscapeContent: View {
     let model: AppModel
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
 
     var body: some View {
         VStack {
             if let conflict = model.conflictMessage {
                 ConflictBanner(message: conflict, dismiss: model.dismissConflict)
             }
-            TimerMachineCard(model: model, layout: .landscape)
+            TimerMachineCard(model: model, layout: .landscape, hinge: hinge)
         }
         .padding()
-        .timerChromeHidden(true)
+        // Regular-size landscape keeps the native adaptive tabs and Account
+        // toolbar reachable when unfolding; only the phone card hides chrome.
+        .timerChromeHidden(false)
     }
 }
 
@@ -185,6 +249,7 @@ private struct TimerScreenIOSLandscapeContent: View {
     let layout: TimerLayout
     var landscapeHeight: CGFloat
     var landscapeWidth: CGFloat
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
 
     var body: some View {
         // Scroll recovery: landscape height on small phones can
@@ -199,7 +264,8 @@ private struct TimerScreenIOSLandscapeContent: View {
                     model: model,
                     layout: layout,
                     landscapeHeight: landscapeHeight,
-                    landscapeWidth: landscapeWidth
+                    landscapeWidth: landscapeWidth,
+                    hinge: hinge
                 )
             }
             .padding(.horizontal, 16)

@@ -375,6 +375,11 @@ final class AccountLifecycleController {
             invalidResponseMessage = String(localized: "History setup paused because the server returned an invalid response. Your saved choice and local data were preserved.")
         }
         switch error {
+        case is LegacyTimerDependencyReview:
+            return BootstrapFailureTransition(
+                historyResolutionState: .retryable(strategy), isOffline: false,
+                errorMessage: error.localizedDescription, effects: []
+            )
         case AppError.invalidResponse, is SharedCoreError:
             // AP86: core/invalidResponse keeps retryable shape, logs + captures.
             Self.logger.error("bootstrap failed: \(error.localizedDescription, privacy: .public)")

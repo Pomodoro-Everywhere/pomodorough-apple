@@ -26,6 +26,7 @@
 		0B92B5590C5D19F65096200D /* AppVersionFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D22FC5B46A2BB3C487141DE /* AppVersionFooter.swift */; };
 		0BA0AC733AC870B50A7FEAE7 /* AccountSyncToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */; };
 		0DD0CA0C903D547E17D0117D /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
+		0DF484C179EF64622EDF6C30 /* TimerHingeLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B151C53A3A86AF4A416560B1 /* TimerHingeLayoutTests.swift */; };
 		0EAF8323E5B547A935B98DB1 /* TimerDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5638C8571CF77F2AD16DC44 /* TimerDomainModels.swift */; };
 		0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */; };
 		0FB5FB2AB28B53EFB9CFB015 /* PersistedStateLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC6938D1C26CFC6A62289BB /* PersistedStateLoader.swift */; };
@@ -50,6 +51,7 @@
 		1AF4FFCD7731BD87B245C434 /* TimerWidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D84F25BA4D62AF95DAAD00C /* TimerWidgetSnapshotTests.swift */; };
 		1B46F26070A7BB4CA4EF800A /* TimerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D37AA3C0AD446428CC3905BE /* TimerScreen.swift */; };
 		1BDC228041E27AA1232A9C07 /* TaskBoardEmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BA65CB22541A1FAD6009384 /* TaskBoardEmptyState.swift */; };
+		1C0FA85C9A4DFEFC097092F5 /* CompletionChimePlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DED78973A486DBD65C787B43 /* CompletionChimePlayerTests.swift */; };
 		1D978F93119160CA122BF7FE /* AppStatePersistenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 548C52633BAFF8D04FF3C33C /* AppStatePersistenceCoordinator.swift */; };
 		1E1FF39740C9847236D7D3F3 /* RoomReplicationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */; };
 		1F4F72E4C76308B631F614D7 /* View+Pomodorough.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DDDC89A35D670374AF34EC /* View+Pomodorough.swift */; };
@@ -157,6 +159,7 @@
 		5D7D020567E8B895940A7A57 /* AlarmEffectCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D11621FC46E8D23C7F67C06 /* AlarmEffectCoordinator.swift */; };
 		5DA9F9DC55F9857F681B6501 /* CompletionChimePlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FF5EB41387944657FCE6DDA /* CompletionChimePlayer.swift */; };
 		5E1D4DCC6A0846EA7BA91220 /* TimerOperationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACA753B0F16F753B7DA1644 /* TimerOperationModels.swift */; };
+		5E84F9F1FCAA198532AAD69D /* HistoryResolutionOfflineEscapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02B608FAC57BBABC47D3639 /* HistoryResolutionOfflineEscapeTests.swift */; };
 		5E8B3CE4385784F1E880AEA2 /* ImmutableReconciliationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5E25585456B28CD48ED4E0 /* ImmutableReconciliationPolicy.swift */; };
 		60277E80C1F638AC5F490192 /* persisted-state-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EF0207037F1AEB5512B76963 /* persisted-state-v1.json */; };
 		60980FC7EE0C171564CE862F /* PersistedQueueReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A60D80E7C01C1227AAB1F07 /* PersistedQueueReconciliation.swift */; };
@@ -186,6 +189,7 @@
 		715933AFE64F7E34DFA9E7BF /* TimerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D37AA3C0AD446428CC3905BE /* TimerScreen.swift */; };
 		7180787487196791B4BC5DBD /* PomodoroughHistoryRefreshUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C30CF22C2104AE306728CEB /* PomodoroughHistoryRefreshUITests.swift */; };
 		72E59C54FE1B05E8E062AE3C /* WatchSendDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D495140CC4789B575A2C45BA /* WatchSendDecisionTests.swift */; };
+		731B3DE45ECB478060507C96 /* TimerHingeLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B151C53A3A86AF4A416560B1 /* TimerHingeLayoutTests.swift */; };
 		73FE484AFEAC128009F00993 /* TickMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA59D00B6874FCABDC0711C /* TickMarks.swift */; };
 		74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
 		7564DA5618CDD127FD5532B2 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD275FEDF06634D4FC072390 /* AccountView.swift */; };
@@ -211,6 +215,7 @@
 		81EC072B34F9A8320D16FDCB /* TaskTimeText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3A937878674AD4167D99AF8 /* TaskTimeText.swift */; };
 		83CBB05092621687C1CD6752 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5763B6AA139E86DBCDE4D11C /* APIClient.swift */; };
 		846FF3172900882F3FF6A226 /* ImmutableReconciliationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5E25585456B28CD48ED4E0 /* ImmutableReconciliationPolicy.swift */; };
+		8474E3CEA6B59AC464E647E6 /* CompletionChimePlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DED78973A486DBD65C787B43 /* CompletionChimePlayerTests.swift */; };
 		84B131A8A1403C42A16AFB5C /* IrohReplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3261C0AC1E11B15077F7FB /* IrohReplicationTests.swift */; };
 		85EABCAF6B71948119D55DBE /* ImmutableRetargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D9A7FF632F6716F5DD0A923 /* ImmutableRetargetTests.swift */; };
 		87568375524EE6FC685681A5 /* IrohProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9151C5F69A1F64F86529666 /* IrohProtocol.swift */; };
@@ -252,6 +257,7 @@
 		9BBE1FEE80A30633D746BFD9 /* PersistedStateLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC6938D1C26CFC6A62289BB /* PersistedStateLoader.swift */; };
 		9C386677BF85BC5733C300C7 /* LegacyOperationReducers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458216150D3F03D63BA6BFC2 /* LegacyOperationReducers.swift */; };
 		9D041CA16C8292B053BDE1F0 /* CanonicalRecordCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2647022289DC63027ACC0CCD /* CanonicalRecordCodec.swift */; };
+		9DD0C5FA6F0B85E82602BBDC /* HistoryResolutionOfflineEscapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02B608FAC57BBABC47D3639 /* HistoryResolutionOfflineEscapeTests.swift */; };
 		9E343952B37B5462F7504236 /* CompletionChime.wav in Resources */ = {isa = PBXBuildFile; fileRef = 18D8C0E6D0DD7DDCDCD71F08 /* CompletionChime.wav */; };
 		9FE55B82B0A27174E45404C8 /* PersistedTimerState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB318E39A9F2F2070F3114D6 /* PersistedTimerState.swift */; };
 		9FF47C6A4203DB33009536D0 /* NetworkSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36A8F361E21D197A0C56D2CA /* NetworkSectionView.swift */; };
@@ -294,6 +300,7 @@
 		BE1AB113865829393C4D970C /* MenuBarTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA6E6A5D76327C5818795B1 /* MenuBarTimer.swift */; };
 		BE2AFABAAE1ADE3CC7C78A1B /* ServicePatternScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89BDAA2BB7DF807BB2552DC /* ServicePatternScreen.swift */; };
 		BEDD57B570584744BBF2E177 /* IrohProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9151C5F69A1F64F86529666 /* IrohProtocol.swift */; };
+		BFD7AD461BAFF769B57BE769 /* TimerHingeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BF3F7FED0E32F32A493364 /* TimerHingeLayout.swift */; };
 		C0725FE9385C24B7F5C728E8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A07D519989D4A2F8C108C3BE /* Assets.xcassets */; };
 		C10BB97B115DF3EC8CC9A262 /* AccessibleDialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = C78515075F02ADC6AD55E4C5 /* AccessibleDialFace.swift */; };
 		C1CC4D718DC7EE3A18167EB6 /* IdleTimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAFD33994A5626DA7A3C9C1 /* IdleTimerDial.swift */; };
@@ -310,6 +317,7 @@
 		C847E12C64F14316362C242C /* BreakTaskDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */; };
 		C92783BAD90EFB471FACC321 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 339967D3D78893FBEB4565F6 /* HistoryScreen.swift */; };
 		CAFAF05CF473357E46BBCE21 /* JoinIrohRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */; };
+		CB89EE8F88949BD320CE9224 /* TimerHingeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BF3F7FED0E32F32A493364 /* TimerHingeLayout.swift */; };
 		CBBA8D8D66F1934FA96B0502 /* LegacyTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFAFD32702932CC335D6F13D /* LegacyTabs.swift */; };
 		CBD6A118EB50CD13A585FD53 /* ServicePatternCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE6D3C420FC1AB911E53262 /* ServicePatternCard.swift */; };
 		CC223DE9D55BEA683FAC6CBB /* RPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21209644D253E40E15EC9998 /* RPCMessage.swift */; };
@@ -610,6 +618,7 @@
 		9C30CF22C2104AE306728CEB /* PomodoroughHistoryRefreshUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughHistoryRefreshUITests.swift; sourceTree = "<group>"; };
 		9CEEC2337A192634D24A340C /* SharedCoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCoreModels.swift; sourceTree = "<group>"; };
 		9D8CEED1A0DDDDB34746C46D /* TaskHistoryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskHistoryModels.swift; sourceTree = "<group>"; };
+		A02B608FAC57BBABC47D3639 /* HistoryResolutionOfflineEscapeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryResolutionOfflineEscapeTests.swift; sourceTree = "<group>"; };
 		A040A3D761A005F486E5D8B4 /* KeychainBenignFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainBenignFallbackTests.swift; sourceTree = "<group>"; };
 		A07D519989D4A2F8C108C3BE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A3325B223134EBC2103C1C3F /* AccountLifecycleTransitions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountLifecycleTransitions.swift; sourceTree = "<group>"; };
@@ -620,6 +629,7 @@
 		AAB884EB9E8593E740893441 /* RoomReplicationControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomReplicationControllerTests.swift; sourceTree = "<group>"; };
 		AB75F33697B6208245E8B417 /* PortraitDialFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortraitDialFace.swift; sourceTree = "<group>"; };
 		AE50A4937E18D925FD8F8CCC /* IrohRoomModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomModels.swift; sourceTree = "<group>"; };
+		B151C53A3A86AF4A416560B1 /* TimerHingeLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerHingeLayoutTests.swift; sourceTree = "<group>"; };
 		B1E3C90D70D49C8F69F513DE /* WatchTimerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchTimerView.swift; sourceTree = "<group>"; };
 		B2BB423CB3E1BA12419562FC /* WireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireModels.swift; sourceTree = "<group>"; };
 		B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomStoreRollbackTests.swift; sourceTree = "<group>"; };
@@ -628,6 +638,7 @@
 		B984C6E067218858ECFB2608 /* WatchAlertContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAlertContractTests.swift; sourceTree = "<group>"; };
 		BB8C8481EAB6EB262147BFEB /* CompletedFocusBreakdownScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletedFocusBreakdownScreen.swift; sourceTree = "<group>"; };
 		BF74F82A1D861E3354B1547E /* BackgroundStaleAlarmTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundStaleAlarmTests.swift; sourceTree = "<group>"; };
+		C1BF3F7FED0E32F32A493364 /* TimerHingeLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerHingeLayout.swift; sourceTree = "<group>"; };
 		C3A937878674AD4167D99AF8 /* TaskTimeText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskTimeText.swift; sourceTree = "<group>"; };
 		C54E2C7C5FCA242076B7751F /* NetworkScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkScreen.swift; sourceTree = "<group>"; };
 		C78515075F02ADC6AD55E4C5 /* AccessibleDialFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibleDialFace.swift; sourceTree = "<group>"; };
@@ -651,6 +662,7 @@
 		DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitNegativeTests.swift; sourceTree = "<group>"; };
 		DDC54AA96E93B5ABA535D695 /* UnitPositiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitPositiveTests.swift; sourceTree = "<group>"; };
 		DDF71D90D91524E90632E916 /* TaskBoardMetric.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardMetric.swift; sourceTree = "<group>"; };
+		DED78973A486DBD65C787B43 /* CompletionChimePlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionChimePlayerTests.swift; sourceTree = "<group>"; };
 		E010EF603CC6ECB7368DAD02 /* APIDateCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIDateCodec.swift; sourceTree = "<group>"; };
 		E07295C5A8844F45C157C394 /* RoomReplicationTransitions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomReplicationTransitions.swift; sourceTree = "<group>"; };
 		E189447B3C110A6F7321E4F3 /* PrimaryRouteAccountToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryRouteAccountToolbar.swift; sourceTree = "<group>"; };
@@ -803,8 +815,10 @@
 				BF74F82A1D861E3354B1547E /* BackgroundStaleAlarmTests.swift */,
 				75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */,
 				987274F118A8C9907AAA9E72 /* CentralizedPollingTests.swift */,
+				DED78973A486DBD65C787B43 /* CompletionChimePlayerTests.swift */,
 				5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */,
 				353DCF659D4CD2AED9A982D5 /* DialFacePinningTests.swift */,
+				A02B608FAC57BBABC47D3639 /* HistoryResolutionOfflineEscapeTests.swift */,
 				8D9A7FF632F6716F5DD0A923 /* ImmutableRetargetTests.swift */,
 				7A9EF6C016264040BCC0B92D /* IntegrationNegativeTests.swift */,
 				2D751D86A53B99D3A7671C7A /* IntegrationPositiveTests.swift */,
@@ -836,6 +850,7 @@
 				6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */,
 				A5751B4BD7B2A251AE34EDD7 /* TimerCardLayoutPinningTests.swift */,
 				7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */,
+				B151C53A3A86AF4A416560B1 /* TimerHingeLayoutTests.swift */,
 				4523E76A7FE2206BCC8B9B56 /* TimerLiveActivityTests.swift */,
 				7D84F25BA4D62AF95DAAD00C /* TimerWidgetSnapshotTests.swift */,
 				DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */,
@@ -939,6 +954,7 @@
 				72BF1D497AF443928BE729AE /* TimerBackdrop.swift */,
 				B908C0CE40CB2094D4A76D84 /* TimerControls.swift */,
 				E1EFD2642B87CC51E870120B /* TimerDial.swift */,
+				C1BF3F7FED0E32F32A493364 /* TimerHingeLayout.swift */,
 				24F72CA3CA502137F9C4EF44 /* TimerMachineCard.swift */,
 				D37AA3C0AD446428CC3905BE /* TimerScreen.swift */,
 				E68FD6BB00A16B79EFC34AC7 /* TimerTaskPicker.swift */,
@@ -1344,8 +1360,10 @@
 				AA56C10CF578141427C30AC6 /* BackgroundStaleAlarmTests.swift in Sources */,
 				CCF0BCD78107159601AD9B4A /* BreakTaskDisplayTests.swift in Sources */,
 				921D96DE59C31D96500FC56E /* CentralizedPollingTests.swift in Sources */,
+				1C0FA85C9A4DFEFC097092F5 /* CompletionChimePlayerTests.swift in Sources */,
 				08B842AA74B8633316A97C7A /* CoverageGapBehaviorTests.swift in Sources */,
 				122399397FC14EB67F811226 /* DialFacePinningTests.swift in Sources */,
+				5E84F9F1FCAA198532AAD69D /* HistoryResolutionOfflineEscapeTests.swift in Sources */,
 				85EABCAF6B71948119D55DBE /* ImmutableRetargetTests.swift in Sources */,
 				C3A869CE2835EC339576D607 /* IntegrationNegativeTests.swift in Sources */,
 				F88E7A412B6A377C3346AA48 /* IntegrationPositiveTests.swift in Sources */,
@@ -1380,6 +1398,7 @@
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
 				5A714EAD93BE36D6A60C9E05 /* TimerCardLayoutPinningTests.swift in Sources */,
 				BD513CCC19FD160067E8A585 /* TimerCompletionSchedulingTests.swift in Sources */,
+				0DF484C179EF64622EDF6C30 /* TimerHingeLayoutTests.swift in Sources */,
 				7F438BB37C5BC3DA06CCCA24 /* TimerLiveActivityTests.swift in Sources */,
 				1AF4FFCD7731BD87B245C434 /* TimerWidgetSnapshotTests.swift in Sources */,
 				4255112A51D66FBEC7FFA25E /* UnitNegativeTests.swift in Sources */,
@@ -1421,8 +1440,10 @@
 				4409C735F77CCB2BC5957A97 /* BackgroundStaleAlarmTests.swift in Sources */,
 				C847E12C64F14316362C242C /* BreakTaskDisplayTests.swift in Sources */,
 				33F55E4A54DFFCD5560A3B99 /* CentralizedPollingTests.swift in Sources */,
+				8474E3CEA6B59AC464E647E6 /* CompletionChimePlayerTests.swift in Sources */,
 				24F82419C7483BD364F2E187 /* CoverageGapBehaviorTests.swift in Sources */,
 				2F496FD2126D034E0DF38D70 /* DialFacePinningTests.swift in Sources */,
+				9DD0C5FA6F0B85E82602BBDC /* HistoryResolutionOfflineEscapeTests.swift in Sources */,
 				439EA470F5322CD810251A82 /* ImmutableRetargetTests.swift in Sources */,
 				98B4B39B908271919830386D /* IntegrationNegativeTests.swift in Sources */,
 				3FFA600ACA6A8AA43B56AF17 /* IntegrationPositiveTests.swift in Sources */,
@@ -1457,6 +1478,7 @@
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
 				E08C776CBAA4D81325F3A8A5 /* TimerCardLayoutPinningTests.swift in Sources */,
 				CC8A04E89886DFA189F17026 /* TimerCompletionSchedulingTests.swift in Sources */,
+				731B3DE45ECB478060507C96 /* TimerHingeLayoutTests.swift in Sources */,
 				E7FEE5738E33452D9CA3EA19 /* TimerLiveActivityTests.swift in Sources */,
 				50A16F648EA3E41B4C14BEF0 /* TimerWidgetSnapshotTests.swift in Sources */,
 				25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */,
@@ -1597,6 +1619,7 @@
 				3960EC0DA7B0CA76F852BF78 /* TimerControls.swift in Sources */,
 				11AB92A0968D38950FB91B91 /* TimerDial.swift in Sources */,
 				0DD0CA0C903D547E17D0117D /* TimerDomainModels.swift in Sources */,
+				CB89EE8F88949BD320CE9224 /* TimerHingeLayout.swift in Sources */,
 				B26563D648A0DD1F58C749F3 /* TimerLayout.swift in Sources */,
 				F139C2C52C6B148728BCE599 /* TimerLiveActivityCoordinator.swift in Sources */,
 				3F325D488399C5E91DE532D0 /* TimerMachineCard.swift in Sources */,
@@ -1733,6 +1756,7 @@
 				76231512AB810E2424C54239 /* TimerControls.swift in Sources */,
 				10649455CA7469E9BEF8014E /* TimerDial.swift in Sources */,
 				0EAF8323E5B547A935B98DB1 /* TimerDomainModels.swift in Sources */,
+				BFD7AD461BAFF769B57BE769 /* TimerHingeLayout.swift in Sources */,
 				D5071DB2C40264352505834B /* TimerLayout.swift in Sources */,
 				F4BE66AB1CB4EEC7EF2CAD48 /* TimerLiveActivityCoordinator.swift in Sources */,
 				6FE352A95895E01C8CE46667 /* TimerMachineCard.swift in Sources */,

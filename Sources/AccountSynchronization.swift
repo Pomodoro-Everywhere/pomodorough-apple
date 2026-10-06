@@ -21,6 +21,7 @@ final class AccountSynchronization {
     struct SyncPlan: Sendable {
         let batch: SyncBatch
         let request: SyncRequest
+        let legacyDependencyReviewRequired: Bool
     }
 
     struct SyncTransition: Sendable {
@@ -59,6 +60,7 @@ final class AccountSynchronization {
     }
 
     func makeSyncPlan(state: PersistedTimerState) -> SyncPlan {
+        let reviewRequired = LegacyBreakDependencyRecovery.requiresReview(state)
         let batch = SyncBatch(
             commands: uploadableCommands(in: state, limit: 256),
             taskOperations: Array(state.pendingTaskOperations.prefix(256)),
@@ -76,12 +78,14 @@ final class AccountSynchronization {
                 durationOperations: batch.durationOperations,
                 autoStartOperations: batch.autoStartOperations,
                 selectedTaskOperations: batch.selectedTaskOperations
-            )
+            ),
+            legacyDependencyReviewRequired: reviewRequired
         )
     }
 
     func prepareSyncPlan(state: PersistedTimerState) -> (plan: SyncPlan, retired: PersistedTimerState) {
         let plan = makeSyncPlan(state: state)
+        guard !plan.legacyDependencyReviewRequired else { return (plan, state) }
         var retired = state
         retired.retireNeverSentProof(
             commands: plan.batch.commands.map(\.id),
@@ -93,8 +97,10 @@ final class AccountSynchronization {
         return (plan, retired)
     }
 
-    func sendSync(_ plan: SyncPlan) async throws -> TimedHTTPResponse<SyncResponse> {
-        try await api.sync(plan.request)
+    func sendSync(_ plan: SyncPlan, state: PersistedTimerState) async throws -> TimedHTTPResponse<SyncResponse> {
+        guard !plan.legacyDependencyReviewRequired else { throw LegacyTimerDependencyReview.required }
+        try validateLegacyTimerSubmission(state: state)
+        return try await api.sync(plan.request)
     }
 
     func reconcileSync(
@@ -118,12 +124,13 @@ final class AccountSynchronization {
             responseUptime: sampledResponse.responseUptime
         )
         let canonicalResponse = CoreReconcileCanonicalResponse(response)
-        let reconciliation = try reconcileWithCore(
+        let (reconciliation, dependencies) = try reconcileWithCore(
             state: updated,
             sent: plan.batch,
             response: canonicalResponse
         )
-        try applyCoreReconciliation(reconciliation, response: canonicalResponse, to: &updated)
+        try applyCoreReconciliation(reconciliation, dependencies: dependencies,
+                                    response: canonicalResponse, to: &updated)
         // Core represents terminal timers in history only. Retain server duplicate
         // terminal object strictly as Apple presentation state.
         updated.canonicalTimer = response.canonicalTimer
@@ -152,6 +159,7 @@ extension AccountSynchronization {
     func sendBootstrapPreflight(
         state: PersistedTimerState
     ) async throws -> TimedHTTPResponse<BootstrapResponse> {
+        // Bootstrap preflight is GET-only and carries no local operations.
         try await api.bootstrap(SyncRequest(
             deviceId: state.deviceId,
             lastRevision: state.revision,
@@ -234,9 +242,10 @@ extension AccountSynchronization {
 
     func validateBootstrapRequest(
         _ request: BootstrapResolveRequest,
-        deviceID: String
+        state: PersistedTimerState
     ) throws {
-        guard request.deviceId == deviceID,
+        try validateLegacyBootstrapSubmission(request, state: state)
+        guard request.deviceId == state.deviceId,
               request.commands.allSatisfy(\.isValid),
               request.taskOperations.allSatisfy(\.isValid),
               request.durationOperations.allSatisfy(\.isValid),
@@ -251,9 +260,10 @@ extension AccountSynchronization {
     }
 
     func sendBootstrapResolution(
-        _ request: BootstrapResolveRequest
+        _ request: BootstrapResolveRequest, state: PersistedTimerState
     ) async throws -> TimedHTTPResponse<BootstrapResponse> {
-        try await api.resolveBootstrap(request)
+        try validateBootstrapRequest(request, state: state)
+        return try await api.resolveBootstrap(request)
     }
 
     func reconcileBootstrapResolution(
@@ -284,6 +294,19 @@ extension AccountSynchronization {
 }
 
 private extension AccountSynchronization {
+    private func validateLegacyTimerSubmission(state: PersistedTimerState) throws {
+        if LegacyBreakDependencyRecovery.requiresReview(state) { throw LegacyTimerDependencyReview.required }
+    }
+
+    private func validateLegacyBootstrapSubmission(
+        _ request: BootstrapResolveRequest, state: PersistedTimerState
+    ) throws {
+        // Keep-remote carries no queued timer work. A malformed saved request
+        // still cannot smuggle a legacy identity through that strategy.
+        if request.strategy == .keepRemote, request.commands.isEmpty { return }
+        try validateLegacyTimerSubmission(state: state)
+    }
+
     private func validatedBootstrapResolutionBatch(
         response: BootstrapResponse,
         request: BootstrapResolveRequest,
@@ -337,12 +360,13 @@ private extension AccountSynchronization {
             responseUptime: sampledResponse.responseUptime
         )
         let canonicalResponse = CoreReconcileCanonicalResponse(response)
-        let reconciliation = try reconcileWithCore(
+        let (reconciliation, dependencies) = try reconcileWithCore(
             state: resolved,
             sent: sent,
             response: canonicalResponse
         )
-        try applyCoreReconciliation(reconciliation, response: canonicalResponse, to: &resolved)
+        try applyCoreReconciliation(reconciliation, dependencies: dependencies,
+                                    response: canonicalResponse, to: &resolved)
         return resolved
     }
 
@@ -381,9 +405,11 @@ private extension AccountSynchronization {
         in state: PersistedTimerState,
         limit: Int? = nil
     ) -> [TimerCommand] {
+        if LegacyBreakDependencyRecovery.requiresReview(state) { return [] }
         let provisionalTimerIDs = Set(state.provisionalBreaks.map(\.breakTimerId))
+        let blockedCommandIDs = Set(state.pendingTimerDependencies.map(\.operationId))
         let commands = state.pendingCommands.prefix {
-            !provisionalTimerIDs.contains($0.timerId)
+            !provisionalTimerIDs.contains($0.timerId) && !blockedCommandIDs.contains($0.id)
         }
         guard let limit else { return Array(commands) }
         return Array(commands.prefix(limit))
@@ -393,8 +419,9 @@ private extension AccountSynchronization {
         state: PersistedTimerState,
         sent: SyncBatch,
         response: CoreReconcileCanonicalResponse
-    ) throws -> CoreReconcileOutput {
-        try loadCore().reconcileRebase(CoreReconcileInput(
+    ) throws -> (CoreReconcileOutput, [CoreTimerDependency]) {
+        let dependencies = coreTimerDependencies(in: state)
+        let output = try loadCore().reconcileRebase(CoreReconcileInput(
             local: CoreReconcileLocalQueues(state: state),
             sent: CoreReconcileSentQueues(
                 commands: sent.commands,
@@ -404,17 +431,21 @@ private extension AccountSynchronization {
                 selectedTaskOperations: sent.selectedTaskOperations
             ),
             response: response,
-            timerDependencies: coreTimerDependencies(in: state),
+            timerDependencies: dependencies,
             neverSent: state.neverSentProof()
         ))
+        return (output, dependencies)
     }
 
     private func applyCoreReconciliation(
         _ output: CoreReconcileOutput,
+        dependencies: [CoreTimerDependency],
         response: CoreReconcileCanonicalResponse,
         to state: inout PersistedTimerState
     ) throws {
         state.pendingCommands = try output.nativePendingCommands(deviceId: state.deviceId)
+        state.pendingTimerDependencies = retainedTimerDependencies(dependencies, output: output)
+        state.pruneLegacyUnresolvedCommandsToPending()
         state.pendingTaskOperations = try output.nativePendingTaskOperations(deviceId: state.deviceId)
         state.pendingDurationOperations = try output.nativePendingDurationOperations(deviceId: state.deviceId)
         state.pendingAutoStartOperations = try output.nativePendingAutoStartOperations(deviceId: state.deviceId)
@@ -454,6 +485,24 @@ private extension AccountSynchronization {
         }
     }
 
+    private func retainedTimerDependencies(
+        _ dependencies: [CoreTimerDependency],
+        output: CoreReconcileOutput
+    ) -> [CoreTimerDependency] {
+        let pending = Dictionary(uniqueKeysWithValues: output.pending.map { ($0.id, $0) })
+        let returnedIDs = Set(output.pendingTimerDependencies.map(\.operationId))
+        // Bundled Core v0.38 promotes a generated break's Finish with its Start.
+        // Keep the direct edge Core received until either command leaves its
+        // pending queue; Core still decides acknowledgements and drops.
+        return output.pendingTimerDependencies + dependencies.filter {
+            let child = pending[$0.operationId]
+            let parent = pending[$0.dependsOnOperationId]
+            return child?.type == .finish && parent?.type == .start
+                && parent?.phase.isBreak == true && child?.timerId == parent?.timerId
+                && !returnedIDs.contains($0.operationId)
+        }
+    }
+
     private static func validateProjectionEquivalence(
         _ projected: CoreReconcileProjectionPending?,
         state: PersistedTimerState
@@ -479,8 +528,8 @@ private extension AccountSynchronization {
     private func coreTimerDependencies(
         in state: PersistedTimerState
     ) -> [CoreTimerDependency] {
-        var dependencies: [CoreTimerDependency] = []
-        var children: Set<String> = []
+        var dependencies = state.pendingTimerDependencies
+        var children = Set(dependencies.map(\.operationId))
         for provisional in state.provisionalBreaks {
             guard
                 let finishIndex = state.pendingCommands.firstIndex(where: {
@@ -495,26 +544,41 @@ private extension AccountSynchronization {
             guard let sourceDay = Calendar.current.dateInterval(of: .day, for: sourceDate) else {
                 continue
             }
-            dependencies.append(CoreTimerDependency(
-                operationId: provisional.startCommandId,
-                dependsOnOperationId: provisional.finishCommandId,
-                generatedBreak: true,
-                sourceDayStart: sourceDay.start,
-                sourceDayEnd: sourceDay.end
-            ))
-            children.insert(provisional.startCommandId)
-
-            var parentID = provisional.startCommandId
-            for command in state.pendingCommands.suffix(from: startIndex + 1) {
-                if command.type == .start { break }
-                guard command.timerId == provisional.breakTimerId,
-                      children.insert(command.id).inserted else { continue }
+            if children.insert(provisional.startCommandId).inserted {
                 dependencies.append(CoreTimerDependency(
-                    operationId: command.id,
-                    dependsOnOperationId: parentID
+                    operationId: provisional.startCommandId,
+                    dependsOnOperationId: provisional.finishCommandId,
+                    generatedBreak: true,
+                    sourceDayStart: sourceDay.start,
+                    sourceDayEnd: sourceDay.end
                 ))
-                parentID = command.id
             }
+
+            dependencies += legacyBreakChildren(
+                after: startIndex, provisional: provisional,
+                commands: state.pendingCommands, seen: &children
+            )
+        }
+        return dependencies
+    }
+
+    private func legacyBreakChildren(
+        after startIndex: Int,
+        provisional: ProvisionalBreak,
+        commands: [TimerCommand],
+        seen: inout Set<String>
+    ) -> [CoreTimerDependency] {
+        var dependencies: [CoreTimerDependency] = []
+        var parentID = provisional.startCommandId
+        for command in commands.suffix(from: startIndex + 1) {
+            if command.type == .start { break }
+            guard command.timerId == provisional.breakTimerId else { continue }
+            if seen.insert(command.id).inserted {
+                dependencies.append(CoreTimerDependency(
+                    operationId: command.id, dependsOnOperationId: parentID
+                ))
+            }
+            parentID = command.id
         }
         return dependencies
     }
@@ -653,6 +717,8 @@ private extension AccountSynchronization {
         request: BootstrapResolveRequest
     ) {
         state.pendingCommands = []
+        state.legacyTimerDependencyUpgrade = false
+        state.legacyUnresolvedCommandIDs = []
         state.localCommandDates = [:]
         state.pendingTaskOperations = []
         state.pendingDurationOperations = []
@@ -660,6 +726,7 @@ private extension AccountSynchronization {
         if request.selectedTaskOperations != nil { state.pendingSelectedTaskOperations = [] }
         state.localTimerOwners = [:]
         state.provisionalBreaks = []
+        state.pendingTimerDependencies = []
         state.provisionalPhaseAdvances = []
         state.knownTasks = response.tasks
         state.legacyTaskAssignments = [:]
@@ -679,6 +746,24 @@ private extension AccountSynchronization {
         let core = try sharedCoreProvider()
         sharedCore = core
         return core
+    }
+}
+
+enum LegacyTimerDependencyReview: LocalizedError {
+    case required
+
+    var errorDescription: String? {
+        String(localized: "Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.")
+    }
+}
+
+// Old schema records no source command ID after a focus Finish ACK removes
+// provisionalBreaks. Quarantine every old command identity, including a lone
+// child Finish; no shape or never-sent proof can establish missing provenance.
+private enum LegacyBreakDependencyRecovery {
+    static func requiresReview(_ state: PersistedTimerState) -> Bool {
+        !state.legacyUnresolvedCommandIDs.isEmpty
+            || (state.legacyTimerDependencyUpgrade && state.hasCorruptPendingOperations)
     }
 }
 

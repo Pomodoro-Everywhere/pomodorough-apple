@@ -14,6 +14,7 @@ struct TimerMachineCard: View {
     /// measured width instead of a fixed width, so it scales across
     /// phone sizes without device-specific constants.
     var landscapeWidth: CGFloat? = nil
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
 
     /// iOS stretch rule: landscape fills the parent-measured bounded height;
     /// portrait sizes to content inside the vertical ScrollView, where an
@@ -41,7 +42,8 @@ struct TimerMachineCard: View {
             layout: layout,
             usesCompactDial: usesCompactDial,
             landscapeHeight: landscapeHeight,
-            landscapeWidth: landscapeWidth
+            landscapeWidth: landscapeWidth,
+            hinge: hinge
         )
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -67,6 +69,7 @@ private struct TimerMachineCardContent: View {
     var usesCompactDial = false
     var landscapeHeight: CGFloat? = nil
     var landscapeWidth: CGFloat? = nil
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
 
     var body: some View {
         Group {
@@ -79,10 +82,16 @@ private struct TimerMachineCardContent: View {
                     layout: layout,
                     usesCompactDial: usesCompactDial,
                     landscapeHeight: landscapeHeight,
-                    landscapeWidth: landscapeWidth
+                    landscapeWidth: landscapeWidth,
+                    hinge: hinge
                 )
             } else {
-                TimerMachineIOSPortraitCard(model: model, layout: layout, usesCompactDial: usesCompactDial)
+                TimerMachineIOSPortraitCard(
+                    model: model,
+                    layout: layout,
+                    usesCompactDial: usesCompactDial,
+                    hinge: hinge
+                )
             }
             #endif
         }
@@ -150,6 +159,7 @@ private struct TimerMachineIOSLandscapeCard: View {
     var usesCompactDial = false
     var landscapeHeight: CGFloat? = nil
     var landscapeWidth: CGFloat? = nil
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -163,15 +173,26 @@ private struct TimerMachineIOSLandscapeCard: View {
     private var stacksLandscape: Bool { false }
     #endif
 
+    private var placesAside: Bool {
+        TimerHingeLayout.shouldPlaceDialAsideControls(
+            containerSize: hinge.containerSize,
+            divisions: hinge.divisions
+        )
+    }
+
     var body: some View {
         // Phone landscape: dial on the left, picker and controls stacked
         // in a side column on the right. Regular x regular stacks instead.
-        if stacksLandscape {
+        // Book vertical fold places dial aside controls so the countdown
+        // and Finish sit on opposite panels with the fold in the gap.
+        if placesAside {
+            bookAsideContent
+        } else if stacksLandscape {
             VStack {
                 TimerMachineDialSection(model: model, layout: .landscape)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 TimerTaskPicker(model: model, layout: layout)
-                TimerControls(model: model, layout: layout)
+                TimerControls(model: model, layout: layout, hinge: hinge)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding()
@@ -181,7 +202,7 @@ private struct TimerMachineIOSLandscapeCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 VStack(spacing: 12) {
                     TimerTaskPicker(model: model, layout: layout)
-                    TimerControls(model: model, layout: layout)
+                    TimerControls(model: model, layout: layout, hinge: hinge)
                 }
                 // Proportional share of the measured card width; nil falls
                 // back to content sizing. Narrow landscape (SE/12 mini)
@@ -194,24 +215,63 @@ private struct TimerMachineIOSLandscapeCard: View {
             .padding(14)
         }
     }
+
+    private var bookAsideContent: some View {
+        HStack(spacing: 14) {
+            TimerMachineDialSection(model: model, layout: .landscape)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 12) {
+                TimerTaskPicker(model: model, layout: layout)
+                TimerControls(model: model, layout: layout, hinge: hinge)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
 }
 
 private struct TimerMachineIOSPortraitCard: View {
     let model: AppModel
     let layout: TimerLayout
     var usesCompactDial = false
+    var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
+
+    private var placesAside: Bool {
+        TimerHingeLayout.shouldPlaceDialAsideControls(
+            containerSize: hinge.containerSize,
+            divisions: hinge.divisions
+        )
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            TimerMachineDialSection(model: model, layout: layout)
-                .frame(width: usesCompactDial ? 270 : nil)
-            Spacer(minLength: usesCompactDial ? 8 : 14)
-            VStack(spacing: usesCompactDial ? 8 : 14) {
-                TimerTaskPicker(model: model, layout: layout)
-                TimerControls(model: model, layout: layout, compact: usesCompactDial)
+        if placesAside {
+            bookAsideContent
+        } else {
+            VStack(spacing: 0) {
+                TimerMachineDialSection(model: model, layout: layout)
+                    .frame(width: usesCompactDial ? 270 : nil)
+                Spacer(minLength: usesCompactDial ? 8 : 14)
+                VStack(spacing: usesCompactDial ? 8 : 14) {
+                    TimerTaskPicker(model: model, layout: layout)
+                    TimerControls(model: model, layout: layout, compact: usesCompactDial, hinge: hinge)
+                }
             }
+            .padding(usesCompactDial ? 14 : 16)
         }
-        .padding(usesCompactDial ? 14 : 16)
+    }
+
+    private var bookAsideContent: some View {
+        HStack(spacing: 14) {
+            TimerMachineDialSection(model: model, layout: layout)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 14) {
+                TimerTaskPicker(model: model, layout: layout)
+                TimerControls(model: model, layout: layout, compact: usesCompactDial, hinge: hinge)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(16)
     }
 }
 

@@ -126,6 +126,27 @@ struct AppleHighFindingsTests {
             #expect(TimerTaskPicker.pickerLineLimit(for: size) == nil)
         }
     }
+
+    @Test func pickerUsesLeadingAlignmentInStackedLayout() {
+        #expect(TimerTaskPicker.pickerAlignment(for: .large) == .trailing)
+        #expect(TimerTaskPicker.pickerAlignment(for: .accessibility3) == .leading)
+        #expect(TimerTaskPicker.pickerMultilineAlignment(for: .large) == .trailing)
+        #expect(TimerTaskPicker.pickerMultilineAlignment(for: .accessibility3) == .leading)
+    }
+
+    @Test func pickerReserveAddsOneLineAtAccessibilitySizes() {
+        #if os(iOS)
+        #expect(TimerTaskPicker.pickerReserveHeight(for: .large) == 0)
+        #expect(TimerTaskPicker.pickerReserveHeight(for: .accessibility3) > 0)
+        let large = TimerTaskPicker.menuFont(for: .large).lineHeight
+        let xxxl = TimerTaskPicker.menuFont(for: .accessibility5).lineHeight
+        #expect(xxxl > large)
+        #expect(TimerTaskPicker.pickerReserveHeight(for: .accessibility5) == xxxl)
+        #else
+        #expect(TimerTaskPicker.pickerReserveHeight(for: .large) == 0)
+        #expect(TimerTaskPicker.pickerReserveHeight(for: .accessibility3) == 0)
+        #endif
+    }
 }
 
 // Pins the Apple MEDIUM/LOW-findings fixes: proportional breakdown chart

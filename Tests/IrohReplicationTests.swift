@@ -963,6 +963,16 @@ struct IrohReplicationTests {
         var state = PersistedTimerState.fresh()
         state.tasks = [task]
         state.knownTasks = [task]
+        state.pendingCommands = [
+            TestFixtures.command(.start, sequence: 1, elapsed: 0),
+            TestFixtures.command(.finish, sequence: 2, elapsed: 60_000)
+        ]
+        state.pendingTimerDependencies = [CoreTimerDependency(
+            operationId: state.pendingCommands[1].id,
+            dependsOnOperationId: state.pendingCommands[0].id
+        )]
+        state.legacyTimerDependencyUpgrade = true
+        state.legacyUnresolvedCommandIDs = Set(state.pendingCommands.map(\.id))
         state = try store.createRoom(
             roomID: roomID,
             roomSecret: secret,
@@ -978,6 +988,16 @@ struct IrohReplicationTests {
                 hlcCounter: 0
             )
         )
+        #expect(state.pendingCommands.isEmpty)
+        #expect(!state.legacyTimerDependencyUpgrade)
+        #expect(state.pendingTimerDependencies.isEmpty)
+        #expect(state.legacyUnresolvedCommandIDs.isEmpty)
+        #expect(store.activeReturnState?.legacyTimerDependencyUpgrade == true)
+        #expect(store.activeReturnState?.legacyUnresolvedCommandIDs == ["command-test1", "command-test2"])
+        #expect(store.activeReturnState?.pendingTimerDependencies == [CoreTimerDependency(
+            operationId: "command-test2", dependsOnOperationId: "command-test1"
+        )])
+        state.legacyTimerDependencyUpgrade = true
         state.pendingSelectedTaskOperations = [SelectedTaskOperation(
             id: try #require(UUID(uuidString: "01a0219e-0800-7006-8000-000000000006")),
             deviceId: state.deviceId,
@@ -990,6 +1010,9 @@ struct IrohReplicationTests {
         let selected = try store.captureLocalOperations(from: state)
         #expect(selected.selectedTaskID == task.id)
         #expect(selected.pendingSelectedTaskOperations.isEmpty)
+        #expect(!selected.legacyTimerDependencyUpgrade)
+        #expect(selected.legacyUnresolvedCommandIDs.isEmpty)
+        #expect(store.activeReturnState?.legacyTimerDependencyUpgrade == true)
         let records = try store.operations(
             roomID: roomID,
             references: [IrohInventoryReference(

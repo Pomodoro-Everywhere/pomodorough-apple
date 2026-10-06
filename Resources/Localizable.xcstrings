@@ -3233,6 +3233,16 @@
         }
       }
     },
+    "Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device."
+          }
+        }
+      }
+    },
     "Sync status, %@" : {
       "localizations" : {
         "en" : {

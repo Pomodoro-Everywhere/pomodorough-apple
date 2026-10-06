@@ -1891,6 +1891,192 @@ struct IntegrationNegativeTests {
         #expect(try persistedState(defaults).pendingBootstrapResolution == request)
     }
 
+    @Test(arguments: [BootstrapResolutionStrategy.merge, .replaceRemote], [false, true])
+    @MainActor
+    func restoredLegacyBootstrapRequestCannotBypassTransportFence(
+        strategy: BootstrapResolutionStrategy, mixed: Bool
+    ) async throws {
+        let scenario = "bootstrap-legacy-transport-fence-\(strategy.rawValue)-\(mixed)"
+        let suite = "LegacyBootstrapTransport.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var initial = try bootstrapTransportState(strategy: strategy, mixed: mixed)
+        initial.legacyUnresolvedCommandIDs = mixed ? [initial.pendingCommands[0].id]
+            : Set(initial.pendingCommands.map(\.id))
+        initial.legacyTimerDependencyUpgrade = true
+        let request = try #require(initial.pendingBootstrapResolution)
+        let originalRequest = try JSONEncoder.api.encode(request)
+        let originalCommands = try JSONEncoder.api.encode(initial.pendingCommands)
+        defaults.set(try JSONEncoder.api.encode(initial), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        for _ in 0..<2 {
+            let model = AppModel(api: APIClient(session: session, keychain: StaticTokenStore()),
+                defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
+                alarmScheduler: RecordingAlarmScheduler(), retryDelay: .milliseconds(10))
+            await model.restore()
+            await model.retryHistoryResolution()
+            try await Task.sleep(for: .milliseconds(40))
+            #expect(model.errorMessage?.contains("Contact support") == true)
+            #expect(model.historyResolutionState == .retryable(strategy))
+            #expect(!model.isOffline)
+            let retained = try persistedState(defaults)
+            #expect(try JSONEncoder.api.encode(retained.pendingBootstrapResolution) == originalRequest)
+            #expect(try JSONEncoder.api.encode(retained.pendingCommands) == originalCommands)
+            #expect(retained.neverSentCommandIDs == initial.neverSentCommandIDs)
+            #expect(retained.legacyUnresolvedCommandIDs == initial.legacyUnresolvedCommandIDs)
+        }
+        let requests = TestFixtures.recordedRequests(for: scenario)
+        #expect(requests.contains { $0.path == "/api/v1/me" })
+        #expect(requests.allSatisfy { $0.method != "POST" })
+    }
+
+    @Test(arguments: [BootstrapResolutionStrategy.merge, .replaceRemote])
+    @MainActor
+    func currentSchemaBootstrapReplayKeepsOriginalTransportBytes(strategy: BootstrapResolutionStrategy) async throws {
+        let scenario = "bootstrap-current-transport-replay-\(strategy.rawValue)"
+        let suite = "CurrentBootstrapTransport.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let initial = try bootstrapTransportState(strategy: strategy, mixed: true)
+        let request = try #require(initial.pendingBootstrapResolution)
+        defaults.set(try JSONEncoder.api.encode(initial), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let model = AppModel(api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler())
+        await model.restore()
+        let posted = try #require(TestFixtures.recordedRequests(for: scenario).first {
+            $0.path == "/api/v1/bootstrap/resolve"
+        })
+        #expect(try JSONEncoder.api.encode(decodedResolutionRequest(posted)) == JSONEncoder.api.encode(request))
+        #expect(model.historyResolutionState == .none, "Replay error: \(model.errorMessage ?? "nil")")
+        #expect(try persistedState(defaults).pendingBootstrapResolution == nil)
+        #expect(try persistedState(defaults).cachedUser == TestFixtures.user)
+    }
+
+    @Test @MainActor
+    func freshBootstrapSubmissionChecksLegacyStateBeforeSavingOrRetiringProof() async throws {
+        let scenario = "bootstrap-empty-legacy-new-submission"
+        let suite = "LegacyBootstrapNewSubmission.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var initial = try bootstrapTransportState(strategy: .merge, mixed: true)
+        initial.pendingBootstrapResolution = nil
+        let newCommand = try #require(initial.pendingCommands.last)
+        initial.recordNeverSentCommand(id: newCommand.id)
+        for operation in initial.pendingTaskOperations { initial.recordNeverSentTaskOperation(id: operation.id) }
+        initial.legacyUnresolvedCommandIDs = [initial.pendingCommands[0].id]
+        initial.legacyTimerDependencyUpgrade = true
+        let original = try JSONEncoder.api.encode(initial.pendingCommands)
+        defaults.set(try JSONEncoder.api.encode(initial), forKey: "timer-state-v2")
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let model = AppModel(api: APIClient(session: session, keychain: StaticTokenStore()),
+            defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(), retryDelay: .milliseconds(10))
+        await model.restore()
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(model.errorMessage?.contains("Contact support") == true)
+        let retained = try persistedState(defaults)
+        #expect(retained.pendingBootstrapResolution == nil)
+        #expect(try JSONEncoder.api.encode(retained.pendingCommands) == original)
+        #expect(retained.neverSentCommandIDs == initial.neverSentCommandIDs)
+        #expect(retained.neverSentTaskOperationIDs == initial.neverSentTaskOperationIDs)
+        let requests = TestFixtures.recordedRequests(for: scenario)
+        #expect(requests.count { $0.path == "/api/v1/bootstrap" } == 1)
+        #expect(requests.allSatisfy { $0.method != "POST" })
+    }
+
+    @Test(arguments: [BootstrapResolutionStrategy.merge, .replaceRemote, .keepRemote])
+    @MainActor
+    func bootstrapResponseReceivedBeforeLegacyUpgradeStillInstallsAuthoritativeState(
+        strategy: BootstrapResolutionStrategy
+    ) async throws {
+        let scenario = "bootstrap-received-before-legacy-upgrade-\(strategy.rawValue)"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        var state = try bootstrapTransportState(strategy: strategy, mixed: false)
+        let request = try #require(state.pendingBootstrapResolution)
+        let bytes = try JSONEncoder.api.encode(request)
+        let response = try await sync.sendBootstrapResolution(request, state: state)
+        state.legacyUnresolvedCommandIDs = Set(state.pendingCommands.map(\.id))
+        state.legacyTimerDependencyUpgrade = true
+        let installed = try sync.reconcileBootstrapResolution(response, request: request,
+                                                              state: state, user: TestFixtures.user).state
+        #expect(installed.cachedUser == TestFixtures.user)
+        #expect(installed.pendingBootstrapResolution == nil)
+        #expect(installed.pendingCommands.isEmpty)
+        #expect(installed.legacyUnresolvedCommandIDs.isEmpty)
+        #expect(!installed.legacyTimerDependencyUpgrade)
+        #expect(installed.history == response.value.history)
+        #expect(try JSONEncoder.api.encode(state.pendingBootstrapResolution) == bytes)
+        #expect(TestFixtures.recordedRequests(for: scenario).count { $0.method == "POST" } == 1)
+    }
+
+    @Test @MainActor
+    func sendBoundariesRecheckCurrentLegacyIDsForCapturedRequests() async throws {
+        let scenario = "bootstrap-direct-legacy-transport-fences"
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        var state = try bootstrapTransportState(strategy: .merge, mixed: true)
+        let request = try #require(state.pendingBootstrapResolution)
+        let plan = sync.makeSyncPlan(state: state)
+        let original = try JSONEncoder.api.encode(state.pendingCommands)
+        state.legacyUnresolvedCommandIDs = [state.pendingCommands[0].id]
+        state.legacyTimerDependencyUpgrade = true
+        do {
+            _ = try await sync.sendSync(plan, state: state)
+            Issue.record("Captured sync plan bypassed current legacy fence")
+        } catch LegacyTimerDependencyReview.required { }
+        do {
+            _ = try await sync.sendBootstrapResolution(request, state: state)
+            Issue.record("Saved bootstrap request bypassed current legacy fence")
+        } catch LegacyTimerDependencyReview.required { }
+        let malformedKeepRemote = BootstrapResolveRequest(
+            requestId: request.requestId, deviceId: request.deviceId,
+            expectedRevision: request.expectedRevision, strategy: .keepRemote,
+            commands: request.commands, taskOperations: [], durationOperations: [],
+            autoStartOperations: [], selectedTaskOperations: []
+        )
+        do {
+            _ = try await sync.sendBootstrapResolution(malformedKeepRemote, state: state)
+            Issue.record("Keep-remote request smuggled legacy timer identities")
+        } catch LegacyTimerDependencyReview.required { }
+        _ = try await sync.sendBootstrapPreflight(state: state)
+        #expect(try JSONEncoder.api.encode(state.pendingCommands) == original)
+        #expect(TestFixtures.recordedRequests(for: scenario).allSatisfy {
+            $0.method == "GET" && $0.path == "/api/v1/bootstrap" && $0.body == nil
+        })
+    }
+
+    private func bootstrapTransportState(
+        strategy: BootstrapResolutionStrategy, mixed: Bool
+    ) throws -> PersistedTimerState {
+        var state = try unresolvedBootstrapState()
+        let prior = try #require(state.pendingBootstrapResolution)
+        if mixed {
+            let newCommand = TestFixtures.command(.clear, sequence: 3, elapsed: 0, timerID: "new-independent-timer")
+            state.pendingCommands.append(newCommand)
+        }
+        state.pendingBootstrapResolution = BootstrapResolveRequest(
+            requestId: prior.requestId, deviceId: prior.deviceId, expectedRevision: prior.expectedRevision,
+            strategy: strategy, commands: strategy == .keepRemote ? [] : state.pendingCommands,
+            taskOperations: strategy == .keepRemote ? [] : prior.taskOperations,
+            durationOperations: strategy == .keepRemote ? [] : prior.durationOperations,
+            autoStartOperations: strategy == .keepRemote ? [] : prior.autoStartOperations,
+            selectedTaskOperations: strategy == .keepRemote ? [] : prior.selectedTaskOperations
+        )
+        return state
+    }
+
     @Test @MainActor
     func lowerRevisionNormalSyncResponseIsRejectedAtomically() async throws {
         let scenario = "sync-contract-revision-lower"

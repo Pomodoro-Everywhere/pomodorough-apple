@@ -653,6 +653,29 @@ struct SentryCaptureTests {
         SentrySetup.startIfConfigured()
     }
 
+    // R43-AP09: startup must stay off in simulator and test processes.
+    // Wrapper suppression alone cannot stop automatic SDK paths (crash,
+    // watchdog, hang, breadcrumb, session, replay) once start runs.
+    @Test
+    func sentryStartupGateBlocksSimulatorAndTestProcesses() {
+        #expect(SentrySetup.shouldStart(dsn: "", isSimulator: false, isTestProcess: false) == false)
+        #expect(SentrySetup.shouldStart(dsn: "https://key@host/1", isSimulator: true, isTestProcess: false) == false)
+        #expect(SentrySetup.shouldStart(dsn: "https://key@host/1", isSimulator: false, isTestProcess: true) == false)
+        #expect(SentrySetup.shouldStart(dsn: "https://key@host/1", isSimulator: true, isTestProcess: true) == false)
+        #expect(SentrySetup.shouldStart(dsn: "https://key@host/1", isSimulator: false, isTestProcess: false) == true)
+    }
+
+    // R43-AP09: TestFlight builds must not share the production
+    // environment. Earlier backlog claimed this classification shipped,
+    // but sentryEnvironment only returned development/production.
+    @Test
+    func sentryEnvironmentSeparatesTestFlightFromProduction() {
+        #expect(SentrySetup.environment(isDebug: true, isTestFlight: false) == "development")
+        #expect(SentrySetup.environment(isDebug: true, isTestFlight: true) == "development")
+        #expect(SentrySetup.environment(isDebug: false, isTestFlight: true) == "testflight")
+        #expect(SentrySetup.environment(isDebug: false, isTestFlight: false) == "production")
+    }
+
     // AP31: silent persistence, migration, replication, and model boundaries
     // keep their user-visible outcome and capture Error-only with no PII.
     // Watch log-only paths are unchanged and not covered here.

@@ -2,6 +2,115 @@ import XCTest
 
 @MainActor
 final class PomodoroughAccessibilityUITests: XCTestCase {
+    // XCTest has no Duo pose API. Run on a Closed Duo with
+    // TEST_RUNNER_POMODOROUGH_DUO_POSE=Open (or Book), then select that
+    // Device Hub pose after AP01_READY. A real display transition is required;
+    // a timeout fails instead of treating a static unfolded launch as coverage.
+    // The environment names the requested pose, not observed hinge state.
+    // External evidence must verify Closed and the selected Open/Book pose,
+    // then require this exact test to pass with zero skips in the xcresult.
+    func testDuoClosedToUnfoldedKeepsNavigationReachable() throws {
+        let pose = ProcessInfo.processInfo.environment["POMODOROUGH_DUO_POSE"]
+        try XCTSkipUnless(pose == "Open" || pose == "Book", "Requires external Duo pose driver")
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        let closedFrame = app.frame
+        XCTAssertLessThan(closedFrame.width, closedFrame.height)
+        assertPrimaryNavigationReachable(in: app)
+        print("AP01_READY Closed -> \(pose ?? "") frame=\(closedFrame)")
+        let unfolded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            // XCTest can report the unfolded app in portrait coordinates.
+            // Rotation alone preserves area; switching displays increases it.
+            app.frame.width * app.frame.height > closedFrame.width * closedFrame.height
+        }, object: app)
+        XCTAssertEqual(XCTWaiter().wait(for: [unfolded], timeout: 120), .completed)
+        print("AP01_UNFOLDED \(pose ?? "") frame=\(app.frame)")
+        attachNavigationEvidence("AP01-\(pose ?? "")", in: app)
+        assertPrimaryNavigationReachable(in: app)
+    }
+
+    func testPhoneLandscapeTimerChromeRestoresNavigationOnPortrait() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_LAYOUT"] = "1"
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+        app.buttons["Start focus"].tap()
+        XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 5))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let compactLandscape = try waitForLandscapeEligibility(in: app)
+        try XCTSkipUnless(compactLandscape, "Measured regular x regular landscape keeps native chrome; phone-only assertion is ineligible")
+        waitForHittable(app.buttons["Pause"], timeout: 5)
+        XCTAssertFalse(app.buttons["Tasks"].isHittable)
+        XCTAssertFalse(app.buttons["Account"].isHittable)
+        app.buttons["Pause"].tap()
+        XCTAssertTrue(app.buttons["Resume"].waitForExistence(timeout: 5))
+        attachNavigationEvidence("AP01-phone-landscape", in: app)
+        XCUIDevice.shared.orientation = .portrait
+        assertPrimaryNavigationReachable(in: app)
+        XCTAssertTrue(app.buttons["Resume"].exists)
+    }
+
+    private func waitForLandscapeEligibility(in app: XCUIApplication) throws -> Bool {
+        let probe = app.staticTexts["AP01-layout"]
+        XCTAssertTrue(probe.waitForExistence(timeout: 5), "Missing DEBUG layout inputs")
+        let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let fields = (probe.value as? String ?? "").split(separator: "|")
+            guard fields.count == 5, let width = Double(fields[0]),
+                  let height = Double(fields[1]) else { return false }
+            return width > height && height > 0 && app.frame.width > app.frame.height
+        }, object: probe)
+        XCTAssertEqual(XCTWaiter().wait(for: [landscape], timeout: 10), .completed,
+                       "Rotation must reach measured landscape before eligibility is checked")
+        let inputs = try XCTUnwrap(probe.value as? String)
+        let fields = inputs.split(separator: "|").map(String.init)
+        XCTAssertEqual(fields.count, 5)
+        guard fields.count == 5 else { throw NSError(domain: "AP01-layout", code: 1) }
+        XCTAssertTrue(["compact", "regular"].contains(fields[2]))
+        XCTAssertTrue(["compact", "regular"].contains(fields[3]))
+        XCTAssertEqual(fields[4], "false", "Compatibility run must use standard Dynamic Type")
+        let compact = fields[2] == "compact" || fields[3] == "compact"
+        print("AP01_ELIGIBILITY compact=\(compact) inputs=\(inputs)")
+        return compact
+    }
+
+    private func assertPrimaryNavigationReachable(in app: XCUIApplication) {
+        let destinations = [("Tasks", "Task board"), ("Pattern", "Focus duration"),
+                            ("Arrivals", "No arrivals yet"), ("Timer", "Focus timer")]
+        for (route, content) in destinations {
+            let tab = app.buttons[route]
+            XCTAssertTrue(tab.waitForExistence(timeout: 5), "Missing \(route)")
+            waitForHittable(tab, timeout: 5)
+            tab.tap()
+            XCTAssertTrue(elements(labelled: content, in: app).firstMatch.waitForExistence(timeout: 5))
+            waitForHittable(app.buttons["Account"], timeout: 5)
+            app.buttons["Account"].tap()
+            XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Network"].exists)
+            app.buttons["Done"].tap()
+            waitForDisappearance(of: app.navigationBars["Account"], timeout: 5)
+        }
+    }
+
+    private func attachNavigationEvidence(_ name: String, in app: XCUIApplication) {
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(name)-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+    }
+
     func testVoiceOverUsesOneElementPerTimerTaskAndPhaseControl() {
         continueAfterFailure = false
         let app = makeApplication()
@@ -86,11 +195,25 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
             XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
             if aboveTabs {
-                let tab = app.buttons["Timer"]
-                XCTAssertTrue(tab.waitForExistence(timeout: 5))
-                XCTAssertLessThanOrEqual(button.frame.maxY, tab.frame.minY)
+                let timerTab = app.buttons["Timer"]
+                XCTAssertTrue(timerTab.waitForExistence(timeout: 5))
+                XCTAssertTrue(
+                    app.frame.contains(button.frame),
+                    "\(label) escapes app frame: \(button.frame) in \(app.frame)"
+                )
+                for route in ["Timer", "Tasks", "Pattern", "Arrivals"] {
+                    let other = app.buttons[route]
+                    guard other.exists else { continue }
+                    XCTAssertFalse(
+                        button.frame.intersects(other.frame),
+                        "\(label) overlaps \(route): \(button.frame) vs \(other.frame)"
+                    )
+                }
             } else {
-                XCTAssertLessThanOrEqual(button.frame.maxY, app.frame.height)
+                XCTAssertTrue(
+                    app.frame.contains(button.frame),
+                    "\(label) escapes app frame: \(button.frame) in \(app.frame)"
+                )
             }
         }
 
@@ -253,6 +376,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
 
     func testAccessibilityExtraExtraExtraLargeKeepsCoreTasksReachable() {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         let app = makeApplication()
         defer { app.terminate() }
         app.launchArguments += [
@@ -262,7 +386,10 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         launchAndWaitForTimer(app)
 
         XCTAssertTrue(app.navigationBars["Timer"].exists)
+        attachNavigationEvidence("AP10-XXXL-before-scroll", in: app)
+        revealAccessibleTimerControl("Start focus", in: app)
         XCTAssertTrue(app.buttons["Start focus"].isHittable)
+        exerciseAccessibleTimer(in: app)
 
         app.buttons["Tasks"].tap()
         XCTAssertTrue(elements(labelled: "Task board", in: app).firstMatch.waitForExistence(timeout: 5))
@@ -274,6 +401,62 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertEqual(focusDuration.value as? String, "25 minutes")
         XCTAssertTrue(app.buttons["Reduce Focus duration"].exists)
         XCTAssertTrue(app.buttons["Increase Focus duration"].exists)
+    }
+
+    private func exerciseAccessibleTimer(in app: XCUIApplication) {
+        let actions = [
+            ("Start focus", "Focus timer", "Running"),
+            ("Pause", "Focus timer", "Paused"),
+            ("Resume", "Focus timer", "Running"),
+            ("Finish timer", "Short break timer", "Idle"),
+            ("Skip to Focus", "Focus timer", "Idle"),
+            ("Start focus", "Focus timer", "Running"),
+            ("Cancel timer", "Focus timer", "Idle"),
+        ]
+        for (action, timer, status) in actions {
+            revealAccessibleTimerControl(action, in: app)
+            attachNavigationEvidence("AP10-XXXL-\(action)", in: app)
+            // A physical tap at the visible control, without XCTest auto-scroll.
+            app.buttons[action].coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).tap()
+            let readout = elements(labelled: timer, in: app).firstMatch
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value ENDSWITH %@", status), object: readout
+            )
+            XCTAssertEqual(XCTWaiter().wait(for: [changed], timeout: 5), .completed,
+                           "\(action) must produce \(timer), \(status)")
+        }
+        let progress = elements(labelled: "Pomodoro progress", in: app).firstMatch
+        XCTAssertEqual(progress.value as? String,
+                       "1 of 4 toward the next long break, 1 completed today",
+                       "Finish records one focus; Cancel must not complete another")
+        XCTAssertFalse(app.buttons["Pause"].exists)
+        XCTAssertFalse(app.buttons["Resume"].exists)
+        attachNavigationEvidence("AP10-XXXL-cancelled", in: app)
+    }
+
+    private func revealAccessibleTimerControl(_ label: String, in app: XCUIApplication) {
+        let button = app.buttons[label]
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing \(label)")
+        let scroll = app.scrollViews.firstMatch
+        XCTAssertTrue(scroll.exists)
+        // XXXL needs scrolling on short phones. Keep gestures inside content,
+        // clear of the navigation and tab bars; never shrink the user's text.
+        for _ in 0..<8 {
+            let top = max(scroll.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+            let bottom = min(scroll.frame.maxY, app.buttons["Timer"].frame.minY)
+            let frame = button.frame
+            if button.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
+            let viewport = CGRect(x: scroll.frame.minX, y: top,
+                                  width: scroll.frame.width, height: bottom - top)
+            XCTAssertGreaterThan(viewport.height, 0)
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let direction: CGFloat = frame.minY < top ? 1 : -1
+            let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
+            let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
+            start.press(forDuration: 0.01, thenDragTo: end)
+        }
+        attachNavigationEvidence("AP10-unreachable-\(label)", in: app)
+        XCTFail("\(label) not fully visible and hittable after bounded content scrolling")
     }
 
     func testNetworkSectionExposesModesRoomActionsAndPrivacyCopy() {
@@ -361,6 +544,47 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Start focus"].exists)
     }
 
+    /// R43-AP08: digit-specific countdown growth, independent of the
+    /// "Focus timer" accessibility substitute. Queries the real rendered
+    /// digits by AP08 identifier, asserts visual growth with Dynamic Type
+    /// and containment without clipping, with screenshots per size.
+    func testDialFaceCountdownDigitsGrowAndStayContained() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let baseline = measureCountdownDigits(contentSize: "UICTContentSizeCategoryAccessibilityXL")
+        let large = measureCountdownDigits(contentSize: "UICTContentSizeCategoryAccessibilityXXXL")
+        XCTAssertEqual(baseline.label, "25:00")
+        XCTAssertEqual(large.label, "25:00")
+        XCTAssertGreaterThan(large.frame.height, baseline.frame.height)
+        XCTAssertGreaterThan(large.frame.width, baseline.frame.width)
+    }
+
+    /// Launches the idle timer with the AP08 digit probe and returns the
+    /// real digit frame. Asserts containment without clipping and attaches
+    /// visual evidence. Never queries "Focus timer": independence from the
+    /// substitute is explicit; probe mode hides the substitute.
+    private func measureCountdownDigits(contentSize: String) -> (frame: CGRect, label: String) {
+        let app = makeApplication()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_DIAL"] = "1"
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSize]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        let digits = app.staticTexts["AP08-countdown-digits"]
+        XCTAssertTrue(digits.waitForExistence(timeout: 5), "Missing real countdown digits at \(contentSize)")
+        let frame = digits.frame
+        XCTAssertGreaterThan(frame.height, 0)
+        XCTAssertGreaterThan(frame.width, 0)
+        XCTAssertTrue(app.frame.contains(frame), "digits escape app frame at \(contentSize): \(frame) in \(app.frame)")
+        XCTAssertEqual(elements(labelled: "Focus timer", in: app).count, 0, "probe mode must not use substitute")
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "AP08-digits-\(contentSize)"
+        shot.lifetime = .keepAlways
+        add(shot)
+        print("AP08_DIGITS contentSize=\(contentSize) label=\(digits.label) frame=\(frame) app=\(app.frame)")
+        return (frame, digits.label)
+    }
+
     func testCompactTaskRowGivesTitleSpaceAboveMetrics() {
         continueAfterFailure = false
         let app = makeApplication()
@@ -415,6 +639,89 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertFalse(row.waitForExistence(timeout: 5))
     }
 
+    func testTaskDeleteTargetEdgesAndCorners() {
+        assertTaskDeleteTargetPerimeter(contentSize: "UICTContentSizeCategoryL")
+    }
+
+    func testTaskDeleteTargetEdgesAndCornersAtAccessibilityXXXL() {
+        assertTaskDeleteTargetPerimeter(contentSize: "UICTContentSizeCategoryAccessibilityXXXL")
+    }
+
+    private func assertTaskDeleteTargetPerimeter(contentSize: String) {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSize]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        let titles = ["AP03 target", "AP03 neighbor"]
+        for title in titles { createTaskForDeletionTest(named: title, in: app) }
+        let perimeter: [CGVector] = [
+            .init(dx: 0.05, dy: 0.05), .init(dx: 0.5, dy: 0.05),
+            .init(dx: 0.95, dy: 0.05), .init(dx: 0.95, dy: 0.5),
+            .init(dx: 0.95, dy: 0.95), .init(dx: 0.5, dy: 0.95),
+            .init(dx: 0.05, dy: 0.95), .init(dx: 0.05, dy: 0.5),
+        ]
+        for (index, point) in perimeter.enumerated() {
+            let title = titles[index % titles.count]
+            revealTaskDeleteButton(named: title, in: app)
+            assertTaskDeleteTap(point, named: title, in: app)
+        }
+        // Check persisted cancellation, not just an unchanged row snapshot.
+        app.terminate()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_RESET"] = nil
+        launchAndWaitForTimer(app)
+        app.buttons["Tasks"].tap()
+        for title in titles {
+            revealTaskDeleteButton(named: title, in: app)
+            XCTAssertTrue(app.staticTexts[title].exists)
+        }
+    }
+
+    private func revealTaskDeleteButton(named title: String, in app: XCUIApplication) {
+        let button = app.buttons["Delete \(title)"]
+        let scroll = app.scrollViews.firstMatch
+        for _ in 0..<12 {
+            let frame = button.exists ? button.frame : .zero
+            let visibleBottom = app.buttons["Tasks"].frame.minY
+            let visibleTop = app.navigationBars.firstMatch.frame.maxY
+            if button.isHittable && frame.minY > visibleTop
+                && frame.maxY < visibleBottom { return }
+            let start = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+            let direction: CGFloat = frame != .zero && frame.minY <= visibleTop ? 1 : -1
+            start.press(forDuration: 0.01, thenDragTo: start.withOffset(
+                .init(dx: 0, dy: direction * scroll.frame.height * 0.2)
+            ))
+        }
+        XCTFail("Task delete button not fully visible: \(title)")
+    }
+
+    private func assertTaskDeleteTap(_ point: CGVector, named title: String, in app: XCUIApplication) {
+        let button = app.buttons["Delete \(title)"]
+        XCTAssertEqual(app.buttons.matching(identifier: "Delete \(title)").count, 1)
+        let frame = button.frame
+        // Derive the intended minimum target around the measured control, even
+        // when the broken baseline exposes only the 19x21-point icon.
+        let width = max(44, frame.width)
+        let height = max(44, frame.height)
+        let location = CGVector(dx: frame.midX + (point.dx - 0.5) * width,
+                                dy: frame.midY + (point.dy - 0.5) * height)
+        print("AP03 title=\(title) frame=\(frame) tap=\(location)")
+        app.coordinate(withNormalizedOffset: .zero).withOffset(location).tap()
+        let alert = app.alerts["Delete “\(title)”?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "Perimeter tap missed \(title) at \(point)")
+        XCTAssertTrue(alert.buttons["Delete task"].exists)
+        XCTAssertTrue(alert.buttons["Cancel"].exists)
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "AP03-\(title)-\(point.dx)-\(point.dy)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        alert.buttons["Cancel"].tap()
+        waitForDisappearance(of: alert, timeout: 5)
+        XCTAssertTrue(app.staticTexts[title].exists)
+        XCTAssertTrue(button.exists)
+    }
+
     private func createTaskForDeletionTest(named title: String, in app: XCUIApplication) {
         app.buttons["Tasks"].tap()
         let field = elements(labelled: "New task", in: app).firstMatch
@@ -453,6 +760,82 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             object: element
         )
         XCTAssertEqual(XCTWaiter().wait(for: [hittable], timeout: timeout), .completed)
+    }
+
+    /// R43-AP11: task picker text at largest fonts stays contained
+    /// without reducing Dynamic Type or shrinking text. Asserts the
+    /// selected title button stays inside the app frame and remains
+    /// hittable at AccessibilityXXXL, and that task selection still
+    /// works. Screenshots retain glyph-level evidence.
+    func testTaskPickerTitleStaysContainedAtAccessibilityXXXL() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+        assertPickerContained(labelPrefix: "Focus task", shot: "AP11-XXXL-Unassigned", in: app)
+        let title = "AP11 task"
+        createTaskForDeletionTest(named: title, in: app)
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+        selectPickerTask(named: title, in: app)
+        assertPickerContained(labelPrefix: "Focus task", shot: "AP11-XXXL-selected", in: app)
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.label.contains(title), "picker must show selected title, got \(picker.label)")
+    }
+
+    private func assertPickerContained(labelPrefix: String, shot: String, in app: XCUIApplication) {
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", labelPrefix)).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "Missing picker \(labelPrefix)")
+        revealPicker(picker, in: app)
+        XCTAssertTrue(picker.isHittable, "picker not hittable at XXXL")
+        XCTAssertTrue(app.frame.contains(picker.frame), "picker escapes app frame: \(picker.frame) in \(app.frame)")
+        let shotAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shotAttachment.name = shot
+        shotAttachment.lifetime = .keepAlways
+        add(shotAttachment)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(shot)-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        print("AP11_PICKER shot=\(shot) label=\(picker.label) frame=\(picker.frame) app=\(app.frame)")
+    }
+
+    private func revealPicker(_ picker: XCUIElement, in app: XCUIApplication) {
+        let scroll = app.scrollViews.firstMatch
+        XCTAssertTrue(scroll.exists)
+        for _ in 0..<8 {
+            let top = max(scroll.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+            let bottom = min(scroll.frame.maxY, app.buttons["Timer"].frame.minY)
+            let frame = picker.frame
+            if picker.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
+            let viewport = CGRect(x: scroll.frame.minX, y: top, width: scroll.frame.width, height: bottom - top)
+            XCTAssertGreaterThan(viewport.height, 0)
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let direction: CGFloat = frame.minY < top ? 1 : -1
+            let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
+            let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
+            start.press(forDuration: 0.01, thenDragTo: end)
+        }
+    }
+
+    private func selectPickerTask(named title: String, in app: XCUIApplication) {
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        revealPicker(picker, in: app)
+        picker.tap()
+        let option = app.buttons[title]
+        if option.waitForExistence(timeout: 5) {
+            option.tap()
+            return
+        }
+        let menuItem = app.menuItems[title]
+        XCTAssertTrue(menuItem.waitForExistence(timeout: 5), "Missing picker option \(title)")
+        menuItem.tap()
     }
 
     private func makeApplication() -> XCUIApplication {

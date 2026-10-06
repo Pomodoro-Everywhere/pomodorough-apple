@@ -100,6 +100,7 @@ final class AppModel {
     private(set) var isOffline = false
     private(set) var conflictMessage: String?
     private(set) var historyResolutionState: HistoryResolutionState = .none
+    private(set) var isHistoryResolutionOfflineEscapeActive = false
     private(set) var localHistoryResolutionCount = 0
     private(set) var remoteHistoryResolutionCount = 0
     private(set) var needsPermissionIntroduction = false
@@ -598,10 +599,23 @@ final class AppModel {
             || pendingAccountSwitchUser != nil
     }
     var hasPendingAccountDeletionRecovery: Bool { accountDeletionPurgeState != nil }
+    /// Offline escape from failed history preflight (R43-AP05). Allowed only
+    /// before any reconciliation is submitted: retryable without a strategy,
+    /// offline, account recovery pending, no submitted request. Submitted
+    /// reconciliation stays Retry-only so queued work cannot duplicate.
+    var isHistoryResolutionOfflineEscapeAllowed: Bool {
+        replicationMode == .centralized
+            && historyResolutionState == .retryable(nil)
+            && isOffline
+            && timerState.bootstrapUser != nil
+            && timerState.pendingBootstrapResolution == nil
+    }
     var isHistoryResolutionBlocking: Bool {
-        replicationMode == .centralized && (historyResolutionState != .none
-            || timerState.bootstrapUser != nil
-            || timerState.pendingBootstrapResolution != nil)
+        replicationMode == .centralized
+            && !isHistoryResolutionOfflineEscapeActive
+            && (historyResolutionState != .none
+                || timerState.bootstrapUser != nil
+                || timerState.pendingBootstrapResolution != nil)
     }
     var completedFocusCount: Int { history.count { $0.status == "completed" && $0.phase == .focus } }
     var completedFocusCountToday: Int {
@@ -1560,6 +1574,7 @@ final class AppModel {
     }
 
     func stopSound() {
+        CompletionChimePlayer.shared.stop()
         guard let alertTimerID = completionAlertTimerID else { return }
         completionAlertTimerID = nil
         cancelAlarm(timerID: alertTimerID)
@@ -1758,6 +1773,18 @@ final class AppModel {
         )
     }
 
+    /// Dismisses the blocking sheet to reach the local timer while offline.
+    /// Persisted recovery (bootstrapUser, queues, submitted request) is
+    /// untouched; relaunch re-blocks until the next retry succeeds.
+    func continueHistoryResolutionOffline() {
+        guard isHistoryResolutionOfflineEscapeAllowed else { return }
+        isHistoryResolutionOfflineEscapeActive = true
+    }
+
+    func returnToHistoryResolution() {
+        isHistoryResolutionOfflineEscapeActive = false
+    }
+
     func confirmHistoryResolution() async {
         guard let (strategy, snapshot) = accountSessionCoordinator.confirmedHistoryResolution()
         else { return }
@@ -1874,6 +1901,7 @@ final class AppModel {
     ) async throws -> Bool {
         let prepared = accountSessionCoordinator.prepareSyncPlan(state: timerState)
         let plan = prepared.plan
+        if plan.legacyDependencyReviewRequired { throw LegacyTimerDependencyReview.required }
         guard !plan.batch.commands.isEmpty || timerState.pendingCommands.isEmpty else {
             throw AppError.invalidResponse
         }
@@ -1883,7 +1911,7 @@ final class AppModel {
             throw AppError.invalidResponse
         }
         let previousTimer = activeTimer
-        let sampledResponse = try await accountSessionCoordinator.sendSync(plan)
+        let sampledResponse = try await accountSessionCoordinator.sendSync(plan, state: timerState)
         let receivedAt = effectivePhysicalNow() ?? now()
         guard accountSessionCoordinator.ownsCentralizedReplication(
             lease.operation,
@@ -2178,6 +2206,11 @@ final class AppModel {
             SentryCapture.capture(error)
             return timerState.settings.selectedPhase
         }
+    }
+
+    /// Idle skip returns breaks to focus; focus uses the existing cycle destination.
+    var skipDestination: TimerPhase {
+        selectedPhase.isBreak ? .focus : skipDestinationFromFocus()
     }
 
     /// Skip offers a long break after 3, 7, 11, ... completed focuses today.
@@ -2693,6 +2726,14 @@ final class AppModel {
             snapshot: snapshot,
             state: timerState
         )
+        do {
+            try accountSessionCoordinator.validateBootstrapRequest(request, state: timerState)
+        } catch {
+            await handleBootstrapFailure(error, stage: .submission(strategy),
+                operation: accountSessionCoordinator.operation(generation: sessionGeneration),
+                modeGeneration: roomReplicationController.modeGeneration)
+            return
+        }
         var retired = accountSessionCoordinator.retiredStateForBootstrapRequest(request, state: timerState)
         retired.pendingBootstrapResolution = request
         let previous = timerState
@@ -2717,7 +2758,7 @@ final class AppModel {
         do {
             try accountSessionCoordinator.validateBootstrapRequest(
                 request,
-                deviceID: timerState.deviceId
+                state: timerState
             )
             try await performBootstrapSubmission(
                 request,
@@ -2739,7 +2780,7 @@ final class AppModel {
         operation: CentralizedAccountSessionCoordinator.Operation,
         modeGeneration: Int
     ) async throws {
-        let sampledResponse = try await accountSessionCoordinator.sendBootstrapResolution(request)
+        let sampledResponse = try await accountSessionCoordinator.sendBootstrapResolution(request, state: timerState)
         let receivedAt = effectivePhysicalNow() ?? now()
         guard accountSessionCoordinator.ownsCentralizedReplication(
             operation,
@@ -2903,6 +2944,9 @@ final class AppModel {
         historyResolutionState = publication.historyResolutionState
         localHistoryResolutionCount = publication.localHistoryResolutionCount
         remoteHistoryResolutionCount = publication.remoteHistoryResolutionCount
+        if !isHistoryResolutionOfflineEscapeAllowed {
+            isHistoryResolutionOfflineEscapeActive = false
+        }
         scheduleTimerCompletion()
     }
 

@@ -2132,6 +2132,12 @@
         }
       }
     },
+    "Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "\u200f⟦Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.⟧"
+      }
+    },
     "Sync status, %@": {
       "stringUnit": {
         "state": "translated",

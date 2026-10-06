@@ -659,6 +659,12 @@ extension CentralizedAccountSessionCoordinator {
         guard ownsCentralizedReplication(
             lease.operation, modeGeneration: lease.modeGeneration, workspace: workspace
         ), signedInUser != nil else { return transition(.stale) }
+        if error is LegacyTimerDependencyReview {
+            publication.isOffline = false
+            return transition(.blocksFollowUp, effects: [
+                .presentError(error.localizedDescription), .cancelCentralizedStreams
+            ])
+        }
         // AP85: clock keeps its message and stays Sentry-dark (AP82 precedent);
         // core/invalidResponse logs + captures with the server-mismatch message.
         if error as? AppError == .invalidLocalClock {
@@ -931,9 +937,9 @@ extension CentralizedAccountSessionCoordinator {
     }
 
     func sendSync(
-        _ plan: AccountSynchronization.SyncPlan
+        _ plan: AccountSynchronization.SyncPlan, state: PersistedTimerState
     ) async throws -> TimedHTTPResponse<SyncResponse> {
-        try await synchronization.sendSync(plan)
+        try await synchronization.sendSync(plan, state: state)
     }
 
     func reconcileSync(
@@ -980,14 +986,14 @@ extension CentralizedAccountSessionCoordinator {
         synchronization.retiredStateForBootstrapRequest(request, state: state)
     }
 
-    func validateBootstrapRequest(_ request: BootstrapResolveRequest, deviceID: String) throws {
-        try synchronization.validateBootstrapRequest(request, deviceID: deviceID)
+    func validateBootstrapRequest(_ request: BootstrapResolveRequest, state: PersistedTimerState) throws {
+        try synchronization.validateBootstrapRequest(request, state: state)
     }
 
     func sendBootstrapResolution(
-        _ request: BootstrapResolveRequest
+        _ request: BootstrapResolveRequest, state: PersistedTimerState
     ) async throws -> TimedHTTPResponse<BootstrapResponse> {
-        try await synchronization.sendBootstrapResolution(request)
+        try await synchronization.sendBootstrapResolution(request, state: state)
     }
 
     func reconcileBootstrapResolution(

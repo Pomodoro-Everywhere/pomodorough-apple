@@ -14,7 +14,7 @@ struct PersistedStateCompatibilityTests {
         #expect((object["pendingCommands"] as? [Any])?.isEmpty == true)
         #expect(object["serverTimeOffsetMs"] as? Int == 125)
         #expect(
-            encoded == Data(#"{"autoStartBreaks":false,"deviceId":"device-compatibility","hasCorruptPendingOperations":false,"hasExplicitPhaseSelection":false,"history":[],"hlcCounter":0,"hlcWallMs":0,"knownTasks":[],"lastTrustedTimeMs":2000000,"legacyTaskAssignments":{},"localCommandDates":{},"localTimerOwners":{},"neverSentAutoStartOperationIDs":[],"neverSentCommandIDs":[],"neverSentDurationOperationIDs":[],"neverSentSelectedTaskOperationIDs":[],"neverSentTaskOperationIDs":[],"nextSequence":1,"pendingAutoStartOperations":[],"pendingCommands":[],"pendingDurationOperations":[],"pendingSelectedTaskOperations":[],"pendingTaskOperations":[],"provisionalBreaks":[],"provisionalPhaseAdvances":[],"revision":0,"selectedPhaseGeneration":0,"sequenceExhausted":false,"serverTimeAnchorMs":2000000,"serverTimeAnchorUptime":100,"serverTimeOffsetMs":125,"serverTimeUncertaintyMs":25,"settings":{"autoStartBreaks":false,"focusDurationMs":1500000,"longBreakDurationMs":900000,"selectedPhase":"focus","shortBreakDurationMs":300000},"tasks":[]}"#.utf8)
+            encoded == Data(#"{"autoStartBreaks":false,"deviceId":"device-compatibility","hasCorruptPendingOperations":false,"hasExplicitPhaseSelection":false,"history":[],"hlcCounter":0,"hlcWallMs":0,"knownTasks":[],"lastTrustedTimeMs":2000000,"legacyTaskAssignments":{},"legacyTimerDependencyUpgrade":false,"legacyUnresolvedCommandIDs":[],"localCommandDates":{},"localTimerOwners":{},"neverSentAutoStartOperationIDs":[],"neverSentCommandIDs":[],"neverSentDurationOperationIDs":[],"neverSentSelectedTaskOperationIDs":[],"neverSentTaskOperationIDs":[],"nextSequence":1,"pendingAutoStartOperations":[],"pendingCommands":[],"pendingDurationOperations":[],"pendingSelectedTaskOperations":[],"pendingTaskOperations":[],"pendingTimerDependencies":[],"provisionalBreaks":[],"provisionalPhaseAdvances":[],"revision":0,"selectedPhaseGeneration":0,"sequenceExhausted":false,"serverTimeAnchorMs":2000000,"serverTimeAnchorUptime":100,"serverTimeOffsetMs":125,"serverTimeUncertaintyMs":25,"settings":{"autoStartBreaks":false,"focusDurationMs":1500000,"longBreakDurationMs":900000,"selectedPhase":"focus","shortBreakDurationMs":300000},"tasks":[]}"#.utf8)
         )
     }
 
@@ -37,6 +37,9 @@ struct PersistedStateCompatibilityTests {
             "pendingDurationOperations",
             "pendingAutoStartOperations",
             "pendingSelectedTaskOperations",
+            "pendingTimerDependencies",
+            "legacyTimerDependencyUpgrade",
+            "legacyUnresolvedCommandIDs",
             "autoStartBreaks",
             "localTimerOwners",
             "provisionalBreaks",
@@ -70,11 +73,161 @@ struct PersistedStateCompatibilityTests {
         #expect(decoded.pendingDurationOperations.isEmpty)
         #expect(decoded.pendingAutoStartOperations.isEmpty)
         #expect(decoded.pendingSelectedTaskOperations.isEmpty)
+        #expect(decoded.pendingTimerDependencies.isEmpty)
+        #expect(!decoded.legacyTimerDependencyUpgrade)
+        #expect(decoded.legacyUnresolvedCommandIDs.isEmpty)
+        let upgraded = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(decoded))
+        #expect(!upgraded.legacyTimerDependencyUpgrade)
         #expect(decoded.tasks.isEmpty)
         #expect(decoded.knownTasks.isEmpty)
         #expect(!decoded.hasCorruptPendingOperations)
         #expect(decoded.neverSentCommandIDs.isEmpty)
         #expect(decoded.canonicalHeadWallMs == nil)
+    }
+
+    @Test
+    func oldEmptyQueueRetiresUpgradeMarkerBeforeNewTimerWork() throws {
+        var object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder.api.encode(Self.deterministicState())
+        ) as? [String: Any])
+        object.removeValue(forKey: "pendingTimerDependencies")
+        object.removeValue(forKey: "legacyTimerDependencyUpgrade")
+        object.removeValue(forKey: "legacyUnresolvedCommandIDs")
+        let restored = try JSONDecoder.api.decode(PersistedTimerState.self, from:
+            JSONSerialization.data(withJSONObject: object))
+
+        #expect(restored.pendingCommands.isEmpty)
+        #expect(!restored.legacyTimerDependencyUpgrade)
+        var next = restored
+        next.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        let restarted = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(next))
+        #expect(!restarted.legacyTimerDependencyUpgrade)
+    }
+
+    @Test
+    func oldEmptyQueueWithPersistedMarkerRetiresOnDecode() throws {
+        var state = Self.deterministicState()
+        state.legacyTimerDependencyUpgrade = true
+        let restored = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(state))
+        #expect(!restored.legacyTimerDependencyUpgrade)
+        #expect(restored.pendingCommands.isEmpty)
+    }
+
+    @Test
+    func oldPendingQueueKeepsMarkerAcrossUnrelatedOperationAndRestart() throws {
+        var state = Self.deterministicState()
+        state.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        var object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder.api.encode(state)
+        ) as? [String: Any])
+        object.removeValue(forKey: "pendingTimerDependencies")
+        object.removeValue(forKey: "legacyTimerDependencyUpgrade")
+        object.removeValue(forKey: "legacyUnresolvedCommandIDs")
+        var old = try JSONDecoder.api.decode(PersistedTimerState.self, from:
+            JSONSerialization.data(withJSONObject: object))
+        old.pendingDurationOperations = [TestFixtures.durationOperation(
+            id: "unrelated-duration", phase: .focus, durationMs: 1_500_000, wallMs: 1_001_000
+        )]
+        let restarted = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(old))
+
+        #expect(restarted.legacyTimerDependencyUpgrade)
+        #expect(restarted.legacyUnresolvedCommandIDs == Set(state.pendingCommands.map(\.id)))
+        #expect(restarted.pendingCommands == state.pendingCommands)
+        #expect(restarted.pendingDurationOperations == old.pendingDurationOperations)
+    }
+
+    @Test
+    func previousBooleanOnlyUpgradeCapturesIDsOnce() throws {
+        var state = Self.deterministicState()
+        let old = TestFixtures.command(.finish, sequence: 1, elapsed: 60_000)
+        state.pendingCommands = [old]
+        state.legacyTimerDependencyUpgrade = true
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder.api.encode(state)) as? [String: Any])
+        object.removeValue(forKey: "legacyUnresolvedCommandIDs")
+        var upgraded = try JSONDecoder.api.decode(PersistedTimerState.self, from:
+            JSONSerialization.data(withJSONObject: object))
+        #expect(upgraded.legacyUnresolvedCommandIDs == [old.id])
+        let new = TestFixtures.command(.start, sequence: 2, elapsed: 0, timerID: "new-focus")
+        upgraded.pendingCommands.append(new)
+        let restarted = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(upgraded))
+        #expect(restarted.legacyUnresolvedCommandIDs == [old.id])
+        #expect(restarted.pendingCommands.map(\.id) == [old.id, new.id])
+    }
+
+    @Test(arguments: [false, true])
+    func malformedLegacyIDSetCannotDefaultToUnquarantinedQueue(nullValue: Bool) throws {
+        var object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder.api.encode(Self.deterministicState())
+        ) as? [String: Any])
+        if nullValue {
+            object["legacyUnresolvedCommandIDs"] = NSNull()
+        } else {
+            object["legacyUnresolvedCommandIDs"] = "invalid-id-set"
+        }
+        let encoded = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder.api.decode(PersistedTimerState.self, from: encoded)
+        }
+    }
+
+    @Test
+    func legacyIdentityWithoutRetainedPayloadFailsClosed() throws {
+        var state = Self.deterministicState()
+        state.legacyTimerDependencyUpgrade = true
+        state.legacyUnresolvedCommandIDs = ["missing-old-command"]
+        let encoded = try JSONEncoder.api.encode(state)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder.api.decode(PersistedTimerState.self, from: encoded)
+        }
+    }
+
+    @Test
+    func accountChangeClearsOldMarkerAndEdgesOnlyWithItsQueue() throws {
+        var state = Self.deterministicState()
+        let owner = TestFixtures.user
+        state.cachedUser = owner
+        state.pendingCommands = [TestFixtures.command(.start, sequence: 1, elapsed: 0)]
+        state.pendingTimerDependencies = [CoreTimerDependency(
+            operationId: "dependent", dependsOnOperationId: state.pendingCommands[0].id
+        )]
+        state.legacyTimerDependencyUpgrade = true
+        state.legacyUnresolvedCommandIDs = Set(state.pendingCommands.map(\.id))
+        var sameOwner = state
+        sameOwner.prepare(for: owner)
+        #expect(sameOwner == state)
+
+        state.prepare(for: User(id: "another-user", email: "other@example.com", name: "Other", avatarUrl: ""))
+        #expect(state.pendingCommands.isEmpty)
+        #expect(state.pendingTimerDependencies.isEmpty)
+        #expect(state.legacyUnresolvedCommandIDs.isEmpty)
+        #expect(!state.legacyTimerDependencyUpgrade)
+        let restarted = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(state))
+        #expect(!restarted.legacyTimerDependencyUpgrade)
+    }
+
+    @Test
+    func retainedCoreTimerEdgeRoundTripsAndDoesNotCrossAccountOwnership() throws {
+        var state = Self.deterministicState()
+        state.cachedUser = TestFixtures.user
+        state.pendingTimerDependencies = [CoreTimerDependency(
+            operationId: "child-finish", dependsOnOperationId: "generated-start"
+        )]
+        let encoded = try JSONEncoder.api.encode(state)
+        let restored = try JSONDecoder.api.decode(PersistedTimerState.self, from: encoded)
+        #expect(restored.pendingTimerDependencies == state.pendingTimerDependencies)
+        #expect(!restored.legacyTimerDependencyUpgrade)
+
+        var switched = restored
+        switched.prepare(for: User(id: "another-user", email: "other@example.com", name: "Other", avatarUrl: ""))
+        #expect(switched.pendingTimerDependencies.isEmpty)
+        #expect(!switched.legacyTimerDependencyUpgrade)
+        #expect(switched.deviceId == state.deviceId)
     }
 
     @Test
@@ -238,6 +391,9 @@ struct PersistedStateCompatibilityTests {
         "pendingDurationOperations",
         "pendingSelectedTaskOperations",
         "pendingTaskOperations",
+        "pendingTimerDependencies",
+        "legacyTimerDependencyUpgrade",
+        "legacyUnresolvedCommandIDs",
         "provisionalBreaks",
         "provisionalPhaseAdvances",
         "revision",

@@ -31,19 +31,8 @@ struct MainContainer: View {
         platformContent
 #if os(iOS)
             .onOpenURL { url in
-                if url.scheme == "pomodorough", url.host == "timer" {
+                if Self.handleTimerURL(url, model: model) {
                     selectedTab = .timer
-                    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-                    if items.contains(where: { $0.name == "toggle" }) {
-                        model.toggleTimer()
-                    } else if let action = items.first(where: { $0.name == "action" })?.value {
-                        switch action {
-                        case "finish": model.finish()
-                        case "cancel": model.cancel()
-                        case "skip": model.selectPhase(model.skipDestinationFromFocus())
-                        default: break
-                        }
-                    }
                 }
             }
 #endif
@@ -64,6 +53,23 @@ struct MainContainer: View {
             } message: {
                 Text("Switching removes this device's previous timer, tasks, history, settings, and queued changes. Cancel keeps the previous workspace on this device and signs out of the new account.")
             }
+    }
+
+    @discardableResult
+    static func handleTimerURL(_ url: URL, model: AppModel) -> Bool {
+        guard url.scheme == "pomodorough", url.host == "timer" else { return false }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        if items.contains(where: { $0.name == "toggle" }) {
+            model.toggleTimer()
+        } else if let action = items.first(where: { $0.name == "action" })?.value {
+            switch action {
+            case "finish": model.finish()
+            case "cancel": model.cancel()
+            case "skip": model.selectPhase(model.skipDestination)
+            default: break
+            }
+        }
+        return true
     }
 
     @ViewBuilder

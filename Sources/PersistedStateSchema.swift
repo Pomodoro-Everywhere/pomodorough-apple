@@ -14,6 +14,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var lastTrustedTimeMs: Int64?
     var lastUuidV7: UUID?
     var pendingCommands: [TimerCommand]
+    var pendingTimerDependencies: [CoreTimerDependency]
+    var legacyTimerDependencyUpgrade: Bool
+    var legacyUnresolvedCommandIDs: Set<String>
     var localCommandDates: [String: Date]
     var pendingTaskOperations: [TaskOperation]
     var pendingDurationOperations: [DurationOperation]
@@ -70,7 +73,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case deviceId, nextSequence, sequenceExhausted, revision, hlcWallMs, hlcCounter
         case serverTimeOffsetMs, serverTimeUncertaintyMs, serverTimeAnchorMs
         case serverTimeAnchorUptime, lastTrustedTimeMs, lastUuidV7, localCommandDates
-        case pendingCommands, pendingTaskOperations, pendingDurationOperations, pendingAutoStartOperations
+        case pendingCommands, pendingTimerDependencies, legacyTimerDependencyUpgrade
+        case legacyUnresolvedCommandIDs
+        case pendingTaskOperations, pendingDurationOperations, pendingAutoStartOperations
         case pendingSelectedTaskOperations
         case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
         case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
@@ -98,6 +103,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         lastTrustedTimeMs: Int64? = nil,
         lastUuidV7: UUID? = nil,
         pendingCommands: [TimerCommand],
+        pendingTimerDependencies: [CoreTimerDependency] = [],
+        legacyTimerDependencyUpgrade: Bool = false,
+        legacyUnresolvedCommandIDs: Set<String> = [],
         localCommandDates: [String: Date] = [:],
         pendingTaskOperations: [TaskOperation],
         pendingDurationOperations: [DurationOperation],
@@ -142,6 +150,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self.lastTrustedTimeMs = lastTrustedTimeMs
         self.lastUuidV7 = lastUuidV7
         self.pendingCommands = pendingCommands
+        self.pendingTimerDependencies = pendingTimerDependencies
+        self.legacyTimerDependencyUpgrade = legacyTimerDependencyUpgrade
+        self.legacyUnresolvedCommandIDs = legacyUnresolvedCommandIDs
         self.localCommandDates = localCommandDates
         self.pendingTaskOperations = pendingTaskOperations
         self.pendingDurationOperations = pendingDurationOperations
@@ -178,6 +189,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self = try PersistedStateSchema.decode(from: decoder)
         let values = try decoder.container(keyedBy: CodingKeys.self)
         irohLegacyTaskMigration = try values.decodeIfPresent(IrohLegacyTaskMigration.self, forKey: .irohLegacyTaskMigration)
+        pruneLegacyUnresolvedCommandsToPending()
     }
 }
 
@@ -197,6 +209,9 @@ extension PersistedTimerState {
             lastTrustedTimeMs: nil,
             lastUuidV7: nil,
             pendingCommands: [],
+            pendingTimerDependencies: [],
+            legacyTimerDependencyUpgrade: false,
+            legacyUnresolvedCommandIDs: [],
             localCommandDates: [:],
             pendingTaskOperations: [],
             pendingDurationOperations: [],
@@ -257,6 +272,9 @@ enum PersistedStateSchema {
             lastTrustedTimeMs: generator.lastTrustedTimeMs,
             lastUuidV7: generator.lastUuidV7,
             pendingCommands: pending.commands,
+            pendingTimerDependencies: pending.timerDependencies,
+            legacyTimerDependencyUpgrade: pending.legacyTimerDependencyUpgrade,
+            legacyUnresolvedCommandIDs: pending.legacyUnresolvedCommandIDs,
             localCommandDates: pending.localCommandDates,
             pendingTaskOperations: pending.taskOperations,
             pendingDurationOperations: pending.durationOperations,
@@ -325,6 +343,9 @@ enum PersistedStateSchema {
 
     private struct DecodedPendingState {
         let commands: [TimerCommand]
+        let timerDependencies: [CoreTimerDependency]
+        let legacyTimerDependencyUpgrade: Bool
+        let legacyUnresolvedCommandIDs: Set<String>
         let localCommandDates: [String: Date]
         let taskOperations: [TaskOperation]
         let durationOperations: [DurationOperation]
@@ -371,7 +392,9 @@ enum PersistedStateSchema {
         case deviceId, nextSequence, sequenceExhausted, revision, hlcWallMs, hlcCounter
         case serverTimeOffsetMs, serverTimeUncertaintyMs, serverTimeAnchorMs
         case serverTimeAnchorUptime, lastTrustedTimeMs, lastUuidV7, localCommandDates
-        case pendingCommands, pendingTaskOperations, pendingDurationOperations, pendingAutoStartOperations
+        case pendingCommands, pendingTimerDependencies, legacyTimerDependencyUpgrade
+        case legacyUnresolvedCommandIDs
+        case pendingTaskOperations, pendingDurationOperations, pendingAutoStartOperations
         case pendingSelectedTaskOperations
         case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
         case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
@@ -429,8 +452,13 @@ enum PersistedStateSchema {
             Bool.self,
             forKey: .hasCorruptPendingOperations
         ) ?? false
+        let decodedCommands = commands.compactMap(\.value)
+        let legacyIDs = try legacyUnresolvedCommandIDs(from: values, commands: decodedCommands)
         return try DecodedPendingState(
-            commands: commands.compactMap(\.value),
+            commands: decodedCommands,
+            timerDependencies: values.decodeIfPresent([CoreTimerDependency].self, forKey: .pendingTimerDependencies) ?? [],
+            legacyTimerDependencyUpgrade: try legacyTimerDependencyUpgrade(from: values) || !legacyIDs.isEmpty,
+            legacyUnresolvedCommandIDs: legacyIDs,
             localCommandDates: values.decodeIfPresent([String: Date].self, forKey: .localCommandDates) ?? [:],
             taskOperations: tasks.compactMap(\.value),
             durationOperations: durations.compactMap(\.value).map(normalizedLegacySentinel),
@@ -443,6 +471,33 @@ enum PersistedStateSchema {
                 || autoStart.contains { $0.value == nil }
                 || selectedTask.contains { $0.value == nil }
         )
+    }
+
+    private static func legacyTimerDependencyUpgrade(
+        from values: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Bool {
+        if values.contains(.pendingTimerDependencies) {
+            return try values.decodeIfPresent(Bool.self, forKey: .legacyTimerDependencyUpgrade) ?? false
+        }
+        return true
+    }
+
+    private static func legacyUnresolvedCommandIDs(
+        from values: KeyedDecodingContainer<CodingKeys>, commands: [TimerCommand]
+    ) throws -> Set<String> {
+        if !values.contains(.pendingTimerDependencies) { return Set(commands.map(\.id)) }
+        if values.contains(.legacyUnresolvedCommandIDs) {
+            let exact = try values.decode(Set<String>.self, forKey: .legacyUnresolvedCommandIDs)
+            guard exact.isSubset(of: Set(commands.map(\.id))) else {
+                throw DecodingError.dataCorruptedError(forKey: .legacyUnresolvedCommandIDs, in: values,
+                    debugDescription: "Legacy timer identities must refer to retained commands.")
+            }
+            return exact
+        }
+        // Earlier upgrades retained only a Boolean. Without captured IDs, all
+        // commands in that old queue need review, regardless of payload shape.
+        guard try legacyTimerDependencyUpgrade(from: values) else { return [] }
+        return Set(commands.map(\.id))
     }
 
     private static func decodeRoom(

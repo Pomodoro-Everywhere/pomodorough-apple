@@ -775,6 +775,9 @@ final class IrohRoomStore: @unchecked Sendable {
             selectedTaskOperations: records.filter { $0.domain == .selectedTask }.map(\.id)
         )
         state.pendingCommands = []
+        state.legacyTimerDependencyUpgrade = false
+        state.legacyUnresolvedCommandIDs = []
+        state.pendingTimerDependencies = []
         state.localCommandDates = [:]
         state.pendingTaskOperations = []
         state.pendingDurationOperations = []
@@ -962,6 +965,9 @@ final class IrohRoomStore: @unchecked Sendable {
         state.serverTimeAnchorUptime = nil
         state.lastTrustedTimeMs = nil
         state.pendingCommands = []
+        state.legacyTimerDependencyUpgrade = false
+        state.legacyUnresolvedCommandIDs = []
+        state.pendingTimerDependencies = []
         state.localCommandDates = [:]
         state.pendingTaskOperations = []
         state.pendingDurationOperations = []

@@ -1157,6 +1157,73 @@ struct IntegrationPositiveTests {
         }
     }
 
+    @Test(arguments: [TimerPhase.focus, .shortBreak, .longBreak], 0...12)
+    @MainActor
+    func timerURLSkipUsesSelectedPhase(phase: TimerPhase, completed: Int) throws {
+        try withTimerURLModel(phase: phase, completed: completed) { model, defaults in
+            let history = model.history
+            let commands = model.pendingCommandCount
+            let url = try #require(URL(string: "pomodorough://timer?action=skip"))
+
+            #expect(MainContainer.handleTimerURL(url, model: model))
+
+            let expected: TimerPhase = phase.isBreak ? .focus
+                : [3, 7, 11].contains(completed) ? .longBreak : .shortBreak
+            #expect(model.selectedPhase == expected)
+            #expect(try persistedState(defaults).settings.selectedPhase == expected)
+            #expect(model.canonicalTimer == nil)
+            #expect(model.history == history)
+            #expect(model.completedFocusCountToday == completed)
+            #expect(model.pendingCommandCount == commands)
+        }
+    }
+
+    @Test(arguments: [
+        "pomodorough://timer?action=unknown", "pomodorough://timer?action=",
+        "pomodorough://timer", "pomodorough://other?action=skip",
+        "https://timer?action=skip"
+    ])
+    @MainActor
+    func timerURLInvalidActionDoesNotMutateState(rawURL: String) throws {
+        try withTimerURLModel(phase: .longBreak, completed: 3) { model, defaults in
+            let before = defaults.data(forKey: "timer-state-v2")
+            let url = try #require(URL(string: rawURL))
+
+            let handled = MainContainer.handleTimerURL(url, model: model)
+
+            #expect(handled == (url.scheme == "pomodorough" && url.host == "timer"))
+            #expect(model.selectedPhase == .longBreak)
+            #expect(model.canonicalTimer == nil)
+            #expect(model.completedFocusCountToday == 3)
+            #expect(model.pendingCommandCount == 0)
+            #expect(defaults.data(forKey: "timer-state-v2") == before)
+        }
+    }
+
+    @MainActor
+    private func withTimerURLModel(
+        phase: TimerPhase, completed: Int,
+        body: (AppModel, UserDefaults) throws -> Void
+    ) throws {
+        let suite = "TimerURLTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let today = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_774_166_400))
+        var state = PersistedTimerState.fresh()
+        state.settings.selectedPhase = phase
+        state.history = (0..<completed).map {
+            TestFixtures.history(id: "today-\($0)", durationMs: 60_000,
+                                 date: today.addingTimeInterval(TimeInterval($0 + 1)))
+        }
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let model = AppModel(
+            defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            now: { today.addingTimeInterval(12 * 60 * 60) }, uptime: { 1_000 }
+        )
+        try body(model, defaults)
+    }
+
     @Test @MainActor
     func automaticBreakIsNotDuplicatedAfterPersistenceReload() throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
@@ -2348,10 +2415,16 @@ struct IntegrationPositiveTests {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(
-            try JSONEncoder.api.encode(bootstrapState(hasLocalHistory: true)),
-            forKey: "timer-state-v2"
-        )
+        var local = try bootstrapState(hasLocalHistory: true)
+        if strategy == .keepRemote {
+            local.legacyTimerDependencyUpgrade = true
+            local.legacyUnresolvedCommandIDs = Set(local.pendingCommands.map(\.id))
+            local.pendingTimerDependencies = [CoreTimerDependency(
+                operationId: local.pendingCommands[1].id,
+                dependsOnOperationId: local.pendingCommands[0].id
+            )]
+        }
+        defaults.set(try JSONEncoder.api.encode(local), forKey: "timer-state-v2")
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
         let model = AppModel(
@@ -2378,6 +2451,13 @@ struct IntegrationPositiveTests {
         #expect(model.history.map(\.id) == [includesLocal ? "local-history" : "remote-history"])
         #expect(model.pendingChangeCount == 0)
         #expect(model.historyResolutionState == .none)
+        if strategy == .keepRemote {
+            let cleared = try persistedState(defaults)
+            #expect(cleared.pendingCommands.isEmpty)
+            #expect(cleared.pendingTimerDependencies.isEmpty)
+            #expect(!cleared.legacyTimerDependencyUpgrade)
+            #expect(cleared.legacyUnresolvedCommandIDs.isEmpty)
+        }
     }
 
     @Test @MainActor
@@ -4261,6 +4341,556 @@ struct IntegrationPositiveTests {
         #expect(model.canonicalTimer?.status == .completed)
         #expect(model.pendingCommandCount == 0)
         #expect(scheduler.operations.last == .cancel(timerID: provisional.breakTimerId))
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func generatedBreakChildFinishKeepsCoreBarrierAfterFocusAcknowledgement(
+        startAccepted: Bool
+    ) async throws {
+        let scenario = startAccepted
+            ? "auto-start-dependency-boundary" : "auto-start-provisional-start-rejected"
+        let suite = "GeneratedBreakChild.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (provisional, originalStart, childFinish) = try stagedGeneratedBreakChild(in: defaults)
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let first = AccountSynchronization(
+            api: api,
+            sharedCoreProvider: { try SharedCore.bundled() }
+        )
+        let firstPlan = first.makeSyncPlan(state: try persistedState(defaults))
+        #expect(firstPlan.batch.commands.map(\.id) == [provisional.finishCommandId])
+        try await persistGeneratedBreakRound(first, plan: firstPlan, in: defaults)
+        let afterFocus = try persistedState(defaults)
+        #expect(afterFocus.provisionalBreaks.isEmpty)
+        #expect(afterFocus.pendingTimerDependencies == [CoreTimerDependency(
+            operationId: childFinish.id, dependsOnOperationId: provisional.startCommandId
+        )])
+        #expect(afterFocus.pendingCommands.map(\.id) == [provisional.startCommandId, childFinish.id])
+        #expect(try JSONEncoder.api.encode(afterFocus.pendingCommands.first)
+                == JSONEncoder.api.encode(originalStart))
+        #expect(try JSONEncoder.api.encode(afterFocus.pendingCommands.last)
+                == JSONEncoder.api.encode(childFinish))
+        // New synchronization instance reads only persisted state, after upload hold disappears.
+        let reopened = AccountSynchronization(
+            api: api,
+            sharedCoreProvider: { try SharedCore.bundled() }
+        )
+        let startPlan = reopened.makeSyncPlan(state: afterFocus)
+        try #require(startPlan.batch.commands.map(\.id) == [provisional.startCommandId])
+        try await persistGeneratedBreakRound(reopened, plan: startPlan, in: defaults)
+        let afterStart = try persistedState(defaults)
+        #expect(afterStart.pendingTimerDependencies.isEmpty)
+        if startAccepted {
+            #expect(try JSONEncoder.api.encode(afterStart.pendingCommands)
+                    == JSONEncoder.api.encode([childFinish]))
+            let finishPlan = reopened.makeSyncPlan(state: afterStart)
+            #expect(finishPlan.batch.commands.map(\.id) == [childFinish.id])
+            try await persistGeneratedBreakRound(reopened, plan: finishPlan, in: defaults)
+        }
+        #expect(try persistedState(defaults).pendingCommands.isEmpty)
+        try assertGeneratedBreakChildUploads(scenario: scenario, childFinish: childFinish, startAccepted: startAccepted)
+    }
+
+    private func assertGeneratedBreakChildUploads(
+        scenario: String, childFinish: TimerCommand, startAccepted: Bool
+    ) throws {
+        let sent = try TestFixtures.recordedRequests(for: scenario)
+            .filter { $0.path == "/api/v1/sync" }
+            .flatMap { try #require(try requestJSON($0)["commands"] as? [[String: Any]]) }
+        #expect(sent.compactMap { $0["id"] as? String }.filter { $0 == childFinish.id }.count
+                == (startAccepted ? 1 : 0))
+    }
+
+    @MainActor
+    private func stagedGeneratedBreakChild(
+        in defaults: UserDefaults
+    ) throws -> (ProvisionalBreak, TimerCommand, TimerCommand) {
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.autoStartBreaks = true
+        let focus = TestFixtures.timer(status: .running, elapsed: 0, timerID: "timer-child-source")
+        state.canonicalTimer = focus
+        state.localTimerOwners[focus.id] = state.deviceId
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(
+            defaults: defaults, alarmScheduler: RecordingAlarmScheduler(),
+            now: { Date(timeIntervalSince1970: 1_784_620_800) }, uptime: { 1_000 }
+        )
+        offline.completeIfNeeded(timerID: focus.id, at: focus.anchorAt.addingTimeInterval(focus.plannedDuration))
+        let provisional = try #require(persistedState(defaults).provisionalBreaks.first)
+        let child = try #require(offline.canonicalTimer)
+        offline.finish(at: child.anchorAt.addingTimeInterval(child.plannedDuration))
+        let finish = try #require(persistedState(defaults).pendingCommands.last)
+        let start = try #require(persistedState(defaults).pendingCommands.first {
+            $0.id == provisional.startCommandId
+        })
+        #expect(finish.timerId == provisional.breakTimerId && finish.type == .finish)
+        #expect(try persistedState(defaults).pendingCommands.map(\.id) == [
+            provisional.finishCommandId, provisional.startCommandId, finish.id
+        ])
+        #expect(try persistedState(defaults).provisionalBreaks == [provisional])
+        return (provisional, start, finish)
+    }
+
+    @MainActor
+    private func persistGeneratedBreakRound(
+        _ sync: AccountSynchronization,
+        plan: AccountSynchronization.SyncPlan,
+        in defaults: UserDefaults
+    ) async throws {
+        let prepared = sync.prepareSyncPlan(state: try persistedState(defaults))
+        #expect(prepared.plan.batch.commands == plan.batch.commands)
+        defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
+        let response = try await sync.sendSync(plan, state: prepared.retired)
+        let transition = try sync.reconcileSync(response, plan: plan, state: try persistedState(defaults))
+        defaults.set(try JSONEncoder.api.encode(transition.state), forKey: "timer-state-v2")
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func legacyPostAckBreakRequiresReviewWithoutGuessingEdge(startAccepted: Bool) async throws {
+        let scenario = startAccepted
+            ? "auto-start-dependency-boundary" : "auto-start-provisional-start-rejected"
+        let suite = "LegacyPostAckBreak.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let first = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        let (provisional, childFinish, original) = try await stagedLegacyPostAckBreak(first, in: defaults)
+
+        let reopened = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        let plan = reopened.makeSyncPlan(state: try persistedState(defaults))
+        #expect(plan.legacyDependencyReviewRequired)
+        #expect(plan.batch.commands.isEmpty)
+        let originalCommands = try JSONDecoder.api.decode([TimerCommand].self, from: original)
+        try #require(originalCommands.count == 2)
+        #expect(originalCommands.map(\.id) == [provisional.startCommandId, childFinish.id])
+        let prepared = reopened.prepareSyncPlan(state: try persistedState(defaults))
+        #expect(prepared.retired.pendingTimerDependencies.isEmpty)
+        #expect(prepared.retired.neverSentCommandIDs.contains(childFinish.id))
+        defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
+        #expect(try persistedState(defaults).legacyTimerDependencyUpgrade)
+        #expect(reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        let model = AppModel(api: api, defaults: defaults,
+                             roomStore: TestFixtures.emptyIrohRoomStore(),
+                             alarmScheduler: RecordingAlarmScheduler())
+        await model.restore()
+        #expect(model.errorMessage?.contains("Contact support") == true)
+        #expect(try JSONEncoder.api.encode(persistedState(defaults).pendingCommands) == original)
+        #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == 1)
+    }
+
+    @Test(arguments: ["possibly-sent", "unrelated-completion", "missing-history"])
+    @MainActor
+    func ambiguousLegacyPostAckBreakRemainsDurable(reason: String) async throws {
+        let scenario = "auto-start-dependency-boundary"
+        let suite = "AmbiguousLegacyBreak.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let first = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        let (_, childFinish, original) = try await stagedLegacyPostAckBreak(first, in: defaults)
+        var ambiguous = try persistedState(defaults)
+        if reason == "possibly-sent" {
+            ambiguous.neverSentCommandIDs.remove(childFinish.id)
+        } else if reason == "unrelated-completion" {
+            // Same millisecond alone cannot identify the source command.
+            let unrelated = try #require(ambiguous.history.first)
+            ambiguous.history = [HistoryItem(
+                id: unrelated.id, timerId: unrelated.timerId,
+                commandId: "unrelated-focus-finish", taskId: unrelated.taskId,
+                phase: unrelated.phase, status: unrelated.status,
+                plannedDurationMs: unrelated.plannedDurationMs,
+                completedAt: unrelated.completedAt, endedAt: unrelated.endedAt
+            )]
+        } else {
+            ambiguous.history = []
+        }
+        try persistWithoutDependencyField(ambiguous, in: defaults)
+
+        let reopened = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        #expect(reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        let prepared = reopened.prepareSyncPlan(state: try persistedState(defaults))
+        #expect(prepared.retired.neverSentCommandIDs == ambiguous.neverSentCommandIDs)
+        defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
+        #expect(try JSONEncoder.api.encode(persistedState(defaults).pendingCommands) == original)
+        #expect(try persistedState(defaults).pendingCommands.map(\.id).contains(childFinish.id))
+        #expect(reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        let model = AppModel(
+            api: api, defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
+            alarmScheduler: RecordingAlarmScheduler()
+        )
+        await model.restore()
+        #expect(model.pendingCommandCount == 2)
+        #expect(model.errorMessage?.contains("Contact support") == true)
+        #expect(try JSONEncoder.api.encode(persistedState(defaults).pendingCommands) == original)
+        #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == 1)
+    }
+
+    @Test @MainActor
+    func unresolvedLegacyBreakSurvivesUnrelatedPersistedMutationAndRestart() async throws {
+        let scenario = "auto-start-dependency-boundary"
+        let suite = "LegacyBreakUnrelatedMutation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        let (_, _, original) = try await stagedLegacyPostAckBreak(sync, in: defaults)
+        var mutated = try persistedState(defaults)
+        mutated.pendingDurationOperations = [TestFixtures.durationOperation(
+            id: "unrelated-duration", phase: .focus, durationMs: 1_800_000,
+            wallMs: 1_784_620_801_000
+        )]
+        defaults.set(try JSONEncoder.api.encode(mutated), forKey: "timer-state-v2")
+        let afterMutation = try persistedState(defaults)
+        #expect(try JSONEncoder.api.encode(afterMutation.pendingCommands) == original)
+        #expect(afterMutation.pendingDurationOperations == mutated.pendingDurationOperations)
+        #expect(afterMutation.legacyTimerDependencyUpgrade)
+        #expect(sync.makeSyncPlan(state: afterMutation).legacyDependencyReviewRequired)
+        let restarted = try JSONDecoder.api.decode(PersistedTimerState.self,
+                                                  from: JSONEncoder.api.encode(afterMutation))
+        #expect(restarted.legacyTimerDependencyUpgrade)
+        #expect(try JSONEncoder.api.encode(restarted.pendingCommands) == original)
+    }
+
+    @MainActor
+    private func stagedLegacyPostAckBreak(
+        _ sync: AccountSynchronization, in defaults: UserDefaults
+    ) async throws -> (ProvisionalBreak, TimerCommand, Data) {
+        let (provisional, _, childFinish) = try stagedGeneratedBreakChild(in: defaults)
+        let plan = sync.makeSyncPlan(state: try persistedState(defaults))
+        try await persistGeneratedBreakRound(sync, plan: plan, in: defaults)
+        let afterFocus = try persistedState(defaults)
+        #expect(afterFocus.provisionalBreaks.isEmpty)
+        #expect(afterFocus.history.contains { $0.commandId == provisional.finishCommandId })
+        #expect(afterFocus.neverSentCommandIDs.contains(childFinish.id))
+        let start = try #require(afterFocus.pendingCommands.first)
+        let completion = try #require(afterFocus.history.first {
+            $0.commandId == provisional.finishCommandId
+        }?.completedAt)
+        #expect(WireBounds.physicalMilliseconds(for: start.occurredAt)
+                == WireBounds.physicalMilliseconds(for: completion))
+        #expect(afterFocus.localTimerOwners[start.timerId] == afterFocus.deviceId)
+        #expect(afterFocus.pendingCommands.last?.deviceSequence == start.deviceSequence + 1)
+        let original = try JSONEncoder.api.encode(afterFocus.pendingCommands)
+        try persistWithoutDependencyField(afterFocus, in: defaults)
+        #expect(try persistedState(defaults).pendingTimerDependencies.isEmpty)
+        #expect(try persistedState(defaults).legacyTimerDependencyUpgrade)
+        return (provisional, childFinish, original)
+    }
+
+    private func persistWithoutDependencyField(
+        _ state: PersistedTimerState, in defaults: UserDefaults
+    ) throws {
+        let encoded = try JSONEncoder.api.encode(state)
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "pendingTimerDependencies")
+        object.removeValue(forKey: "legacyTimerDependencyUpgrade")
+        object.removeValue(forKey: "legacyUnresolvedCommandIDs")
+        defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: "timer-state-v2")
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func independentBreakStartFinishNeedsReviewOnlyOnOldSchema(oldSchema: Bool) throws {
+        let suite = "IndependentBreakQueue.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.settings.selectedPhase = .shortBreak
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler(),
+                               now: { Date(timeIntervalSince1970: 1_784_620_800) }, uptime: { 1_000 })
+        offline.start()
+        let breakTimer = try #require(offline.canonicalTimer)
+        offline.finish(at: breakTimer.anchorAt.addingTimeInterval(breakTimer.plannedDuration))
+        let queued = try persistedState(defaults)
+        #expect(queued.pendingCommands.map(\.type) == [.start, .finish])
+        #expect(queued.provisionalBreaks.isEmpty)
+        if !oldSchema {
+            let breakStart = try #require(queued.pendingCommands.first)
+            state = queued
+            state.history.append(TestFixtures.history(
+                id: "unrelated-same-ms-focus", durationMs: 60_000,
+                date: breakStart.occurredAt
+            ))
+            defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        }
+        if oldSchema { try persistWithoutDependencyField(queued, in: defaults) }
+
+        let restored = try persistedState(defaults)
+        #expect(restored.legacyTimerDependencyUpgrade == oldSchema)
+        let session = TestFixtures.session(for: "unused-independent-break")
+        defer { session.invalidateAndCancel() }
+        let sync = AccountSynchronization(
+            api: APIClient(session: session, keychain: StaticTokenStore()),
+            sharedCoreProvider: { try SharedCore.bundled() }
+        )
+        let plan = sync.makeSyncPlan(state: restored)
+        #expect(plan.legacyDependencyReviewRequired == oldSchema)
+        #expect(plan.batch.commands.map(\.id) == (oldSchema ? [] : queued.pendingCommands.map(\.id)))
+        let prepared = sync.prepareSyncPlan(state: restored)
+        #expect(prepared.retired.pendingTimerDependencies.isEmpty)
+        if oldSchema {
+            #expect(prepared.retired.neverSentCommandIDs == restored.neverSentCommandIDs)
+            #expect(try JSONDecoder.api.decode(PersistedTimerState.self,
+                                               from: JSONEncoder.api.encode(prepared.retired))
+                    .legacyTimerDependencyUpgrade)
+        }
+        #expect(try JSONEncoder.api.encode(prepared.retired.pendingCommands)
+                == JSONEncoder.api.encode(queued.pendingCommands))
+    }
+
+    @Test @MainActor
+    func oldEmptyStateAllowsNewIndependentBreakAfterRestart() throws {
+        let suite = "OldEmptyBreak.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.settings.selectedPhase = .shortBreak
+        try persistWithoutDependencyField(state, in: defaults)
+        #expect(try persistedState(defaults).pendingCommands.isEmpty)
+        let model = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler(),
+                             now: { Date(timeIntervalSince1970: 1_784_620_800) }, uptime: { 1_000 })
+        model.start()
+        let timer = try #require(model.canonicalTimer)
+        model.finish(at: timer.anchorAt.addingTimeInterval(timer.plannedDuration))
+        let queued = try persistedState(defaults)
+        #expect(!queued.legacyTimerDependencyUpgrade)
+        #expect(queued.pendingCommands.map(\.type) == [.start, .finish])
+        let session = TestFixtures.session(for: "unused-old-empty-break")
+        defer { session.invalidateAndCancel() }
+        let sync = AccountSynchronization(api: APIClient(session: session, keychain: StaticTokenStore()),
+                                          sharedCoreProvider: { try SharedCore.bundled() })
+        #expect(sync.makeSyncPlan(state: queued).batch.commands.map(\.id) == queued.pendingCommands.map(\.id))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func oldFocusFinishAcknowledgementRetiresMarkerBeforeNewBreak(newWorkDuringRequest: Bool) async throws {
+        let scenario = "auto-start-dependency-boundary"
+        let suite = "OldFocusFinishDrain.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        let focus = TestFixtures.timer(status: .running, elapsed: 0, timerID: "old-focus")
+        state.canonicalTimer = focus
+        state.localTimerOwners[focus.id] = state.deviceId
+        defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        let offline = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler(),
+                               now: { Date(timeIntervalSince1970: 1_784_620_800) }, uptime: { 1_000 })
+        offline.finish(at: focus.anchorAt.addingTimeInterval(focus.plannedDuration))
+        let before = try persistedState(defaults)
+        try #require(before.pendingCommands.count == 1)
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        // Request was captured and sent before upgrade; its exact ACK may retire
+        // the old identity even when new work arrived while response was in flight.
+        let captured = sync.prepareSyncPlan(state: before)
+        let plan = captured.plan
+        let response = try await sync.sendSync(plan, state: captured.retired)
+        try persistWithoutDependencyField(captured.retired, in: defaults)
+        var upgraded = try persistedState(defaults)
+        #expect(upgraded.legacyUnresolvedCommandIDs == Set(before.pendingCommands.map(\.id)))
+        if newWorkDuringRequest {
+            upgraded.pendingCommands += newIndependentBreakCommands(startSequence: before.nextSequence)
+            for command in upgraded.pendingCommands.dropFirst() { upgraded.recordNeverSentCommand(id: command.id) }
+        }
+        #expect(plan.batch.commands.map(\.id) == before.pendingCommands.map(\.id))
+        let transition = try sync.reconcileSync(response, plan: plan, state: upgraded)
+        #expect(!transition.state.legacyTimerDependencyUpgrade)
+        #expect(transition.state.legacyUnresolvedCommandIDs.isEmpty)
+        var nextState = transition.state
+        if !newWorkDuringRequest {
+            #expect(nextState.pendingCommands.isEmpty)
+            nextState.pendingCommands = newIndependentBreakCommands(startSequence: before.nextSequence)
+        }
+        defaults.set(try JSONEncoder.api.encode(nextState), forKey: "timer-state-v2")
+        let next = try persistedState(defaults)
+        #expect(next.pendingCommands.map(\.type) == [.start, .finish])
+        #expect(!next.legacyTimerDependencyUpgrade)
+        #expect(try JSONEncoder.api.encode(next.pendingCommands)
+                == JSONEncoder.api.encode(newIndependentBreakCommands(startSequence: before.nextSequence)))
+        #expect(!sync.makeSyncPlan(state: next).legacyDependencyReviewRequired)
+        #expect(sync.makeSyncPlan(state: next).batch.commands.map(\.id) == next.pendingCommands.map(\.id))
+    }
+
+    private func newIndependentBreakCommands(startSequence: Int64) -> [TimerCommand] {
+        let started = Date(timeIntervalSince1970: 1_784_620_801)
+        let duration: Int64 = 300_000
+        let start = TimerCommand(
+            id: "command-new-break-start", deviceSequence: startSequence,
+            timerId: "timer-new-break", taskId: nil, type: .start, phase: .shortBreak,
+            plannedDurationMs: duration, occurredAt: started,
+            hlcWallMs: 1_784_620_801_000, hlcCounter: 0, observedElapsedMs: 0
+        )
+        let finish = TimerCommand(
+            id: "command-new-break-finish", deviceSequence: startSequence + 1,
+            timerId: "timer-new-break", taskId: nil, type: .finish, phase: .shortBreak,
+            plannedDurationMs: duration, occurredAt: started.addingTimeInterval(300),
+            hlcWallMs: 1_784_621_101_000, hlcCounter: 0, observedElapsedMs: duration
+        )
+        return [start, finish]
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func oldPartialStartRejectionNeverUploadsOrphanFinish(possiblySent: Bool) async throws {
+        let scenario = "auto-start-provisional-start-rejected"
+        let suite = "LegacyOrphanFinish.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = TestFixtures.session(for: scenario)
+        defer { session.invalidateAndCancel() }
+        let api = APIClient(session: session, keychain: StaticTokenStore())
+        #expect(try await api.restoreTokens())
+        let oldSync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        var orphan = try await stagedRejectedBreakStartAtBatchBoundary(oldSync, in: defaults)
+        let original = try JSONEncoder.api.encode(orphan.pendingCommands)
+        if possiblySent { orphan.neverSentCommandIDs.remove(orphan.pendingCommands[0].id) }
+        try persistWithoutDependencyField(orphan, in: defaults)
+
+        let upgraded = try persistedState(defaults)
+        #expect(upgraded.pendingCommands.map(\.type) == [.finish])
+        #expect(upgraded.legacyTimerDependencyUpgrade)
+        #expect(upgraded.legacyUnresolvedCommandIDs == Set(upgraded.pendingCommands.map(\.id)))
+        #expect(try JSONEncoder.api.encode(upgraded.pendingCommands) == original)
+        #expect(upgraded.neverSentCommandIDs == orphan.neverSentCommandIDs)
+        let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
+        let plan = sync.makeSyncPlan(state: upgraded)
+        #expect(plan.legacyDependencyReviewRequired)
+        #expect(plan.batch.commands.isEmpty)
+        let prepared = sync.prepareSyncPlan(state: upgraded)
+        #expect(prepared.retired.neverSentCommandIDs == upgraded.neverSentCommandIDs)
+        defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
+        #expect(sync.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        do {
+            _ = try await sync.sendSync(plan, state: upgraded)
+            Issue.record("Legacy review plan must not reach transport")
+        } catch LegacyTimerDependencyReview.required { }
+        let model = AppModel(api: api, defaults: defaults,
+                             roomStore: TestFixtures.emptyIrohRoomStore(),
+                             alarmScheduler: RecordingAlarmScheduler())
+        await model.restore()
+        await model.refreshForPull()
+        #expect(model.errorMessage?.contains("Contact support") == true)
+        #expect(try JSONEncoder.api.encode(persistedState(defaults).pendingCommands) == original)
+        #expect(TestFixtures.recordedRequests(for: scenario).count { $0.path == "/api/v1/sync" } == 1)
+    }
+
+    @Test @MainActor
+    func newWorkAfterOldOrphanStaysBehindLegacyQueue() async throws {
+        let suite = "LegacyMixedQueue.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var old = PersistedTimerState.fresh()
+        old.pendingCommands = [newIndependentBreakCommands(startSequence: 1)[1]]
+        old.recordNeverSentCommand(id: old.pendingCommands[0].id)
+        try persistWithoutDependencyField(old, in: defaults)
+        var upgraded = try persistedState(defaults)
+        let oldID = upgraded.pendingCommands[0].id
+        let fresh = TestFixtures.command(.start, sequence: 3, elapsed: 0, timerID: "new-focus")
+        upgraded.pendingCommands.append(fresh)
+        upgraded.recordNeverSentCommand(id: fresh.id)
+        defaults.set(try JSONEncoder.api.encode(upgraded), forKey: "timer-state-v2")
+        let restarted = try persistedState(defaults)
+        let session = TestFixtures.session(for: "unused-mixed-legacy-queue")
+        defer { session.invalidateAndCancel() }
+        let sync = AccountSynchronization(api: APIClient(session: session, keychain: StaticTokenStore()),
+                                          sharedCoreProvider: { try SharedCore.bundled() })
+        #expect(restarted.pendingCommands.map(\.id) == [oldID, fresh.id])
+        #expect(restarted.legacyUnresolvedCommandIDs == [oldID])
+        #expect(sync.makeSyncPlan(state: restarted).legacyDependencyReviewRequired)
+        #expect(sync.makeSyncPlan(state: restarted).batch.commands.isEmpty)
+        #expect(try JSONEncoder.api.encode(restarted.pendingCommands)
+                == JSONEncoder.api.encode(upgraded.pendingCommands))
+    }
+
+    @Test(arguments: [CommandType.start, .finish, .pause, .resume, .cancel, .clear, .retarget],
+          [(false, false), (false, true), (true, false), (true, true)])
+    @MainActor
+    func legacySingletonReviewDoesNotDependOnCommandShape(
+        type: CommandType, delivery: (neverSent: Bool, oldSchema: Bool)
+    ) throws {
+        let (neverSent, oldSchema) = delivery
+        let suite = "LegacySingletonReview.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var state = PersistedTimerState.fresh()
+        state.pendingCommands = [TestFixtures.command(type, sequence: 1, elapsed: 0)]
+        if neverSent { state.recordNeverSentCommand(id: state.pendingCommands[0].id) }
+        if oldSchema {
+            try persistWithoutDependencyField(state, in: defaults)
+        } else {
+            defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
+        }
+        let restored = try persistedState(defaults)
+        #expect(restored.legacyUnresolvedCommandIDs == (oldSchema ? Set(state.pendingCommands.map(\.id)) : []))
+        let session = TestFixtures.session(for: "unused-legacy-singleton")
+        defer { session.invalidateAndCancel() }
+        let sync = AccountSynchronization(api: APIClient(session: session, keychain: StaticTokenStore()),
+                                          sharedCoreProvider: { try SharedCore.bundled() })
+        let prepared = sync.prepareSyncPlan(state: restored)
+        #expect(prepared.plan.legacyDependencyReviewRequired == oldSchema)
+        #expect(prepared.plan.batch.commands.map(\.id) == (oldSchema ? [] : state.pendingCommands.map(\.id)))
+        #expect(try JSONEncoder.api.encode(prepared.retired.pendingCommands)
+                == JSONEncoder.api.encode(state.pendingCommands))
+        #expect(prepared.retired.pendingTimerDependencies.isEmpty)
+        if oldSchema { #expect(prepared.retired.neverSentCommandIDs == restored.neverSentCommandIDs) }
+    }
+
+    @MainActor
+    private func stagedRejectedBreakStartAtBatchBoundary(
+        _ sync: AccountSynchronization, in defaults: UserDefaults
+    ) async throws -> PersistedTimerState {
+        var state = PersistedTimerState.fresh()
+        state.cachedUser = TestFixtures.user
+        state.pendingCommands = (1...255).map {
+            TestFixtures.command(.clear, sequence: Int64($0), elapsed: 0, timerID: "old-\($0)")
+        } + newIndependentBreakCommands(startSequence: 256)
+        state.nextSequence = 258
+        for command in state.pendingCommands { state.recordNeverSentCommand(id: command.id) }
+        let captured = sync.prepareSyncPlan(state: state)
+        let plan = captured.plan
+        #expect(plan.batch.commands.count == 256)
+        #expect(plan.batch.commands.last?.type == .start)
+        #expect(!plan.batch.commands.contains { $0.type == .finish })
+        let response = try await sync.sendSync(plan, state: captured.retired)
+        // Upgrade happens after old client captured its 256-command request.
+        // Process that response with official bundled Core and exact old IDs.
+        try persistWithoutDependencyField(captured.retired, in: defaults)
+        let upgrading = try persistedState(defaults)
+        #expect(upgrading.legacyUnresolvedCommandIDs == Set(state.pendingCommands.map(\.id)))
+        #expect(response.value.acknowledgements.last?.outcome == .rejected)
+        let transition = try sync.reconcileSync(response, plan: plan, state: upgrading)
+        defaults.set(try JSONEncoder.api.encode(transition.state), forKey: "timer-state-v2")
+        let after = try persistedState(defaults)
+        #expect(after.pendingCommands.map(\.type) == [.finish])
+        #expect(after.legacyUnresolvedCommandIDs == Set(after.pendingCommands.map(\.id)))
+        #expect(after.legacyTimerDependencyUpgrade)
+        #expect(try JSONEncoder.api.encode(after.pendingCommands)
+                == JSONEncoder.api.encode(Array(state.pendingCommands.suffix(1))))
+        #expect(after.neverSentCommandIDs.contains(after.pendingCommands[0].id))
+        return after
     }
 
     @Test @MainActor

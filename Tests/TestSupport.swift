@@ -1238,6 +1238,17 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
                 && path == "/api/v1/bootstrap":
             statusCode = 404
             body = Data(#"{"error":"Not found"}"#.utf8)
+        case "bootstrap-preflight-offline"
+            where request.httpMethod == "GET"
+                && path == "/api/v1/bootstrap":
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
+        case "bootstrap-preflight-offline-reconnect"
+            where request.httpMethod == "GET"
+                && path == "/api/v1/bootstrap"
+                && pathAttempt == 1:
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
         case _ where Self.usesBootstrapStub(scenario)
             && request.httpMethod == "GET"
             && path == "/api/v1/bootstrap":

@@ -81,14 +81,9 @@ struct TaskSummaryRow: View {
     @ViewBuilder
     private var deleteButton: some View {
         if usesStackedLayout {
-            Button("Delete \(summary.task.title)", systemImage: "trash", role: .destructive, action: delete)
-                .foregroundStyle(PomodoroughTheme.danger)
-                .labelStyle(.iconOnly)
-                .frame(width: 44, height: 44)
+            deleteControl
         } else {
-            Button("Delete \(summary.task.title)", systemImage: "trash", role: .destructive, action: delete)
-                .labelStyle(.iconOnly)
-                .foregroundStyle(PomodoroughTheme.danger)
+            deleteControl
                 .containerRelativeFrame(
                     .horizontal,
                     count: TaskBoardColumns.totalSpans,
@@ -96,8 +91,18 @@ struct TaskSummaryRow: View {
                     spacing: TaskBoardColumns.spacing,
                     alignment: .center
                 )
-                .frame(minWidth: 44, minHeight: 44)
         }
+    }
+
+    private var deleteControl: some View {
+        Button(role: .destructive, action: delete) {
+            Label("Delete \(summary.task.title)", systemImage: "trash")
+                .labelStyle(.iconOnly)
+                // The system minimum touch target must belong to the label.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
+        }
+        .foregroundStyle(PomodoroughTheme.danger)
     }
 }
 
