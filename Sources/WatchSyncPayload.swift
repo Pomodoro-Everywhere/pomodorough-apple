@@ -182,6 +182,15 @@ extension WatchUnknownCommandError: LocalizedError {
     var errorDescription: String? { name }
 }
 
+/// Pause refused after current-target validation: bare name only, never
+/// timer ids, revisions, or snapshots. Distinct from unknown-command key
+/// so transport receipt separates vocabulary from application failure.
+struct WatchPauseRefusedError: Error, Sendable {}
+
+extension WatchPauseRefusedError: LocalizedError {
+    var errorDescription: String? { "pause" }
+}
+
 /// Watch ingest ordering: a delayed refresh reply must not overwrite a
 /// newer application-context snapshot adopted earlier. A changed install
 /// seed (high 32 bits) always adopts, so a reinstall — or an epoch

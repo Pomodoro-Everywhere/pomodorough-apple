@@ -383,7 +383,7 @@ extension CoreTimerCommand: Codable {
     }
 }
 
-struct CoreTaskOperation: Codable, Equatable, Sendable {
+struct CoreTaskOperation: Equatable, Sendable {
     let id: String
     let deviceId: String
     let taskId: String
@@ -418,6 +418,45 @@ struct CoreTaskOperation: Codable, Equatable, Sendable {
             throw SharedCoreError.invalidResponse("invalid rebased task operation")
         }
         return operation
+    }
+}
+
+extension CoreTaskOperation: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case deviceId
+        case taskId
+        case type
+        case title
+        case occurredAt
+        case hlcWallMs
+        case hlcCounter
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        deviceId = try values.decode(String.self, forKey: .deviceId)
+        taskId = try values.decode(String.self, forKey: .taskId)
+        type = try values.decode(TaskOperationType.self, forKey: .type)
+        title = try values.decodeIfPresent(String.self, forKey: .title) ?? ""
+        occurredAt = try values.decode(Date.self, forKey: .occurredAt)
+        hlcWallMs = try values.decode(Int64.self, forKey: .hlcWallMs)
+        hlcCounter = try values.decode(Int64.self, forKey: .hlcCounter)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(deviceId, forKey: .deviceId)
+        try values.encode(taskId, forKey: .taskId)
+        try values.encode(type, forKey: .type)
+        if !title.isEmpty {
+            try values.encode(title, forKey: .title)
+        }
+        try values.encode(occurredAt, forKey: .occurredAt)
+        try values.encode(hlcWallMs, forKey: .hlcWallMs)
+        try values.encode(hlcCounter, forKey: .hlcCounter)
     }
 }
 

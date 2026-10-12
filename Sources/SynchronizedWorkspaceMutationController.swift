@@ -67,17 +67,26 @@ final class SynchronizedWorkspaceMutationController {
         case commit(PreparedMutation)
     }
 
-    private let timerSessionController: TimerSessionController
-    private let timerIDProvider: @MainActor () -> String
+    let timerSessionController: TimerSessionController
+    let timerIDProvider: @MainActor () -> String
+    let sharedCoreProvider: @MainActor () throws -> SharedCore
+    let admission: WorkspaceIntentAdmission
 
     init(
         timerSessionController: TimerSessionController,
         timerIDProvider: @escaping @MainActor () -> String = {
             "timer-\(UUID().uuidString.lowercased())"
-        }
+        },
+        sharedCoreProvider: (@MainActor () throws -> SharedCore)? = nil
     ) {
         self.timerSessionController = timerSessionController
         self.timerIDProvider = timerIDProvider
+        if let sharedCoreProvider {
+            self.sharedCoreProvider = sharedCoreProvider
+        } else {
+            self.sharedCoreProvider = { try SharedCore.bundled() }
+        }
+        self.admission = WorkspaceIntentAdmission(sharedCoreProvider: self.sharedCoreProvider)
     }
 
     func plan(_ intent: Intent, from snapshot: Snapshot) throws -> Transition? {
@@ -143,7 +152,9 @@ private extension SynchronizedWorkspaceMutationController {
             state,
             Requirements(timerCommandIDs: [command.command.id]),
             snapshot: snapshot,
-            afterSync: [cancelAlarm(timer.id)]
+            afterSync: [cancelAlarm(timer.id)],
+            kind: .selectPhase(phase),
+            category: .phase
         )
     }
 
@@ -173,13 +184,17 @@ private extension SynchronizedWorkspaceMutationController {
                     timerCommandIDs: [retarget.command.id],
                     selectedTaskOperationIDs: [operationID]
                 ),
-                snapshot: snapshot
+                snapshot: snapshot,
+                kind: .selectTask(taskID?.uuidString.lowercased()),
+                category: .selectTask
             )
         }
         return try synchronized(
             state,
             Requirements(selectedTaskOperationIDs: [operationID]),
-            snapshot: snapshot
+            snapshot: snapshot,
+            kind: .selectTask(taskID?.uuidString.lowercased()),
+            category: .selectTask
         )
     }
 
@@ -270,7 +285,9 @@ private extension SynchronizedWorkspaceMutationController {
                 durationOperationIDs: [operationID]
             ),
             snapshot: snapshot,
-            afterSync: effects
+            afterSync: effects,
+            kind: .setDuration(phase, minutes),
+            category: .setDuration
         )
     }
 
@@ -288,7 +305,7 @@ private extension SynchronizedWorkspaceMutationController {
     func planStart(_ snapshot: Snapshot) throws -> Transition? {
         guard snapshot.canonicalTimer.map(isActive) != true else { return nil }
         let phase = snapshot.state.settings.selectedPhase
-        let duration = TimeInterval(snapshot.state.settings.durationMs(for: phase)) / 1_000
+        let duration = startDuration(for: phase, snapshot: snapshot)
         let taskID = selectedTaskID(for: phase, snapshot: snapshot)
         let timerID = timerIDProvider()
         let command = try makeCommand(
@@ -313,7 +330,9 @@ private extension SynchronizedWorkspaceMutationController {
                 .setExplicitPhaseSelection(false),
                 .persist,
                 .alarm(alarm)
-            ]
+            ],
+            kind: .start,
+            category: .timerStart
         )
     }
 
@@ -332,7 +351,9 @@ private extension SynchronizedWorkspaceMutationController {
             snapshot: snapshot,
             afterSync: [.alarm(
                 timerSessionController.alarmPlan(for: .pause(timerID: timer.id))
-            )]
+            )],
+            kind: .pause,
+            category: .timerPause
         )
     }
 
@@ -354,7 +375,9 @@ private extension SynchronizedWorkspaceMutationController {
             command.state,
             Requirements(timerCommandIDs: [command.command.id]),
             snapshot: snapshot,
-            afterSync: [.alarm(alarm)]
+            afterSync: [.alarm(alarm)],
+            kind: .resume,
+            category: .timerResume
         )
     }
 
@@ -381,7 +404,9 @@ private extension SynchronizedWorkspaceMutationController {
             clear.state,
             Requirements(timerCommandIDs: [cancel.command.id, clear.command.id]),
             snapshot: snapshot,
-            afterSync: [cancelAlarm(timer.id)]
+            afterSync: [cancelAlarm(timer.id)],
+            kind: .cancelAndClear,
+            category: .timerCancel
         )
     }
 
@@ -401,7 +426,9 @@ private extension SynchronizedWorkspaceMutationController {
             afterSync: [
                 .clearCompletionAlert(timerID: timer.id),
                 cancelAlarm(timer.id)
-            ]
+            ],
+            kind: .clear,
+            category: .timerClear
         )
     }
 }
@@ -435,13 +462,24 @@ private extension SynchronizedWorkspaceMutationController {
                 to: &state
             ))
         }
+        let kind: WorkspaceIntentKind
+        let category: WorkspaceIntentCategory
+        if type == .upsert {
+            kind = .upsertTask(task.title)
+            category = .taskUpsert
+        } else {
+            kind = .deleteTask(task.id.uuidString.lowercased())
+            category = .taskDelete
+        }
         return try synchronized(
             state,
             Requirements(
                 taskOperationIDs: [operationID],
                 selectedTaskOperationIDs: selectedOperationIDs
             ),
-            snapshot: snapshot
+            snapshot: snapshot,
+            kind: kind,
+            category: category
         )
     }
 
@@ -455,37 +493,13 @@ private extension SynchronizedWorkspaceMutationController {
             elapsed: intent.elapsed,
             snapshot: snapshot
         )
+        let (kind, category) = commandIntentKind(command: intent)
         return try synchronized(
             command.state,
             Requirements(timerCommandIDs: [command.command.id]),
-            snapshot: snapshot
-        )
-    }
-
-    func synchronized(
-        _ state: PersistedTimerState,
-        _ requirements: Requirements,
-        snapshot: Snapshot,
-        afterSync: [Effect] = []
-    ) throws -> Transition {
-        let output = try timerSessionController.project(
-            state,
-            replicationMode: snapshot.replicationMode,
-            physicalNow: snapshot.localDate
-        )
-        guard requirements.areSatisfied(by: output) else {
-            throw SharedCoreError.invalidResponse(
-                "new synchronized mutation did not win Core projection"
-            )
-        }
-        return Transition(
-            state: state,
-            projection: output,
-            requirements: requirements,
-            effects: [
-                .persistAtomically(previous: snapshot.state, rebuildsOnRollback: true),
-                .launchSync
-            ] + afterSync
+            snapshot: snapshot,
+            kind: kind,
+            category: category
         )
     }
 
@@ -509,6 +523,19 @@ private extension SynchronizedWorkspaceMutationController {
         guard phase == .focus, let selected = snapshot.projectedSelectedTaskID else { return nil }
         return snapshot.tasks.first(where: { $0.id == selected })?
             .id.uuidString.lowercased()
+    }
+
+    func startDuration(for phase: TimerPhase, snapshot: Snapshot) -> TimeInterval {
+        let state = snapshot.state
+        let durationMs = state.effectiveDurationMs(for: phase)
+        if state.isDurationDomainSuppressed() {
+            _ = DurationBaseDiagnostics.log(
+                category: .timerStart,
+                reason: "suppressedDurationUsesCanonical",
+                state: state
+            )
+        }
+        return TimeInterval(durationMs) / 1_000
     }
 
     func isActive(_ timer: CanonicalTimer) -> Bool {
@@ -638,7 +665,7 @@ private extension SynchronizedWorkspaceMutationController {
     }
 }
 
-private extension SynchronizedWorkspaceMutationController.Requirements {
+extension SynchronizedWorkspaceMutationController.Requirements {
     func areSatisfied(by output: CoreProjectionOutput) -> Bool {
         timerCommandIDs.allSatisfy {
             output.timerOutcomes[$0]?.outcome == .applied

@@ -304,7 +304,8 @@ extension CentralizedAccountSessionCoordinator {
         let isMutationBlocked: Bool
 
         var hasPendingOperations: Bool {
-            !state.pendingCommands.isEmpty
+            state.outgoingSyncClaim != nil
+                || !state.pendingCommands.isEmpty
                 || !state.pendingTaskOperations.isEmpty
                 || !state.pendingDurationOperations.isEmpty
                 || !state.pendingAutoStartOperations.isEmpty
@@ -659,7 +660,7 @@ extension CentralizedAccountSessionCoordinator {
         guard ownsCentralizedReplication(
             lease.operation, modeGeneration: lease.modeGeneration, workspace: workspace
         ), signedInUser != nil else { return transition(.stale) }
-        if error is LegacyTimerDependencyReview {
+        if error is LegacyTimerDependencyReview || error is SyncBatchPlanError {
             publication.isOffline = false
             return transition(.blocksFollowUp, effects: [
                 .presentError(error.localizedDescription), .cancelCentralizedStreams
@@ -928,12 +929,16 @@ extension CentralizedAccountSessionCoordinator {
 }
 
 extension CentralizedAccountSessionCoordinator {
-    func makeSyncPlan(state: PersistedTimerState) -> AccountSynchronization.SyncPlan {
-        synchronization.makeSyncPlan(state: state)
+    func makeSyncPlan(state: PersistedTimerState) throws -> AccountSynchronization.SyncPlan {
+        try synchronization.makeSyncPlan(state: state)
     }
 
-    func prepareSyncPlan(state: PersistedTimerState) -> (plan: AccountSynchronization.SyncPlan, retired: PersistedTimerState) {
-        synchronization.prepareSyncPlan(state: state)
+    func prepareSyncPlan(state: PersistedTimerState) throws -> (plan: AccountSynchronization.SyncPlan, retired: PersistedTimerState) {
+        try synchronization.prepareSyncPlan(state: state)
+    }
+
+    func discardSavedSyncClaim(confirmed: Bool, state: PersistedTimerState) throws -> PersistedTimerState {
+        try synchronization.discardSavedSyncClaim(confirmed: confirmed, state: state)
     }
 
     func sendSync(
@@ -973,8 +978,8 @@ extension CentralizedAccountSessionCoordinator {
         strategy: BootstrapResolutionStrategy,
         snapshot: BootstrapResponse,
         state: PersistedTimerState
-    ) -> BootstrapResolveRequest {
-        synchronization.makeBootstrapResolutionRequest(
+    ) throws -> BootstrapResolveRequest {
+        try synchronization.makeBootstrapResolutionRequest(
             strategy: strategy, snapshot: snapshot, state: state
         )
     }

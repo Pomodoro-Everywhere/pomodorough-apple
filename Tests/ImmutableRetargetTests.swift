@@ -164,11 +164,11 @@ struct ImmutableRetargetTests {
         state.pendingCommands = [command]
         state.neverSentCommandIDs = [command.id]
         let sync = AccountSynchronization(api: APIClient(session: .shared, keychain: EmptyTokenStore()), sharedCoreProvider: { try SharedCore.bundled() })
-        let first = sync.prepareSyncPlan(state: state)
+        let first = try sync.prepareSyncPlan(state: state)
         #expect(first.plan.batch.commands == [command])
         #expect(!first.retired.neverSentCommandIDs.contains(command.id))
         #expect(first.retired.pendingCommands == [command])
-        let second = sync.prepareSyncPlan(state: first.retired)
+        let second = try sync.prepareSyncPlan(state: first.retired)
         #expect(second.plan.batch.commands == [command])
         #expect(second.plan.request.commands == first.plan.request.commands)
     }

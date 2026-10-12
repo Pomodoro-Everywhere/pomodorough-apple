@@ -2,6 +2,14 @@
   "locale": "ar-XB",
   "layoutDirection": "right-to-left",
   "strings": {
+    "Create a new sync request?": { "stringUnit": { "state": "translated", "value": "‏⟦Create a new sync request?⟧" } },
+    "History setup paused: local changes exceed the server limit. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦History setup paused: local changes exceed the server limit. Queued changes remain saved.⟧" } },
+    "Invalid Core batch plan.": { "stringUnit": { "state": "translated", "value": "‏⟦Invalid Core batch plan.⟧" } },
+    "Keep changes and recover": { "stringUnit": { "state": "translated", "value": "‏⟦Keep changes and recover⟧" } },
+    "Recover saved sync request": { "stringUnit": { "state": "translated", "value": "‏⟦Recover saved sync request⟧" } },
+    "Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.⟧" } },
+    "Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.⟧" } },
+    "The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.": { "stringUnit": { "state": "translated", "value": "‏⟦The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.⟧" } },
     "%@ duration": {
       "stringUnit": {
         "state": "translated",

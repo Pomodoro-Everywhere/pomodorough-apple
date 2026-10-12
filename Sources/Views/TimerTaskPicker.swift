@@ -15,7 +15,6 @@ struct TimerTaskPicker: View {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 8) {
                     pickerContent
-                    Spacer(minLength: Self.pickerReserveHeight(for: dynamicTypeSize))
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
@@ -30,10 +29,11 @@ struct TimerTaskPicker: View {
         .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
     }
 
-    /// Full Dynamic Type range: the picker wraps at accessibility sizes
-    /// instead of shrinking to an unreadable scale. The menu button
-    /// reports single-line ideal but renders hyphenated two-line Unassigned
-    /// at XXXL on narrow phones, so the reserve below adds one line.
+    /// Full Dynamic Type range: the menu title wraps at accessibility
+    /// sizes instead of shrinking to an unreadable scale. The native
+    /// menu Picker reports single-line ideal but renders hyphenated
+    /// two-line Unassigned at XXXL, so the title below carries its own
+    /// two-line floor inside the control (R48-AP09).
     static func pickerLineLimit(for dynamicTypeSize: DynamicTypeSize) -> Int? {
         dynamicTypeSize.isAccessibilitySize ? nil : 1
     }
@@ -58,22 +58,34 @@ struct TimerTaskPicker: View {
         dynamicTypeSize.isAccessibilitySize ? .leading : .trailing
     }
 
-    /// One-line reserve for the hyphenated Unassigned second line at
-    /// XXXL on narrow phones. Derived from the menu font for the current
-    /// Dynamic Type, not a fixed height, so full scale is preserved.
-    /// macOS windows are wide enough that no reserve is needed.
-    static func pickerReserveHeight(for dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+    /// Two-line floor for the rendered menu title at accessibility
+    /// sizes. Derived from the menu font for the current Dynamic Type,
+    /// not a fixed height, so full scale is preserved. The floor lives
+    /// inside the menu label: the old outside-stack reserve left room
+    /// in the card while the native control still clipped its second
+    /// line. macOS windows are wide enough that no floor is needed.
+    static func pickerTitleMinHeight(for dynamicTypeSize: DynamicTypeSize) -> CGFloat {
         #if os(iOS)
         guard dynamicTypeSize.isAccessibilitySize else { return 0 }
-        return menuFont(for: dynamicTypeSize).lineHeight
+        return menuFont(for: dynamicTypeSize).lineHeight * 2
         #else
         return 0
         #endif
     }
 
+    /// Displayed menu title for a selection. Unassigned covers nil and
+    /// stale identifiers so the control never renders a blank title.
+    /// Long titles pass through verbatim; wrapping is handled by the
+    /// multiline label, never by truncation in the model. Pure and
+    /// nonisolated so background unit probes never trip MainActor.
+    nonisolated static func menuTitle(selectedID: UUID?, tasks: [FocusTask]) -> String {
+        guard let selectedID else { return "Unassigned" }
+        return tasks.first(where: { $0.id == selectedID })?.title ?? "Unassigned"
+    }
+
     #if os(iOS)
     /// Menu title font at the current Dynamic Type, from the system
-    /// preferred body font so the reserve tracks the rendered size.
+    /// preferred body font so the floor tracks the rendered size.
     static func menuFont(for dynamicTypeSize: DynamicTypeSize) -> UIFont {
         let category = contentSizeCategory(for: dynamicTypeSize)
         let traits = UITraitCollection(preferredContentSizeCategory: category)
@@ -110,27 +122,49 @@ struct TimerTaskPicker: View {
                 .foregroundStyle(PomodoroughTheme.sky)
                 .labelStyle(.titleAndIcon)
                 .accessibilityHidden(true)
-            pickerControl
+            pickerMenu
     }
 
-    private var pickerControl: some View {
-        Picker("Focus task", selection: $model.selectedTaskID) {
-            Text("Unassigned").tag(UUID?.none)
-            ForEach(model.tasks) { task in
-                Text(task.title).tag(Optional(task.id))
-            }
+    private var selectedTitle: String {
+        Self.menuTitle(selectedID: model.selectedTaskID, tasks: model.tasks)
+    }
+
+    private var pickerMenu: some View {
+        Menu {
+            menuOptions
+        } label: {
+            menuLabel
         }
-        .labelsHidden()
-        .pickerStyle(.menu)
         .tint(PomodoroughTheme.ticket)
-        .lineLimit(Self.pickerLineLimit(for: dynamicTypeSize))
-        .minimumScaleFactor(Self.pickerScaleFactor(for: dynamicTypeSize))
-        .allowsTightening(true)
-        .multilineTextAlignment(Self.pickerMultilineAlignment(for: dynamicTypeSize))
-        .truncationMode(.tail)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: Self.pickerAlignment(for: dynamicTypeSize))
+        .accessibilityLabel("Focus task, \(selectedTitle)")
         .accessibilityHint("Applies to the current running focus timer and the next timer.")
+    }
+
+    @ViewBuilder
+    private var menuOptions: some View {
+        Button("Unassigned") { model.selectedTaskID = nil }
+        ForEach(model.tasks) { task in
+            Button(task.title) { model.selectedTaskID = task.id }
+        }
+    }
+
+    private var menuLabel: some View {
+        HStack(spacing: 6) {
+            Text(selectedTitle)
+                .lineLimit(Self.pickerLineLimit(for: dynamicTypeSize))
+                .minimumScaleFactor(Self.pickerScaleFactor(for: dynamicTypeSize))
+                .allowsTightening(true)
+                .multilineTextAlignment(Self.pickerMultilineAlignment(for: dynamicTypeSize))
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.footnote.bold())
+                .accessibilityHidden(true)
+        }
+        .foregroundStyle(PomodoroughTheme.ticket)
+        .frame(maxWidth: .infinity, alignment: Self.pickerAlignment(for: dynamicTypeSize))
+        .frame(minHeight: Self.pickerTitleMinHeight(for: dynamicTypeSize))
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

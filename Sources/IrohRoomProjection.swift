@@ -218,6 +218,7 @@ enum IrohRoomProjection {
         state.history = history
         state.tasks = tasks
         state.knownTasks = Array(collected.knownTasks.values)
+        state.installCanonicalDurations(output.durationsMs)
         state.settings.durationsMs = output.durationsMs
         state.autoStartBreaks = output.autoStartBreaks
         state.selectedTaskID = output.selectedTaskId.flatMap(UUID.init(uuidString:))

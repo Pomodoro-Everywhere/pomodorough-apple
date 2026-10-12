@@ -55,6 +55,11 @@ enum PersistedLegacyMigration {
     static func migrateDurationSettings(
         state: inout PersistedTimerState
     ) -> LegacyDurationMigrationResult {
+        // R48-AP02 repair: seed canonical from migrated display values.
+        // Migration path only (nil guard); never overwrite existing base.
+        if state.canonicalDurationsMs == nil {
+            state.installCanonicalDurations(state.settings.durationsMs)
+        }
         var operationIDs: [String] = []
         for phase in TimerPhase.allCases {
             let durationMs = state.settings.durationMs(for: phase)

@@ -125,6 +125,9 @@ struct AccountView: View {
             LabeledContent("Completed focus runs", value: "\(model.completedFocusCount)")
                 .accessibilityHidden(true)
             LabeledContent("Iroh", value: model.irohStatusLabel)
+            if model.hasOversizedSavedSyncClaim {
+                SavedSyncClaimRecovery(model: model)
+            }
             Button("Sync now", systemImage: "arrow.triangle.2.circlepath") {
                 Task {
                     if model.replicationMode == .iroh {

@@ -23,17 +23,22 @@ struct TimerScreen: View {
     }
 
     /// Active division frames from measured reserved regions, in the
-    /// GeometryReader coordinate space with margins included. Filters
-    /// inactive folds so flat keeps existing layout; physical positions
-    /// stay fixed across layout directions because the fold does not move.
-    ///
-    /// Fold detection needs the iOS 27.1 SDK (GeometryProxy.reservedRegions),
-    /// but release and CI pin Xcode 26.6, whose SDK lacks that symbol, so any
-    /// reference fails compile even inside `#available`. Return the empty
-    /// flat-layout set until the toolchain bump; TimerHingeLayout already
-    /// treats [] as unfolded.
+    /// GeometryReader coordinate space. Uses the region frame verbatim:
+    /// the system split arrangement constrains content to the regions
+    /// this frame defines, so the probe and the layout share one boundary.
+    /// Physical positions stay fixed across layout directions because the
+    /// fold does not move. The compiler gate keeps the older CI SDK
+    /// buildable; runtime availability preserves the ordinary adaptive
+    /// layout on iOS 18 through 27.0.
     static func measuredDivisions(in proxy: GeometryProxy) -> [CGRect] {
-        []
+        #if os(iOS) && compiler(>=6.4)
+        if #available(iOS 27.1, *) {
+            return proxy.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed)
+                .filter(\.isActive)
+                .map(\.frame)
+        }
+        #endif
+        return []
     }
 
     /// Measured hinge from container size plus active divisions.
@@ -82,7 +87,10 @@ struct TimerScreen: View {
             timerStack(layout: layout, hinge: hinge, geometry: geometry)
                 .animation(reduceMotion ? nil : .default, value: layout)
             #if DEBUG && os(iOS)
-                .overlay(alignment: .topLeading) { layoutTestProbe(size: geometry.size) }
+                .overlay(alignment: .topLeading) {
+                    layoutTestProbe(size: geometry.size)
+                    hingeTestProbe(hinge, origin: geometry.frame(in: .global).origin)
+                }
             #endif
         }
         .background(TimerBackdrop())
@@ -152,6 +160,21 @@ struct TimerScreen: View {
         case .regular: "regular"
         case nil: "unspecified"
         @unknown default: "unknown"
+        }
+    }
+
+    @ViewBuilder
+    private func hingeTestProbe(_ hinge: TimerHingeLayout, origin: CGPoint) -> some View {
+        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_HINGE"] == "1" {
+            Text(verbatim: "AP07")
+                .font(.caption2)
+                .accessibilityIdentifier("AP07-divisions")
+                .accessibilityValue(Text(verbatim: hinge.divisions.map {
+                    let frame = $0.offsetBy(dx: origin.x, dy: origin.y)
+                    return [frame.minX, frame.minY, frame.width, frame.height]
+                        .map { String(Double($0)) }.joined(separator: ",")
+                }.joined(separator: "|")))
+                .allowsHitTesting(false)
         }
     }
     #endif

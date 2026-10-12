@@ -12,9 +12,9 @@ struct PersistedStateDecouplingCompatibilityTests {
         let decoded = try JSONDecoder.api.decode(PersistedTimerState.self, from: payload)
         let encoded = try JSONEncoder.api.encode(decoded)
 
-        #expect(fixture["formatVersion"] as? Int == 1)
+        #expect(fixture["formatVersion"] as? Int == 2)
         #expect(Self.sha256(encoded) == fixture["canonicalSHA256"] as? String)
-        #expect(encoded.count == 1104)
+        #expect(encoded.count == 1133)
     }
 
     @Test

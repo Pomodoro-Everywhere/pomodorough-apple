@@ -8,7 +8,19 @@ struct LandscapeDialFace: View {
     let timeText: String
     var completedFocusCount = 0
 
+    @ViewBuilder
     var body: some View {
+        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_DIAL"] == "1" {
+            dialShell
+        } else {
+            dialShell.accessibilityRepresentation {
+                TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+                LongBreakProgressIndicator(completedToday: completedFocusCount)
+            }
+        }
+    }
+
+    private var dialShell: some View {
         GeometryReader { geometry in
             readout(size: geometry.size)
         }
@@ -28,10 +40,6 @@ struct LandscapeDialFace: View {
             }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-        }
-        .accessibilityRepresentation {
-            TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
-            LongBreakProgressIndicator(completedToday: completedFocusCount)
         }
     }
 
@@ -58,6 +66,7 @@ struct LandscapeDialFace: View {
                 .minimumScaleFactor(0.45)
                 .lineLimit(1)
                 .foregroundStyle(PomodoroughTheme.ticket)
+                .accessibilityIdentifier("AP08-countdown-digits")
             HStack(spacing: labelSize * 0.75) {
                 Text(status.localizedUppercase)
                     .font(labelFont)

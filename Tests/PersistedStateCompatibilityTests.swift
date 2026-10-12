@@ -14,7 +14,7 @@ struct PersistedStateCompatibilityTests {
         #expect((object["pendingCommands"] as? [Any])?.isEmpty == true)
         #expect(object["serverTimeOffsetMs"] as? Int == 125)
         #expect(
-            encoded == Data(#"{"autoStartBreaks":false,"deviceId":"device-compatibility","hasCorruptPendingOperations":false,"hasExplicitPhaseSelection":false,"history":[],"hlcCounter":0,"hlcWallMs":0,"knownTasks":[],"lastTrustedTimeMs":2000000,"legacyTaskAssignments":{},"legacyTimerDependencyUpgrade":false,"legacyUnresolvedCommandIDs":[],"localCommandDates":{},"localTimerOwners":{},"neverSentAutoStartOperationIDs":[],"neverSentCommandIDs":[],"neverSentDurationOperationIDs":[],"neverSentSelectedTaskOperationIDs":[],"neverSentTaskOperationIDs":[],"nextSequence":1,"pendingAutoStartOperations":[],"pendingCommands":[],"pendingDurationOperations":[],"pendingSelectedTaskOperations":[],"pendingTaskOperations":[],"pendingTimerDependencies":[],"provisionalBreaks":[],"provisionalPhaseAdvances":[],"revision":0,"selectedPhaseGeneration":0,"sequenceExhausted":false,"serverTimeAnchorMs":2000000,"serverTimeAnchorUptime":100,"serverTimeOffsetMs":125,"serverTimeUncertaintyMs":25,"settings":{"autoStartBreaks":false,"focusDurationMs":1500000,"longBreakDurationMs":900000,"selectedPhase":"focus","shortBreakDurationMs":300000},"tasks":[]}"#.utf8)
+            encoded == Data(#"{"autoStartBreaks":false,"canonicalDurationsMs":{"focus":1500000,"long_break":900000,"short_break":300000},"deviceId":"device-compatibility","hasCorruptPendingOperations":false,"hasExplicitPhaseSelection":false,"history":[],"hlcCounter":0,"hlcWallMs":0,"knownTasks":[],"lastTrustedTimeMs":2000000,"legacyTaskAssignments":{},"legacyTimerDependencyUpgrade":false,"legacyUnresolvedCommandIDs":[],"localCommandDates":{},"localTimerOwners":{},"neverSentAutoStartOperationIDs":[],"neverSentCommandIDs":[],"neverSentDurationOperationIDs":[],"neverSentSelectedTaskOperationIDs":[],"neverSentTaskOperationIDs":[],"nextSequence":1,"pendingAutoStartOperations":[],"pendingCommands":[],"pendingDurationOperations":[],"pendingSelectedTaskOperations":[],"pendingTaskOperations":[],"pendingTimerDependencies":[],"provisionalBreaks":[],"provisionalPhaseAdvances":[],"revision":0,"selectedPhaseGeneration":0,"sequenceExhausted":false,"serverTimeAnchorMs":2000000,"serverTimeAnchorUptime":100,"serverTimeOffsetMs":125,"serverTimeUncertaintyMs":25,"settings":{"autoStartBreaks":false,"focusDurationMs":1500000,"longBreakDurationMs":900000,"selectedPhase":"focus","shortBreakDurationMs":300000},"syncBatchCursor":"commands","tasks":[]}"#.utf8)
         )
     }
 
@@ -57,7 +57,10 @@ struct PersistedStateCompatibilityTests {
             "neverSentAutoStartOperationIDs",
             "neverSentSelectedTaskOperationIDs",
             "canonicalHeadWallMs",
-            "canonicalHeadCounter"
+            "canonicalHeadCounter",
+            "canonicalDurationsMs",
+            "syncBatchCursor",
+            "outgoingSyncClaim"
         ] {
             object.removeValue(forKey: key)
         }
@@ -84,6 +87,10 @@ struct PersistedStateCompatibilityTests {
         #expect(!decoded.hasCorruptPendingOperations)
         #expect(decoded.neverSentCommandIDs.isEmpty)
         #expect(decoded.canonicalHeadWallMs == nil)
+        #expect(decoded.canonicalDurationsMs == nil)
+        #expect(decoded.syncBatchCursor == "commands")
+        #expect(decoded.outgoingSyncClaim == nil)
+        #expect(decoded.canonicalDurations() == decoded.settings.durationsMs)
     }
 
     @Test
@@ -370,6 +377,7 @@ struct PersistedStateCompatibilityTests {
 
     private static let currentTopLevelKeys: Set<String> = [
         "autoStartBreaks",
+        "canonicalDurationsMs",
         "deviceId",
         "hasCorruptPendingOperations",
         "hasExplicitPhaseSelection",
@@ -399,6 +407,7 @@ struct PersistedStateCompatibilityTests {
         "revision",
         "selectedPhaseGeneration",
         "sequenceExhausted",
+        "syncBatchCursor",
         "serverTimeAnchorMs",
         "serverTimeAnchorUptime",
         "serverTimeOffsetMs",

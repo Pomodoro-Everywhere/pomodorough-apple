@@ -2028,7 +2028,7 @@ struct IntegrationNegativeTests {
         let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
         var state = try bootstrapTransportState(strategy: .merge, mixed: true)
         let request = try #require(state.pendingBootstrapResolution)
-        let plan = sync.makeSyncPlan(state: state)
+        let plan = try sync.makeSyncPlan(state: state)
         let original = try JSONEncoder.api.encode(state.pendingCommands)
         state.legacyUnresolvedCommandIDs = [state.pendingCommands[0].id]
         state.legacyTimerDependencyUpgrade = true

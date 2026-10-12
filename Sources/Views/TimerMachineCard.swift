@@ -216,7 +216,36 @@ private struct TimerMachineIOSLandscapeCard: View {
         }
     }
 
+    @ViewBuilder
     private var bookAsideContent: some View {
+        #if os(iOS) && compiler(>=6.4)
+        if #available(iOS 27.1, *) {
+            // System split arrangement places the dial and the controls
+            // in the regions the measured division defines, so neither
+            // panel straddles the fold. Axes stay horizontal: this aside
+            // only serves wide landscape cards.
+            ArrangementView {
+                TimerMachineDialSection(model: model, layout: .landscape)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } secondary: {
+                VStack(spacing: 12) {
+                    TimerTaskPicker(model: model, layout: layout)
+                    TimerControls(model: model, layout: layout, hinge: hinge)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .arrangementViewStyle(.split.axes(.horizontal))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+        } else {
+            fallbackAsideContent
+        }
+        #else
+        fallbackAsideContent
+        #endif
+    }
+
+    private var fallbackAsideContent: some View {
         HStack(spacing: 14) {
             TimerMachineDialSection(model: model, layout: .landscape)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

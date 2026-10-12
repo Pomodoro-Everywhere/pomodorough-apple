@@ -176,7 +176,7 @@ struct ResponsibilitySplitCompatibilityTests {
             startCommandId: start.command.id
         )]
 
-        let plan = synchronization.makeSyncPlan(state: state)
+        let plan = try synchronization.makeSyncPlan(state: state)
         #expect(plan.batch.commands.map(\.id) == [finish.command.id])
         #expect(plan.request.commands.map(\.id) == [finish.command.id])
         #expect(plan.request.lastRevision == state.revision)

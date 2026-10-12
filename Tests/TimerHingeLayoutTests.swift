@@ -8,6 +8,22 @@ import Testing
 // never a hardcoded spansHinge bool.
 @Suite("Timer hinge Book pose production layout")
 struct TimerHingeLayoutTests {
+    @Test func rawFoldEdgeIsTheProductionBoundary() {
+        // The production adapter reports the measured region frame
+        // verbatim, matching the regions the system split arrangement
+        // uses. A control starting exactly at the raw edge avoids the
+        // fold; one point inside still spans it.
+        let edge = Self.bookDivisions[0].maxX
+        #expect(!TimerHingeLayout.controlRowSpansFold(
+            controlFrame: CGRect(x: edge, y: 600, width: 100, height: 60),
+            divisions: Self.bookDivisions
+        ))
+        #expect(TimerHingeLayout.controlRowSpansFold(
+            controlFrame: CGRect(x: edge - 1, y: 600, width: 100, height: 60),
+            divisions: Self.bookDivisions
+        ))
+    }
+
     // Inner display one window with active vertical fold, measured
     // on iPhone Duo simulator at 127 degrees hinge angle.
     static var bookContainer: CGSize { CGSize(width: 951, height: 669) }

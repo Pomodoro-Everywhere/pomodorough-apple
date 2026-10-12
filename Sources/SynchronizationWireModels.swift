@@ -1,6 +1,6 @@
 import Foundation
 
-struct SyncRequest: Encodable, Sendable {
+struct SyncRequest: Codable, Equatable, Sendable {
     let deviceId: String
     let lastRevision: Int64
     let commands: [TimerCommand]
@@ -25,6 +25,39 @@ struct SyncRequest: Encodable, Sendable {
         self.durationOperations = durationOperations
         self.autoStartOperations = autoStartOperations
         self.selectedTaskOperations = selectedTaskOperations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceId, lastRevision, commands, taskOperations
+        case durationOperations, autoStartOperations, selectedTaskOperations
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        deviceId = try values.decode(String.self, forKey: .deviceId)
+        lastRevision = try values.decode(Int64.self, forKey: .lastRevision)
+        commands = try values.decode([TimerCommand].self, forKey: .commands)
+        taskOperations = try values.decode([TaskOperation].self, forKey: .taskOperations)
+        durationOperations = try values.decode([DurationOperation].self, forKey: .durationOperations)
+        autoStartOperations = try values.decodeIfPresent(
+            [AutoStartOperation].self,
+            forKey: .autoStartOperations
+        )
+        selectedTaskOperations = try values.decodeIfPresent(
+            [SelectedTaskOperation].self,
+            forKey: .selectedTaskOperations
+        ) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(deviceId, forKey: .deviceId)
+        try values.encode(lastRevision, forKey: .lastRevision)
+        try values.encode(commands, forKey: .commands)
+        try values.encode(taskOperations, forKey: .taskOperations)
+        try values.encode(durationOperations, forKey: .durationOperations)
+        try values.encodeIfPresent(autoStartOperations, forKey: .autoStartOperations)
+        try values.encode(selectedTaskOperations, forKey: .selectedTaskOperations)
     }
 }
 

@@ -1,6 +1,6 @@
 {
-  "formatVersion": 1,
-  "canonicalSHA256": "ea5283e417131cc8c19efefc55522259882c41124d5852461602d0dbbcdb0dd1",
+  "formatVersion": 2,
+  "canonicalSHA256": "f3ff2a5c408bff7af7b66ce0572b58e8179ca478a473fd342a5e6987e8491f53",
   "canonicalState": {
     "autoStartBreaks": false,
     "deviceId": "device-compatibility",
@@ -36,6 +36,7 @@
       "selectedPhase": "focus",
       "shortBreakDurationMs": 300000
     },
+    "syncBatchCursor": "commands",
     "tasks": []
   },
   "missingDefaultsState": {

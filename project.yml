@@ -56,8 +56,8 @@ settings:
   base:
     SWIFT_VERSION: 6.0
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: 0.47.0
-    CURRENT_PROJECT_VERSION: 56
+    MARKETING_VERSION: 0.48.0
+    CURRENT_PROJECT_VERSION: 57
     GOOGLE_CLIENT_ID: "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com"
     GOOGLE_REVERSED_CLIENT_ID: "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr"
 targets:
@@ -72,6 +72,12 @@ targets:
         excludes: [SharedCore]
         buildPhase: resources
       - path: Resources/SharedCore/pomodorough_core.wasm
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_RELEASE_TAG
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_COMMIT
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_SHA256
         buildPhase: resources
     info:
       path: Supporting/iOS-Info.plist
@@ -157,6 +163,12 @@ targets:
         excludes: [SharedCore]
         buildPhase: resources
       - path: Resources/SharedCore/pomodorough_core.wasm
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_RELEASE_TAG
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_COMMIT
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_SHA256
         buildPhase: resources
     info:
       path: Supporting/macOS-Info.plist

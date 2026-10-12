@@ -284,7 +284,7 @@ final class TimerSessionController {
         AutomaticBreak(
             timerID: "timer-\(UUID().uuidString.lowercased())",
             phase: phase,
-            duration: TimeInterval(state.settings.durationMs(for: phase)) / 1_000
+            duration: TimeInterval(state.effectiveDurationMs(for: phase)) / 1_000
         )
     }
 
@@ -754,7 +754,7 @@ private extension TimerSessionController {
             canonicalTimer: try state.physicalCanonicalTimer(state.canonicalTimer),
             history: state.history,
             tasks: state.tasks,
-            durationsMs: state.settings.durationsMs,
+            durationsMs: state.canonicalDurations(),
             autoStartBreaks: state.autoStartBreaks,
             selectedTaskId: materializedSelectedTaskID(in: state)
         )

@@ -44,6 +44,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var neverSentSelectedTaskOperationIDs: Set<String>
     var canonicalHeadWallMs: Int64?
     var canonicalHeadCounter: Int64?
+    var canonicalDurationsMs: DurationValues?
+    var syncBatchCursor: String
+    var outgoingSyncClaim: SyncRequest?
     var settings: TimerSettings
     var cachedUser: User?
     var pendingAccountSwitchUser: User?
@@ -83,6 +86,8 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case neverSentCommandIDs, neverSentTaskOperationIDs, neverSentDurationOperationIDs
         case neverSentAutoStartOperationIDs, neverSentSelectedTaskOperationIDs
         case canonicalHeadWallMs, canonicalHeadCounter
+        case canonicalDurationsMs
+        case syncBatchCursor, outgoingSyncClaim
         case irohLegacyTaskMigration
         case settings, cachedUser, pendingAccountSwitchUser
         case bootstrapUser, pendingBootstrapResolution
@@ -131,6 +136,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         neverSentSelectedTaskOperationIDs: Set<String> = [],
         canonicalHeadWallMs: Int64? = nil,
         canonicalHeadCounter: Int64? = nil,
+        canonicalDurationsMs: DurationValues? = nil,
+        syncBatchCursor: String = "commands",
+        outgoingSyncClaim: SyncRequest? = nil,
         settings: TimerSettings,
         cachedUser: User?,
         pendingAccountSwitchUser: User? = nil,
@@ -178,6 +186,9 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self.neverSentSelectedTaskOperationIDs = neverSentSelectedTaskOperationIDs
         self.canonicalHeadWallMs = canonicalHeadWallMs
         self.canonicalHeadCounter = canonicalHeadCounter
+        self.canonicalDurationsMs = canonicalDurationsMs
+        self.syncBatchCursor = syncBatchCursor
+        self.outgoingSyncClaim = outgoingSyncClaim
         self.settings = settings
         self.cachedUser = cachedUser
         self.pendingAccountSwitchUser = pendingAccountSwitchUser
@@ -230,6 +241,9 @@ extension PersistedTimerState {
             selectedTaskID: nil,
             legacyTaskAssignments: [:],
             hasCorruptPendingOperations: false,
+            canonicalDurationsMs: DurationValues.defaults,
+            syncBatchCursor: "commands",
+            outgoingSyncClaim: nil,
             settings: TimerSettings(),
             cachedUser: nil,
             pendingAccountSwitchUser: nil,
@@ -246,7 +260,7 @@ enum PersistedStateSchema {
         let pending = try decodePending(from: values)
         let room = try decodeRoom(from: values)
         let account = try decodeAccount(from: values)
-        let delivery = decodeDelivery(from: values, pending: pending)
+        let delivery = try decodeDelivery(from: values, pending: pending)
         return assemble(generator: generator, pending: pending, room: room, account: account, delivery: delivery)
     }
 
@@ -300,6 +314,9 @@ enum PersistedStateSchema {
             neverSentSelectedTaskOperationIDs: delivery.selectedTask,
             canonicalHeadWallMs: delivery.headWallMs,
             canonicalHeadCounter: delivery.headCounter,
+            canonicalDurationsMs: room.canonicalDurationsMs,
+            syncBatchCursor: delivery.cursor,
+            outgoingSyncClaim: delivery.claim,
             settings: room.settings,
             cachedUser: account.cachedUser,
             pendingAccountSwitchUser: account.pendingAccountSwitchUser,
@@ -368,6 +385,7 @@ enum PersistedStateSchema {
         let knownTasks: [FocusTask]
         let selectedTaskID: UUID?
         let legacyTaskAssignments: [String: UUID]
+        let canonicalDurationsMs: DurationValues?
         let settings: TimerSettings
     }
 
@@ -386,6 +404,8 @@ enum PersistedStateSchema {
         let selectedTask: Set<String>
         let headWallMs: Int64?
         let headCounter: Int64?
+        let cursor: String
+        let claim: SyncRequest?
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -402,6 +422,8 @@ enum PersistedStateSchema {
         case neverSentCommandIDs, neverSentTaskOperationIDs, neverSentDurationOperationIDs
         case neverSentAutoStartOperationIDs, neverSentSelectedTaskOperationIDs
         case canonicalHeadWallMs, canonicalHeadCounter
+        case canonicalDurationsMs
+        case syncBatchCursor, outgoingSyncClaim
         case settings, cachedUser, pendingAccountSwitchUser
         case bootstrapUser, pendingBootstrapResolution
     }
@@ -525,6 +547,7 @@ enum PersistedStateSchema {
             knownTasks: values.decodeIfPresent([FocusTask].self, forKey: .knownTasks) ?? tasks,
             selectedTaskID: values.decodeIfPresent(UUID.self, forKey: .selectedTaskID),
             legacyTaskAssignments: values.decodeIfPresent([String: UUID].self, forKey: .legacyTaskAssignments) ?? [:],
+            canonicalDurationsMs: values.decodeIfPresent(DurationValues.self, forKey: .canonicalDurationsMs),
             settings: values.decodeIfPresent(TimerSettings.self, forKey: .settings) ?? TimerSettings()
         )
     }
@@ -546,7 +569,7 @@ enum PersistedStateSchema {
     private static func decodeDelivery(
         from values: KeyedDecodingContainer<CodingKeys>,
         pending: DecodedPendingState
-    ) -> DecodedDeliveryState {
+    ) throws -> DecodedDeliveryState {
         let commandIDs = Set(pending.commands.map(\.id))
         let taskIDs = Set(pending.taskOperations.map(\.id))
         let durationIDs = Set(pending.durationOperations.map(\.id))
@@ -559,8 +582,21 @@ enum PersistedStateSchema {
             autoStart: decodedStringSet(from: values, key: .neverSentAutoStartOperationIDs).intersection(autoStartIDs),
             selectedTask: decodedStringSet(from: values, key: .neverSentSelectedTaskOperationIDs).intersection(selectedIDs),
             headWallMs: decodedInt(from: values, key: .canonicalHeadWallMs),
-            headCounter: decodedInt(from: values, key: .canonicalHeadCounter)
+            headCounter: decodedInt(from: values, key: .canonicalHeadCounter),
+            cursor: decodedCursor(from: values),
+            claim: try values.decodeIfPresent(SyncRequest.self, forKey: .outgoingSyncClaim)
         )
+    }
+
+    private static func decodedCursor(
+        from values: KeyedDecodingContainer<CodingKeys>
+    ) -> String {
+        do {
+            let raw = try values.decodeIfPresent(String.self, forKey: .syncBatchCursor) ?? "commands"
+            return SyncBatchDomain.isValid(raw) ? raw : "commands"
+        } catch {
+            return "commands"
+        }
     }
 
     private static func decodedStringSet(

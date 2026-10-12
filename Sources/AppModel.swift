@@ -79,7 +79,7 @@ final class AppModel {
     @ObservationIgnored private var timerCompletionTask: Task<Void, Never>?
     @ObservationIgnored private var scheduledCompletionTimer: CanonicalTimer?
     @ObservationIgnored private var timerCompletionSuspensions = 0
-    @ObservationIgnored private var centralizedSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var centralizedSyncTask: Task<Bool, Never>?
     @ObservationIgnored private var centralizedSyncTaskID: UUID?
     @ObservationIgnored private var completionQueuedFor: String?
     @ObservationIgnored private var physicalAnchor: (wall: Date, uptime: TimeInterval)?
@@ -111,6 +111,7 @@ final class AppModel {
     private(set) var isIrohRoomLeaveConfirmationPresented = false
     private(set) var isLeavingIrohRoom = false
     private(set) var snapshotLoadFailure: AppStatePersistenceCoordinator.SnapshotLoadFailure?
+    private(set) var hasOversizedSavedSyncClaim = false
     var errorMessage: String?
 
     init(
@@ -206,7 +207,8 @@ final class AppModel {
     ) -> AppModelCoordinators {
         AppModelCoordinators(
             workspaceMutationController: SynchronizedWorkspaceMutationController(
-                timerSessionController: startup.timerSessionController
+                timerSessionController: startup.timerSessionController,
+                sharedCoreProvider: sharedCoreProvider
             ),
             accountSessionCoordinator: makeAccountSessionCoordinator(
                 api: api, googleIdentityProvider: googleIdentityProvider,
@@ -581,6 +583,15 @@ final class AppModel {
             + pendingAutoStartOperationCount
             + pendingSelectedTaskOperationCount
     }
+
+    private func hasPendingSyncWork(_ state: PersistedTimerState) -> Bool {
+        !state.pendingCommands.isEmpty
+            || !state.pendingTaskOperations.isEmpty
+            || !state.pendingDurationOperations.isEmpty
+            || !state.pendingAutoStartOperations.isEmpty
+            || !state.pendingSelectedTaskOperations.isEmpty
+    }
+
     var activeRoom: IrohRoomSnapshot? {
         guard accountDeletionPurgeState == nil else { return nil }
         return roomStore.activeSnapshot
@@ -714,7 +725,10 @@ final class AppModel {
             return true
         case "pause":
             guard isWatchCommandTargetCurrent(command), activeTimer?.status == .running else { return false }
-            pause()
+            guard pause() else {
+                reportWatchPauseRefusal()
+                return false
+            }
             return true
         case "resume":
             guard isWatchCommandTargetCurrent(command), activeTimer?.status == .paused else { return false }
@@ -749,6 +763,14 @@ final class AppModel {
               let expected = command.expectedTimerRevision,
               activeTimer?.id == target else { return false }
         return makeWatchSnapshot().timerRevision == expected
+    }
+
+    private func reportWatchPauseRefusal() {
+        Self.logger.error("watch pause refused")
+        SentryCapture.captureOnce(key: "watch-command-pause-refused", error: WatchPauseRefusedError())
+        if errorMessage == nil {
+            errorMessage = String(localized: "Watch Pause not applied.")
+        }
     }
 
     func selectPhase(_ phase: TimerPhase) {
@@ -1381,9 +1403,10 @@ final class AppModel {
         _ = performWorkspaceMutation(.startTimer)
     }
 
-    func pause(at explicitDate: Date? = nil) {
+    @discardableResult
+    func pause(at explicitDate: Date? = nil) -> Bool {
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
-        _ = performWorkspaceMutation(.pauseTimer(at: date))
+        return performWorkspaceMutation(.pauseTimer(at: date))
     }
 
     func resume(at explicitDate: Date? = nil) {
@@ -1600,7 +1623,17 @@ final class AppModel {
             noteCompletionAlert(timerID: timer.id)
             stopCompletionAlertIfTimerStarted()
             completionQueuedFor = canonicalTimer?.status == .running ? timer.id : nil
+        } else {
+            retryAutomaticCompletion(timer: timer, at: date)
         }
+    }
+
+    private func retryAutomaticCompletion(timer: CanonicalTimer, at date: Date) {
+        guard timerForCompletionDeadline()?.id == timer.id,
+              timer.remaining(at: date) <= 0,
+              conflictMessage != nil || errorMessage != nil else { return }
+        cancelTimerCompletion()
+        scheduleTimerCompletion(minimumDelay: 5)
     }
 
     // Internal (not private) so SentryCaptureTests drives the real
@@ -1631,13 +1664,19 @@ final class AppModel {
             Self.logger.error("completeIrohTimerIfNeeded failed: \(error.localizedDescription, privacy: .public)")
             SentryCapture.capture(error)
             errorMessage = error.localizedDescription
+            retryAutomaticCompletion(timer: timer, at: date)
         }
     }
 
     private func persistCompletedIrohTimer(_ state: PersistedTimerState, timerID: String) {
         timerState = state
         rebuildOptimisticState()
-        _ = persist()
+        guard persist() else {
+            guard timerForCompletionDeadline()?.id == timerID else { return }
+            cancelTimerCompletion()
+            scheduleTimerCompletion(minimumDelay: 5)
+            return
+        }
         noteCompletionAlert(timerID: timerID)
         stopCompletionAlertIfTimerStarted()
         watchSync.push()
@@ -1810,8 +1849,9 @@ final class AppModel {
         }
     }
 
-    func sync(force: Bool = false, showsActivity: Bool = true) async {
-        guard snapshotLoadFailure == nil else { return }
+    @discardableResult
+    func sync(force: Bool = false, showsActivity: Bool = true) async -> Bool {
+        guard snapshotLoadFailure == nil else { return false }
         let start = accountSessionCoordinator.beginSync(
             workspace: centralizedWorkspace,
             force: force,
@@ -1819,28 +1859,29 @@ final class AppModel {
         )
         switch applyCoordinatorTransition(start) {
         case .ignored, .coalesced:
-            return
+            return false
         case .verify(let operation):
             await verifyRestoredSession(operation: operation)
-            return
+            return false
         case .invalidPendingOperations:
-            return
+            return false
         case .started(let lease):
             let taskID = UUID()
             let task = Task { [weak self] in
-                guard let self else { return }
-                await self.runSync(lease)
+                guard let self else { return false }
+                return await self.runSync(lease)
             }
             centralizedSyncTaskID = taskID
             centralizedSyncTask = task
-            await withTaskCancellationHandler {
-                await task.value
+            return await withTaskCancellationHandler {
+                let installed = await task.value
+                if centralizedSyncTaskID == taskID {
+                    centralizedSyncTask = nil
+                    centralizedSyncTaskID = nil
+                }
+                return installed
             } onCancel: {
                 task.cancel()
-            }
-            if centralizedSyncTaskID == taskID {
-                centralizedSyncTask = nil
-                centralizedSyncTaskID = nil
             }
         }
     }
@@ -1850,21 +1891,24 @@ final class AppModel {
         applyCoordinatorPublication(accountSessionCoordinator.quiesce())
         let task = centralizedSyncTask
         task?.cancel()
-        await task?.value
+        _ = await task?.value
     }
 
     private func runSync(
         _ lease: CentralizedAccountSessionCoordinator.SyncLease
-    ) async {
+    ) async -> Bool {
         var allowsFollowUpSync = true
+        var installed = false
         defer {
             finishSync(lease, allowsFollowUp: allowsFollowUpSync)
         }
         do {
-            try await performSync(lease)
+            installed = try await performSync(lease)
         } catch {
             allowsFollowUpSync = await handleSyncFailure(error, lease: lease)
+            installed = false
         }
+        return installed
     }
 
     private func finishSync(
@@ -1886,23 +1930,27 @@ final class AppModel {
 
     private func performSync(
         _ lease: CentralizedAccountSessionCoordinator.SyncLease
-    ) async throws {
+    ) async throws -> Bool {
+        var installed = false
         repeat {
-            guard try await performSyncRound(lease) else { return }
+            guard try await performSyncRound(lease) else { return installed }
+            installed = true
         } while centralizedWorkspace.hasPendingOperations
         _ = applyCoordinatorTransition(accountSessionCoordinator.finishSyncRounds(
             lease,
             workspace: centralizedWorkspace
         ))
+        return installed
     }
 
     private func performSyncRound(
         _ lease: CentralizedAccountSessionCoordinator.SyncLease
     ) async throws -> Bool {
-        let prepared = accountSessionCoordinator.prepareSyncPlan(state: timerState)
+        let prepared = try accountSessionCoordinator.prepareSyncPlan(state: timerState)
         let plan = prepared.plan
         if plan.legacyDependencyReviewRequired { throw LegacyTimerDependencyReview.required }
-        guard !plan.batch.commands.isEmpty || timerState.pendingCommands.isEmpty else {
+        if plan.coreStatus == "blocked_dependency" { throw SyncBatchPlanError.blockedSync }
+        if plan.batch.isEmpty, hasPendingSyncWork(timerState) {
             throw AppError.invalidResponse
         }
         let preSendPrevious = timerState
@@ -1910,6 +1958,18 @@ final class AppModel {
         guard persistAtomically(previous: preSendPrevious, rebuildsOnRollback: true) else {
             throw AppError.invalidResponse
         }
+        do {
+            return try await sendReconcileAndCommit(plan, lease: lease)
+        } catch {
+            restorePreSendClaim(error, previous: preSendPrevious, retired: prepared.retired)
+            throw error
+        }
+    }
+
+    private func sendReconcileAndCommit(
+        _ plan: AccountSynchronization.SyncPlan,
+        lease: CentralizedAccountSessionCoordinator.SyncLease
+    ) async throws -> Bool {
         let previousTimer = activeTimer
         let sampledResponse = try await accountSessionCoordinator.sendSync(plan, state: timerState)
         let receivedAt = effectivePhysicalNow() ?? now()
@@ -1924,12 +1984,46 @@ final class AppModel {
             state: timerState
         )
         if let message = transition.conflictMessage { conflictMessage = message }
-        try commitSyncedState(
-            transition.state,
-            previousTimer: previousTimer,
-            receivedAt: receivedAt
-        )
+        try commitSyncedState(transition.state, previousTimer: previousTimer, receivedAt: receivedAt)
         return true
+    }
+
+    private func restorePreSendClaim(
+        _ error: Error,
+        previous: PersistedTimerState,
+        retired: PersistedTimerState
+    ) {
+        guard shouldRestorePreSendClaim(for: error) else { return }
+        timerState = previous
+        _ = persistAtomically(previous: retired, rebuildsOnRollback: false)
+    }
+
+    private func shouldRestorePreSendClaim(for error: Error) -> Bool {
+        if error as? AppError == .invalidResponse { return true }
+        if error as? AppError == .invalidLocalClock { return true }
+        if error is SharedCoreError { return true }
+        if let batch = error as? SyncBatchPlanError {
+            if case .invalidResponse = batch { return true }
+        }
+        return false
+    }
+
+    @discardableResult
+    func recoverOversizedSavedSyncClaim(confirmed: Bool) -> Bool {
+        guard snapshotLoadFailure == nil, !isWorking else { return false }
+        let previous = timerState
+        do {
+            timerState = try accountSessionCoordinator.discardSavedSyncClaim(
+                confirmed: confirmed, state: timerState
+            )
+            guard persistAtomically(previous: previous, rebuildsOnRollback: false) else { return false }
+            hasOversizedSavedSyncClaim = false
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     private func commitSyncedState(
@@ -1939,12 +2033,15 @@ final class AppModel {
     ) throws {
         let projection = try project(state)
         let previousState = timerState
-        timerState = state
-        installProjection(projection)
+        let publication = prepareWorkspacePublication(state: state, output: projection)
+        timerState = publication?.state ?? state
         pruneLocalTimerOwners()
-        guard persistAtomically(previous: previousState, rebuildsOnRollback: true) else {
+        // Atomic rollback restores the persist layer's authoritative
+        // state; presentation below runs only after commit.
+        guard persistAtomically(previous: previousState, rebuildsOnRollback: false) else {
             throw AppError.invalidResponse
         }
+        installPreparedPublication(publication)
         reconcileAlarm(from: previousTimer, to: activeTimer, at: receivedAt)
         applyCoordinatorPublication(accountSessionCoordinator.markSyncSucceeded())
         errorMessage = nil
@@ -1955,6 +2052,7 @@ final class AppModel {
         _ error: Error,
         lease: CentralizedAccountSessionCoordinator.SyncLease
     ) async -> Bool {
+        if error as? SyncBatchPlanError == .oversizedSaved { hasOversizedSavedSyncClaim = true }
         let failure = accountSessionCoordinator.syncFailure(
             error,
             lease: lease,
@@ -1972,27 +2070,41 @@ final class AppModel {
         }
     }
 
+    private var isExplicitForegroundGateReleaseAllowed: Bool {
+        replicationMode == .offline
+    }
+
+    private func clearForegroundSyncGate() {
+        foregroundSyncPending = false
+        completionQueuedFor = nil
+    }
+
     func refreshAfterForeground() async {
         guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
-        completionQueuedFor = nil
-        // Background stale-alarm fix: sync-first-then-reconcile. A remotely
-        // paused timer must converge via sync before any finish runs.
-        if needsForegroundSync {
+        guard needsForegroundSync else {
+            clearForegroundSyncGate()
+            reconcileTimerCompletion()
             let action = await roomReplicationController.refreshAfterForeground(
                 environment: roomReplicationEnvironment
             )
-            if action == .synchronize { await sync(force: true) }
-            foregroundSyncPending = false
-            reconcileTimerCompletion()
+            if action == .synchronize { _ = await sync(force: true) }
             return
         }
-        foregroundSyncPending = false
-        reconcileTimerCompletion()
         let action = await roomReplicationController.refreshAfterForeground(
             environment: roomReplicationEnvironment
         )
-        if action == .synchronize { await sync(force: true) }
+        guard action == .synchronize else {
+            if isExplicitForegroundGateReleaseAllowed {
+                clearForegroundSyncGate()
+                reconcileTimerCompletion()
+            }
+            return
+        }
+        let installed = await sync(force: true)
+        guard installed || isExplicitForegroundGateReleaseAllowed else { return }
+        clearForegroundSyncGate()
+        reconcileTimerCompletion()
     }
 
     /// S1 OOM relief (POMODOROUGH-37): drops cached WasmKit runtimes after
@@ -2081,7 +2193,7 @@ final class AppModel {
             canonicalTimer: canonicalTimer,
             history: history,
             tasks: tasks,
-            durationsMs: timerState.settings.durationsMs,
+            durationsMs: timerState.canonicalDurations(),
             autoStartBreaks: autoStartBreaks,
             selectedTaskId: timerState.selectedTaskID?.uuidString.lowercased(),
             hlcWallMs: timerState.hlcWallMs,
@@ -2094,7 +2206,7 @@ final class AppModel {
             canonicalTimer: state.canonicalTimer,
             history: state.history,
             tasks: state.tasks,
-            durationsMs: state.settings.durationsMs,
+            durationsMs: state.canonicalDurations(),
             autoStartBreaks: state.autoStartBreaks,
             selectedTaskId: state.selectedTaskID?.uuidString.lowercased(),
             hlcWallMs: state.hlcWallMs,
@@ -2265,6 +2377,9 @@ final class AppModel {
         } catch AppError.invalidLocalClock {
             reportInvalidLocalClock()
             return false
+        } catch let admission as WorkspaceIntentAdmissionError {
+            reportAdmissionFailure(admission)
+            return false
         } catch {
             Self.logger.error("performWorkspaceMutation failed: \(error.localizedDescription, privacy: .public)")
             SentryCapture.capture(error)
@@ -2273,12 +2388,87 @@ final class AppModel {
         }
     }
 
+    private func reportAdmissionFailure(_ admission: WorkspaceIntentAdmissionError) {
+        switch admission {
+        case .coreRejected(let diagnostics):
+            Self.logger.error("workspace mutation rejected: \(diagnostics.publicMessage(), privacy: .public)")
+            SentryCapture.capture(admission)
+            errorMessage = diagnostics.publicMessage()
+        case .invalidCoreResponse(let diagnostics):
+            Self.logger.error("workspace mutation invalid Core: \(diagnostics.publicMessage(), privacy: .public)")
+            SentryCapture.capture(admission)
+            errorMessage = diagnostics.publicMessage()
+        case .ignoredRetarget(let diagnostics):
+            Self.logger.error("workspace retarget ignored: \(diagnostics.publicMessage(), privacy: .public)")
+            SentryCapture.capture(admission)
+        }
+    }
+
+    private func prepareWorkspacePublication(
+        state: PersistedTimerState,
+        output: CoreProjectionOutput?
+    ) -> AppStatePublisher.Publication? {
+        guard let output else { return nil }
+        return statePublisher.publication(
+            output: output,
+            state: state,
+            completionAlertTimerID: completionAlertTimerID,
+            completionQueuedFor: completionQueuedFor
+        )
+    }
+
+    private func commitMutationDurableWrite(previous: PersistedTimerState) -> Bool {
+        persistAtomically(previous: previous, rebuildsOnRollback: false)
+    }
+
+    private func installPreparedPublication(_ publication: AppStatePublisher.Publication?) {
+        guard let publication else { return }
+        canonicalTimer = publication.canonicalTimer
+        history = publication.history
+        tasks = publication.tasks
+        projectedAutoStartBreaks = publication.autoStartBreaks
+        projectedSelectedTaskID = publication.selectedTaskID
+        completionAlertTimerID = publication.completionAlertTimerID
+        completionQueuedFor = publication.completionQueuedFor
+        executeAlarmEffects(
+            alarmEffectCoordinator.effects(for: publication.effects)
+        )
+        scheduleTimerCompletion()
+        watchSync.push()
+    }
+
     private func applyWorkspaceMutation(
         _ transition: SynchronizedWorkspaceMutationController.Transition
     ) -> Bool {
-        timerState = transition.state
-        if let output = transition.projection { installProjection(output) }
+        var working = transition.state
         for effect in transition.effects {
+            if case .setExplicitPhaseSelection(let value) = effect {
+                working.hasExplicitPhaseSelection = value
+            }
+        }
+        let publication = prepareWorkspacePublication(state: working, output: transition.projection)
+        timerState = publication?.state ?? working
+        var deferred: [SynchronizedWorkspaceMutationController.Effect] = []
+        for effect in transition.effects {
+            switch effect {
+            case .setExplicitPhaseSelection:
+                break
+            case .persist:
+                // Non-atomic write keeps old success semantics:
+                // rollback target is the current proposal.
+                guard commitMutationDurableWrite(previous: timerState) else {
+                    return false
+                }
+            case .persistAtomically(let prev, _):
+                guard commitMutationDurableWrite(previous: prev) else {
+                    return false
+                }
+            default:
+                deferred.append(effect)
+            }
+        }
+        installPreparedPublication(publication)
+        for effect in deferred {
             guard applyWorkspaceMutationEffect(effect) else { return false }
         }
         return true
@@ -2331,6 +2521,14 @@ final class AppModel {
         }
         if let activeTimer {
             retainedTimerIDs.insert(activeTimer.id)
+        }
+        // Commit order prunes before presentation install, so the
+        // projected timer above is still pre-sync. The reconciled base
+        // below is already post-sync; without it a restored focus owner
+        // is pruned and its alarm never rescheduled after a rejection.
+        if let base = timerState.canonicalTimer,
+           base.status == .running || base.status == .paused {
+            retainedTimerIDs.insert(base.id)
         }
         timerState.localTimerOwners = timerState.localTimerOwners.filter {
             retainedTimerIDs.contains($0.key)
@@ -2721,12 +2919,13 @@ final class AppModel {
             reportInvalidPendingOperations()
             return
         }
-        let request = accountSessionCoordinator.makeBootstrapResolutionRequest(
-            strategy: strategy,
-            snapshot: snapshot,
-            state: timerState
-        )
+        let request: BootstrapResolveRequest
         do {
+            request = try accountSessionCoordinator.makeBootstrapResolutionRequest(
+                strategy: strategy,
+                snapshot: snapshot,
+                state: timerState
+            )
             try accountSessionCoordinator.validateBootstrapRequest(request, state: timerState)
         } catch {
             await handleBootstrapFailure(error, stage: .submission(strategy),

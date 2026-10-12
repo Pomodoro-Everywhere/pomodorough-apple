@@ -21,7 +21,8 @@ enum PomodoroughTheme {
     static let ticketSRGB = (red: 245.0 / 255, green: 208.0 / 255, blue: 91.0 / 255)
     static let signal = Color(red: signalSRGB.red, green: signalSRGB.green, blue: signalSRGB.blue)
     static let ticket = Color(red: ticketSRGB.red, green: ticketSRGB.green, blue: ticketSRGB.blue)
-    static let sky = Color(red: 220 / 255, green: 234 / 255, blue: 241 / 255)
+    static let skySRGB = (red: 220.0 / 255, green: 234.0 / 255, blue: 241.0 / 255)
+    static let sky = Color(red: skySRGB.red, green: skySRGB.green, blue: skySRGB.blue)
     static let porcelain = Color(red: porcelainSRGB.red, green: porcelainSRGB.green, blue: porcelainSRGB.blue)
     static let track = Color(red: 17 / 255, green: 25 / 255, blue: 35 / 255)
     static let steel = Color(red: steelSRGB.red, green: steelSRGB.green, blue: steelSRGB.blue)
@@ -66,6 +67,68 @@ enum PomodoroughTheme {
     static func prominentLabelSRGB(for appearance: Appearance) -> (red: Double, green: Double, blue: Double) {
         switch appearance {
         case .light, .dark: (red: 0, green: 0, blue: 0)
+        }
+    }
+
+    /// Effective secondary fills (R48-AP08). The pre-iOS-26 fallback fill
+    /// is opaque sky, identical in both appearances. The iOS-26 glass
+    /// secondary tints porcelain at 16% over the card backdrop: night
+    /// surface in dark, porcelain in light. Composites below are the exact
+    /// `backdrop * 0.84 + porcelain * 0.16` mixes so the audit pins the
+    /// values the label choice is made against.
+    static let glassSecondaryDarkFillSRGB = (
+        red: (23.0 * 0.84 + 247.0 * 0.16) / 255,
+        green: (36.0 * 0.84 + 248.0 * 0.16) / 255,
+        blue: (48.0 * 0.84 + 242.0 * 0.16) / 255
+    )
+    static let glassSecondaryLightFillSRGB = (
+        red: 247.0 / 255, green: 248.0 / 255, blue: 242.0 / 255
+    )
+
+    /// Label with the higher WCAG contrast against the given fill.
+    /// Black wins on sky (~17.1 vs ~1.23) and on the light glass
+    /// composite (~19.7 vs ~1.07); white wins on the dark glass
+    /// composite (~9.7 vs ~2.2). Margins clear AA 4.5:1 in both
+    /// appearances and leave headroom for Increase Contrast shifts.
+    static func secondaryLabelSRGB(
+        forFill fill: (red: Double, green: Double, blue: Double)
+    ) -> (red: Double, green: Double, blue: Double) {
+        let fillLuminance = relativeLuminance(red: fill.red, green: fill.green, blue: fill.blue)
+        let whiteLuminance = 1.0
+        let blackLuminance = 0.0
+        let whiteRatio = contrastRatio(
+            lighter: max(whiteLuminance, fillLuminance),
+            darker: min(whiteLuminance, fillLuminance)
+        )
+        let blackRatio = contrastRatio(
+            lighter: max(blackLuminance, fillLuminance),
+            darker: min(blackLuminance, fillLuminance)
+        )
+        if blackRatio >= whiteRatio {
+            return (red: 0, green: 0, blue: 0)
+        }
+        return (red: 1, green: 1, blue: 1)
+    }
+
+    /// Fallback secondary label, chosen from the actual sky fill, not the
+    /// scheme alone: black in both appearances. White on sky is the
+    /// 1.23:1 baseline failure in iOS 18 dark mode.
+    static func secondaryFallbackLabelSRGB(
+        for appearance: Appearance
+    ) -> (red: Double, green: Double, blue: Double) {
+        switch appearance {
+        case .light, .dark: secondaryLabelSRGB(forFill: skySRGB)
+        }
+    }
+
+    /// Glass secondary label, chosen from the actual composite fill per
+    /// appearance: white in dark, black in light.
+    static func glassSecondaryLabelSRGB(
+        for appearance: Appearance
+    ) -> (red: Double, green: Double, blue: Double) {
+        switch appearance {
+        case .light: secondaryLabelSRGB(forFill: glassSecondaryLightFillSRGB)
+        case .dark: secondaryLabelSRGB(forFill: glassSecondaryDarkFillSRGB)
         }
     }
 

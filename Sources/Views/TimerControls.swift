@@ -287,7 +287,7 @@ struct TimerControls: View {
                 button
                     .buttonStyle(.glass)
                     .tint(PomodoroughTheme.porcelain.opacity(0.16))
-                    .foregroundStyle(buttonText)
+                    .foregroundStyle(glassSecondaryText)
                     .controlSize(compact ? .regular : .large)
                     .glassEffectID(glassID, in: glassNamespace)
                     .glassEffectTransition(.materialize)
@@ -296,16 +296,27 @@ struct TimerControls: View {
             button
                 .buttonStyle(.borderedProminent)
                 .tint(prominent ? phaseAccent : PomodoroughTheme.sky)
-                .foregroundStyle(prominent ? prominentText : buttonText)
+                .foregroundStyle(prominent ? prominentText : secondaryFallbackText)
                 .controlSize(compact ? .regular : .large)
         }
     }
 
-    /// Secondary-button labels follow the system scheme explicitly: white
-    /// on dark, black on light. (The prominent label is always black — see
-    /// prominentText — because white fails contrast on the phase tints.)
-    private var buttonText: Color {
-        colorScheme == .dark ? .white : .black
+    /// Fallback secondary label from the actual sky fill (R48-AP08):
+    /// black in both appearances. White on sky is 1.23:1 in dark mode.
+    private var secondaryFallbackText: Color {
+        let label = PomodoroughTheme.secondaryFallbackLabelSRGB(for: appearance)
+        return Color(red: label.red, green: label.green, blue: label.blue)
+    }
+
+    /// Glass secondary label from the actual composite fill per
+    /// appearance: white in dark, black in light.
+    private var glassSecondaryText: Color {
+        let label = PomodoroughTheme.glassSecondaryLabelSRGB(for: appearance)
+        return Color(red: label.red, green: label.green, blue: label.blue)
+    }
+
+    private var appearance: PomodoroughTheme.Appearance {
+        colorScheme == .dark ? .dark : .light
     }
 
     /// Prominent-button label (AP116): dark-mode-aware via the theme's

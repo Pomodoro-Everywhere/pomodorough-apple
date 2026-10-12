@@ -74,6 +74,7 @@ extension PersistedTimerState {
             acknowledgements: acknowledgements
         )
         pendingDurationOperations = result.pendingOperations
+        installCanonicalDurations(canonicalDurations)
         settings.durationsMs = result.durations
     }
 

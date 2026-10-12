@@ -4362,7 +4362,7 @@ struct IntegrationPositiveTests {
             api: api,
             sharedCoreProvider: { try SharedCore.bundled() }
         )
-        let firstPlan = first.makeSyncPlan(state: try persistedState(defaults))
+        let firstPlan = try first.makeSyncPlan(state: try persistedState(defaults))
         #expect(firstPlan.batch.commands.map(\.id) == [provisional.finishCommandId])
         try await persistGeneratedBreakRound(first, plan: firstPlan, in: defaults)
         let afterFocus = try persistedState(defaults)
@@ -4380,7 +4380,7 @@ struct IntegrationPositiveTests {
             api: api,
             sharedCoreProvider: { try SharedCore.bundled() }
         )
-        let startPlan = reopened.makeSyncPlan(state: afterFocus)
+        let startPlan = try reopened.makeSyncPlan(state: afterFocus)
         try #require(startPlan.batch.commands.map(\.id) == [provisional.startCommandId])
         try await persistGeneratedBreakRound(reopened, plan: startPlan, in: defaults)
         let afterStart = try persistedState(defaults)
@@ -4388,7 +4388,7 @@ struct IntegrationPositiveTests {
         if startAccepted {
             #expect(try JSONEncoder.api.encode(afterStart.pendingCommands)
                     == JSONEncoder.api.encode([childFinish]))
-            let finishPlan = reopened.makeSyncPlan(state: afterStart)
+            let finishPlan = try reopened.makeSyncPlan(state: afterStart)
             #expect(finishPlan.batch.commands.map(\.id) == [childFinish.id])
             try await persistGeneratedBreakRound(reopened, plan: finishPlan, in: defaults)
         }
@@ -4443,7 +4443,7 @@ struct IntegrationPositiveTests {
         plan: AccountSynchronization.SyncPlan,
         in defaults: UserDefaults
     ) async throws {
-        let prepared = sync.prepareSyncPlan(state: try persistedState(defaults))
+        let prepared = try sync.prepareSyncPlan(state: try persistedState(defaults))
         #expect(prepared.plan.batch.commands == plan.batch.commands)
         defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
         let response = try await sync.sendSync(plan, state: prepared.retired)
@@ -4467,18 +4467,18 @@ struct IntegrationPositiveTests {
         let (provisional, childFinish, original) = try await stagedLegacyPostAckBreak(first, in: defaults)
 
         let reopened = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
-        let plan = reopened.makeSyncPlan(state: try persistedState(defaults))
+        let plan = try reopened.makeSyncPlan(state: try persistedState(defaults))
         #expect(plan.legacyDependencyReviewRequired)
         #expect(plan.batch.commands.isEmpty)
         let originalCommands = try JSONDecoder.api.decode([TimerCommand].self, from: original)
         try #require(originalCommands.count == 2)
         #expect(originalCommands.map(\.id) == [provisional.startCommandId, childFinish.id])
-        let prepared = reopened.prepareSyncPlan(state: try persistedState(defaults))
+        let prepared = try reopened.prepareSyncPlan(state: try persistedState(defaults))
         #expect(prepared.retired.pendingTimerDependencies.isEmpty)
         #expect(prepared.retired.neverSentCommandIDs.contains(childFinish.id))
         defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
         #expect(try persistedState(defaults).legacyTimerDependencyUpgrade)
-        #expect(reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        #expect(try reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
         let model = AppModel(api: api, defaults: defaults,
                              roomStore: TestFixtures.emptyIrohRoomStore(),
                              alarmScheduler: RecordingAlarmScheduler())
@@ -4520,13 +4520,13 @@ struct IntegrationPositiveTests {
         try persistWithoutDependencyField(ambiguous, in: defaults)
 
         let reopened = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
-        #expect(reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
-        let prepared = reopened.prepareSyncPlan(state: try persistedState(defaults))
+        #expect(try reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        let prepared = try reopened.prepareSyncPlan(state: try persistedState(defaults))
         #expect(prepared.retired.neverSentCommandIDs == ambiguous.neverSentCommandIDs)
         defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
         #expect(try JSONEncoder.api.encode(persistedState(defaults).pendingCommands) == original)
         #expect(try persistedState(defaults).pendingCommands.map(\.id).contains(childFinish.id))
-        #expect(reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        #expect(try reopened.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
         let model = AppModel(
             api: api, defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(),
             alarmScheduler: RecordingAlarmScheduler()
@@ -4560,7 +4560,7 @@ struct IntegrationPositiveTests {
         #expect(try JSONEncoder.api.encode(afterMutation.pendingCommands) == original)
         #expect(afterMutation.pendingDurationOperations == mutated.pendingDurationOperations)
         #expect(afterMutation.legacyTimerDependencyUpgrade)
-        #expect(sync.makeSyncPlan(state: afterMutation).legacyDependencyReviewRequired)
+        #expect(try sync.makeSyncPlan(state: afterMutation).legacyDependencyReviewRequired)
         let restarted = try JSONDecoder.api.decode(PersistedTimerState.self,
                                                   from: JSONEncoder.api.encode(afterMutation))
         #expect(restarted.legacyTimerDependencyUpgrade)
@@ -4572,7 +4572,7 @@ struct IntegrationPositiveTests {
         _ sync: AccountSynchronization, in defaults: UserDefaults
     ) async throws -> (ProvisionalBreak, TimerCommand, Data) {
         let (provisional, _, childFinish) = try stagedGeneratedBreakChild(in: defaults)
-        let plan = sync.makeSyncPlan(state: try persistedState(defaults))
+        let plan = try sync.makeSyncPlan(state: try persistedState(defaults))
         try await persistGeneratedBreakRound(sync, plan: plan, in: defaults)
         let afterFocus = try persistedState(defaults)
         #expect(afterFocus.provisionalBreaks.isEmpty)
@@ -4641,10 +4641,10 @@ struct IntegrationPositiveTests {
             api: APIClient(session: session, keychain: StaticTokenStore()),
             sharedCoreProvider: { try SharedCore.bundled() }
         )
-        let plan = sync.makeSyncPlan(state: restored)
+        let plan = try sync.makeSyncPlan(state: restored)
         #expect(plan.legacyDependencyReviewRequired == oldSchema)
         #expect(plan.batch.commands.map(\.id) == (oldSchema ? [] : queued.pendingCommands.map(\.id)))
-        let prepared = sync.prepareSyncPlan(state: restored)
+        let prepared = try sync.prepareSyncPlan(state: restored)
         #expect(prepared.retired.pendingTimerDependencies.isEmpty)
         if oldSchema {
             #expect(prepared.retired.neverSentCommandIDs == restored.neverSentCommandIDs)
@@ -4678,7 +4678,7 @@ struct IntegrationPositiveTests {
         defer { session.invalidateAndCancel() }
         let sync = AccountSynchronization(api: APIClient(session: session, keychain: StaticTokenStore()),
                                           sharedCoreProvider: { try SharedCore.bundled() })
-        #expect(sync.makeSyncPlan(state: queued).batch.commands.map(\.id) == queued.pendingCommands.map(\.id))
+        #expect(try sync.makeSyncPlan(state: queued).batch.commands.map(\.id) == queued.pendingCommands.map(\.id))
     }
 
     @Test(arguments: [false, true]) @MainActor
@@ -4705,7 +4705,7 @@ struct IntegrationPositiveTests {
         let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
         // Request was captured and sent before upgrade; its exact ACK may retire
         // the old identity even when new work arrived while response was in flight.
-        let captured = sync.prepareSyncPlan(state: before)
+        let captured = try sync.prepareSyncPlan(state: before)
         let plan = captured.plan
         let response = try await sync.sendSync(plan, state: captured.retired)
         try persistWithoutDependencyField(captured.retired, in: defaults)
@@ -4730,8 +4730,8 @@ struct IntegrationPositiveTests {
         #expect(!next.legacyTimerDependencyUpgrade)
         #expect(try JSONEncoder.api.encode(next.pendingCommands)
                 == JSONEncoder.api.encode(newIndependentBreakCommands(startSequence: before.nextSequence)))
-        #expect(!sync.makeSyncPlan(state: next).legacyDependencyReviewRequired)
-        #expect(sync.makeSyncPlan(state: next).batch.commands.map(\.id) == next.pendingCommands.map(\.id))
+        #expect(try !sync.makeSyncPlan(state: next).legacyDependencyReviewRequired)
+        #expect(try sync.makeSyncPlan(state: next).batch.commands.map(\.id) == next.pendingCommands.map(\.id))
     }
 
     private func newIndependentBreakCommands(startSequence: Int64) -> [TimerCommand] {
@@ -4776,13 +4776,13 @@ struct IntegrationPositiveTests {
         #expect(try JSONEncoder.api.encode(upgraded.pendingCommands) == original)
         #expect(upgraded.neverSentCommandIDs == orphan.neverSentCommandIDs)
         let sync = AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() })
-        let plan = sync.makeSyncPlan(state: upgraded)
+        let plan = try sync.makeSyncPlan(state: upgraded)
         #expect(plan.legacyDependencyReviewRequired)
         #expect(plan.batch.commands.isEmpty)
-        let prepared = sync.prepareSyncPlan(state: upgraded)
+        let prepared = try sync.prepareSyncPlan(state: upgraded)
         #expect(prepared.retired.neverSentCommandIDs == upgraded.neverSentCommandIDs)
         defaults.set(try JSONEncoder.api.encode(prepared.retired), forKey: "timer-state-v2")
-        #expect(sync.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
+        #expect(try sync.makeSyncPlan(state: try persistedState(defaults)).legacyDependencyReviewRequired)
         do {
             _ = try await sync.sendSync(plan, state: upgraded)
             Issue.record("Legacy review plan must not reach transport")
@@ -4819,8 +4819,8 @@ struct IntegrationPositiveTests {
                                           sharedCoreProvider: { try SharedCore.bundled() })
         #expect(restarted.pendingCommands.map(\.id) == [oldID, fresh.id])
         #expect(restarted.legacyUnresolvedCommandIDs == [oldID])
-        #expect(sync.makeSyncPlan(state: restarted).legacyDependencyReviewRequired)
-        #expect(sync.makeSyncPlan(state: restarted).batch.commands.isEmpty)
+        #expect(try sync.makeSyncPlan(state: restarted).legacyDependencyReviewRequired)
+        #expect(try sync.makeSyncPlan(state: restarted).batch.commands.isEmpty)
         #expect(try JSONEncoder.api.encode(restarted.pendingCommands)
                 == JSONEncoder.api.encode(upgraded.pendingCommands))
     }
@@ -4849,7 +4849,7 @@ struct IntegrationPositiveTests {
         defer { session.invalidateAndCancel() }
         let sync = AccountSynchronization(api: APIClient(session: session, keychain: StaticTokenStore()),
                                           sharedCoreProvider: { try SharedCore.bundled() })
-        let prepared = sync.prepareSyncPlan(state: restored)
+        let prepared = try sync.prepareSyncPlan(state: restored)
         #expect(prepared.plan.legacyDependencyReviewRequired == oldSchema)
         #expect(prepared.plan.batch.commands.map(\.id) == (oldSchema ? [] : state.pendingCommands.map(\.id)))
         #expect(try JSONEncoder.api.encode(prepared.retired.pendingCommands)
@@ -4869,7 +4869,7 @@ struct IntegrationPositiveTests {
         } + newIndependentBreakCommands(startSequence: 256)
         state.nextSequence = 258
         for command in state.pendingCommands { state.recordNeverSentCommand(id: command.id) }
-        let captured = sync.prepareSyncPlan(state: state)
+        let captured = try sync.prepareSyncPlan(state: state)
         let plan = captured.plan
         #expect(plan.batch.commands.count == 256)
         #expect(plan.batch.commands.last?.type == .start)

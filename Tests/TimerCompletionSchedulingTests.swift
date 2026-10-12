@@ -479,6 +479,7 @@ struct TimerCompletionSchedulingTests {
         defer { fixture.cleanUp() }
         try fixture.seedIrohTimer(owned: owned)
         let model = fixture.makeModel()
+        model.autoStartBreaks = false
         let focus = try #require(fixture.roomStore.activeRoomState?.canonicalTimer)
         let operationCount = try #require(fixture.roomStore.activeSnapshot?.operationCount)
         try await completionEventually { fixture.sleeper.count == 1 }
@@ -490,6 +491,7 @@ struct TimerCompletionSchedulingTests {
             #expect(fixture.sleeper.durations[1] == .seconds(5))
             #expect(fixture.roomStore.activeRoomState?.canonicalTimer == focus)
             try fixture.restoreRoomWrites()
+            fixture.sleeper.release(1)
         }
         try await completionEventually { model.canonicalTimer?.status == .completed }
         #expect(fixture.roomStore.activeSnapshot?.operationCount == operationCount)

@@ -10,7 +10,20 @@ struct PortraitDialFace: View {
     var minutes: Int = 60
     var completedFocusCount = 0
 
+    @ViewBuilder
     var body: some View {
+        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_DIAL"] == "1" {
+            dialShell
+        } else {
+            dialShell
+                .accessibilityRepresentation {
+                    TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
+                    LongBreakProgressIndicator(completedToday: completedFocusCount)
+                }
+        }
+    }
+
+    private var dialShell: some View {
         GeometryReader { geometry in
             face(diameter: geometry.size.width)
         }
@@ -42,6 +55,7 @@ struct PortraitDialFace: View {
                         .minimumScaleFactor(0.48)
                         .lineLimit(1)
                         .foregroundStyle(PomodoroughTheme.ticket)
+                        .accessibilityIdentifier("AP08-countdown-digits")
                 }
                 .padding(diameter * 0.04)
                 .frame(width: diameter * 0.8, height: diameter * 0.42)
@@ -57,10 +71,6 @@ struct PortraitDialFace: View {
             .frame(width: diameter * 0.84)
         }
         .aspectRatio(1, contentMode: .fit)
-        .accessibilityRepresentation {
-            TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
-            LongBreakProgressIndicator(completedToday: completedFocusCount)
-        }
     }
 }
 

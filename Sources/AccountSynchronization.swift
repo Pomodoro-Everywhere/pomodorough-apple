@@ -22,6 +22,28 @@ final class AccountSynchronization {
         let batch: SyncBatch
         let request: SyncRequest
         let legacyDependencyReviewRequired: Bool
+        let isSavedReplay: Bool
+        let coreStatus: String
+        let nextCursor: String
+        let heldTimerOperationId: String?
+
+        init(
+            batch: SyncBatch,
+            request: SyncRequest,
+            legacyDependencyReviewRequired: Bool,
+            isSavedReplay: Bool = false,
+            coreStatus: String = "planned",
+            nextCursor: String = "commands",
+            heldTimerOperationId: String? = nil
+        ) {
+            self.batch = batch
+            self.request = request
+            self.legacyDependencyReviewRequired = legacyDependencyReviewRequired
+            self.isSavedReplay = isSavedReplay
+            self.coreStatus = coreStatus
+            self.nextCursor = nextCursor
+            self.heldTimerOperationId = heldTimerOperationId
+        }
     }
 
     struct SyncTransition: Sendable {
@@ -59,34 +81,36 @@ final class AccountSynchronization {
         sharedCore = nil
     }
 
-    func makeSyncPlan(state: PersistedTimerState) -> SyncPlan {
+    func makeSyncPlan(state: PersistedTimerState) throws -> SyncPlan {
         let reviewRequired = LegacyBreakDependencyRecovery.requiresReview(state)
-        let batch = SyncBatch(
-            commands: uploadableCommands(in: state, limit: 256),
-            taskOperations: Array(state.pendingTaskOperations.prefix(256)),
-            durationOperations: Array(state.pendingDurationOperations.prefix(256)),
-            autoStartOperations: Array(state.pendingAutoStartOperations.prefix(256)),
-            selectedTaskOperations: Array(state.pendingSelectedTaskOperations.prefix(256))
-        )
-        return SyncPlan(
-            batch: batch,
-            request: SyncRequest(
-                deviceId: state.deviceId,
-                lastRevision: state.revision,
-                commands: batch.commands,
-                taskOperations: batch.taskOperations,
-                durationOperations: batch.durationOperations,
-                autoStartOperations: batch.autoStartOperations,
-                selectedTaskOperations: batch.selectedTaskOperations
-            ),
-            legacyDependencyReviewRequired: reviewRequired
-        )
+        guard !reviewRequired else {
+            return SyncPlan(
+                batch: SyncBatch(
+                    commands: [], taskOperations: [], durationOperations: [],
+                    autoStartOperations: [], selectedTaskOperations: []
+                ),
+                request: SyncRequest(
+                    deviceId: state.deviceId, lastRevision: state.revision,
+                    commands: [], taskOperations: [], durationOperations: [],
+                    autoStartOperations: [], selectedTaskOperations: []
+                ),
+                legacyDependencyReviewRequired: true
+            )
+        }
+        if let claim = state.outgoingSyncClaim {
+            return try savedSyncPlan(claim: claim, state: state)
+        }
+        return try newSyncPlan(state: state)
     }
 
-    func prepareSyncPlan(state: PersistedTimerState) -> (plan: SyncPlan, retired: PersistedTimerState) {
-        let plan = makeSyncPlan(state: state)
+    func prepareSyncPlan(state: PersistedTimerState) throws -> (plan: SyncPlan, retired: PersistedTimerState) {
+        let plan = try makeSyncPlan(state: state)
         guard !plan.legacyDependencyReviewRequired else { return (plan, state) }
+        guard !plan.isSavedReplay else { return (plan, state) }
+        guard plan.coreStatus == "planned", !plan.batch.isEmpty else { return (plan, state) }
         var retired = state
+        retired.outgoingSyncClaim = plan.request
+        retired.syncBatchCursor = plan.nextCursor
         retired.retireNeverSentProof(
             commands: plan.batch.commands.map(\.id),
             taskOperations: plan.batch.taskOperations.map(\.id),
@@ -97,10 +121,192 @@ final class AccountSynchronization {
         return (plan, retired)
     }
 
+    func discardSavedSyncClaim(confirmed: Bool, state: PersistedTimerState) throws -> PersistedTimerState {
+        guard let claim = state.outgoingSyncClaim else {
+            throw SyncBatchPlanError.invalidResponse("no saved sync claim")
+        }
+        let planner = SyncBatchPlanner(core: try loadCore())
+        let verdict = try planner.checkSavedSync(claim)
+        guard verdict.status == "oversized_saved" else {
+            throw SyncBatchPlanError.invalidResponse("saved claim must replay exactly")
+        }
+        guard confirmed else {
+            throw SyncBatchPlanError.oversizedSaved
+        }
+        var cleared = state
+        cleared.outgoingSyncClaim = nil
+        return cleared
+    }
+
+    private func savedSyncPlan(claim: SyncRequest, state: PersistedTimerState) throws -> SyncPlan {
+        let planner = SyncBatchPlanner(core: try loadCore())
+        let verdict = try planner.checkSavedSync(claim)
+        guard verdict.status == "replay_saved" else {
+            throw SyncBatchPlanError.oversizedSaved
+        }
+        guard claim.deviceId == state.deviceId else {
+            throw SyncBatchPlanError.invalidResponse("saved claim device mismatch")
+        }
+        return SyncPlan(
+            batch: SyncBatch(
+                commands: claim.commands, taskOperations: claim.taskOperations,
+                durationOperations: claim.durationOperations,
+                autoStartOperations: claim.autoStartOperations ?? [],
+                selectedTaskOperations: claim.selectedTaskOperations
+            ),
+            request: claim,
+            legacyDependencyReviewRequired: false,
+            isSavedReplay: true,
+            coreStatus: "replay_saved",
+            nextCursor: state.syncBatchCursor,
+            heldTimerOperationId: nil
+        )
+    }
+
+    private func newSyncPlan(state: PersistedTimerState) throws -> SyncPlan {
+        let planner = SyncBatchPlanner(core: try loadCore())
+        let plan = try planner.planSync(
+            commands: state.pendingCommands,
+            tasks: state.pendingTaskOperations,
+            durations: state.pendingDurationOperations,
+            autoStarts: state.pendingAutoStartOperations,
+            selectedTasks: state.pendingSelectedTaskOperations,
+            deviceId: state.deviceId,
+            dependencies: coreTimerDependencies(in: state),
+            cursor: state.syncBatchCursor
+        )
+        guard plan.status == "planned" else {
+            return SyncPlan(
+                batch: SyncBatch(
+                    commands: [], taskOperations: [], durationOperations: [],
+                    autoStartOperations: [], selectedTaskOperations: []
+                ),
+                request: SyncRequest(
+                    deviceId: state.deviceId, lastRevision: state.revision,
+                    commands: [], taskOperations: [], durationOperations: [],
+                    autoStartOperations: [], selectedTaskOperations: []
+                ),
+                legacyDependencyReviewRequired: false,
+                isSavedReplay: false,
+                coreStatus: plan.status,
+                nextCursor: state.syncBatchCursor,
+                heldTimerOperationId: plan.heldTimerOperationId
+            )
+        }
+        let batch = try resolveSyncBatch(plan: plan, state: state)
+        guard let next = plan.nextDomain else {
+            throw SyncBatchPlanError.invalidResponse("planned plan misses cursor")
+        }
+        return SyncPlan(
+            batch: batch,
+            request: SyncRequest(
+                deviceId: state.deviceId, lastRevision: state.revision,
+                commands: batch.commands, taskOperations: batch.taskOperations,
+                durationOperations: batch.durationOperations,
+                autoStartOperations: batch.autoStartOperations,
+                selectedTaskOperations: batch.selectedTaskOperations
+            ),
+            legacyDependencyReviewRequired: false,
+            isSavedReplay: false,
+            coreStatus: "planned",
+            nextCursor: next,
+            heldTimerOperationId: plan.heldTimerOperationId
+        )
+    }
+
+    private func resolveSyncBatch(plan: CoreBatchPlan, state: PersistedTimerState) throws -> SyncBatch {
+        let commands = try resolveCommands(ids: plan.selected.commands, state: state)
+        let tasks = try resolveTasks(ids: plan.selected.taskOperations, state: state)
+        let durations = try resolveDurations(ids: plan.selected.durationOperations, state: state)
+        let autoStarts = try resolveAutoStarts(ids: plan.selected.autoStartOperations, state: state)
+        let selected = try resolveSelected(ids: plan.selected.selectedTaskOperations, state: state)
+        return SyncBatch(
+            commands: commands, taskOperations: tasks,
+            durationOperations: durations, autoStartOperations: autoStarts,
+            selectedTaskOperations: selected
+        )
+    }
+
+    private func resolveCommands(ids: [String], state: PersistedTimerState) throws -> [TimerCommand] {
+        let index = Dictionary(uniqueKeysWithValues: state.pendingCommands.map { ($0.id, $0) })
+        return try ids.map { id in
+            guard let record = index[id] else {
+                throw SyncBatchPlanError.invalidResponse("Core selected unknown command")
+            }
+            return record
+        }
+    }
+
+    private func resolveTasks(ids: [String], state: PersistedTimerState) throws -> [TaskOperation] {
+        let index = Dictionary(uniqueKeysWithValues: state.pendingTaskOperations.map { ($0.id, $0) })
+        return try ids.map { id in
+            guard let record = index[id] else {
+                throw SyncBatchPlanError.invalidResponse("Core selected unknown task")
+            }
+            return record
+        }
+    }
+
+    private func resolveDurations(ids: [String], state: PersistedTimerState) throws -> [DurationOperation] {
+        let index = Dictionary(uniqueKeysWithValues: state.pendingDurationOperations.map { ($0.id, $0) })
+        return try ids.map { id in
+            guard let record = index[id] else {
+                throw SyncBatchPlanError.invalidResponse("Core selected unknown duration")
+            }
+            return record
+        }
+    }
+
+    private func resolveAutoStarts(ids: [String], state: PersistedTimerState) throws -> [AutoStartOperation] {
+        let index = Dictionary(
+            uniqueKeysWithValues: state.pendingAutoStartOperations.map {
+                ($0.id.uuidString.lowercased(), $0)
+            }
+        )
+        return try ids.map { id in
+            guard let record = index[id.lowercased()] else {
+                throw SyncBatchPlanError.invalidResponse("Core selected unknown auto-start")
+            }
+            return record
+        }
+    }
+
+    private func resolveSelected(ids: [String], state: PersistedTimerState) throws -> [SelectedTaskOperation] {
+        let index = Dictionary(
+            uniqueKeysWithValues: state.pendingSelectedTaskOperations.map {
+                ($0.id.uuidString.lowercased(), $0)
+            }
+        )
+        return try ids.map { id in
+            guard let record = index[id.lowercased()] else {
+                throw SyncBatchPlanError.invalidResponse("Core selected unknown selected-task")
+            }
+            return record
+        }
+    }
+
     func sendSync(_ plan: SyncPlan, state: PersistedTimerState) async throws -> TimedHTTPResponse<SyncResponse> {
         guard !plan.legacyDependencyReviewRequired else { throw LegacyTimerDependencyReview.required }
         try validateLegacyTimerSubmission(state: state)
+        guard plan.coreStatus != "blocked_dependency" else { throw SyncBatchPlanError.blockedSync }
+        try validateSyncRequest(plan.request, state: state)
         return try await api.sync(plan.request)
+    }
+
+    private func validateSyncRequest(_ request: SyncRequest, state: PersistedTimerState) throws {
+        guard request.deviceId == state.deviceId,
+              WireBounds.containsUnsigned(request.lastRevision),
+              request.commands.allSatisfy(\.isValid),
+              request.taskOperations.allSatisfy(\.isValid),
+              request.durationOperations.allSatisfy(\.isValid),
+              (request.autoStartOperations ?? []).allSatisfy({
+                  $0.isValid && $0.deviceId == request.deviceId
+              }),
+              request.selectedTaskOperations.allSatisfy({
+                  $0.isValid && $0.deviceId == request.deviceId
+              }) else { throw AppError.invalidResponse }
+        let verdict = try SyncBatchPlanner(core: loadCore()).checkSavedSync(request)
+        guard verdict.status == "replay_saved" else { throw SyncBatchPlanError.oversizedSaved }
     }
 
     func reconcileSync(
@@ -148,10 +354,8 @@ final class AccountSynchronization {
             canonicalHistory: response.history
         )
         mergeSyncedSnapshot(response, into: &updated)
-        return SyncTransition(
-            state: updated,
-            conflictMessage: conflictMessage(for: response)
-        )
+        updated.outgoingSyncClaim = nil
+        return SyncTransition(state: updated, conflictMessage: conflictMessage(for: response))
     }
 }
 
@@ -206,22 +410,49 @@ extension AccountSynchronization {
         strategy: BootstrapResolutionStrategy,
         snapshot: BootstrapResponse,
         state: PersistedTimerState
-    ) -> BootstrapResolveRequest {
-        let includesLocalOperations = strategy != .keepRemote
+    ) throws -> BootstrapResolveRequest {
+        let planner = SyncBatchPlanner(core: try loadCore())
+        let dependencies = coreTimerDependencies(in: state)
+        let plan = try planner.planBootstrap(
+            commands: state.pendingCommands,
+            tasks: state.pendingTaskOperations,
+            durations: state.pendingDurationOperations,
+            autoStarts: state.pendingAutoStartOperations,
+            selectedTasks: state.pendingSelectedTaskOperations,
+            deviceId: state.deviceId,
+            dependencies: dependencies,
+            strategy: strategy
+        )
+        guard plan.status == "planned" else {
+            if plan.status == "oversized" {
+                throw SyncBatchPlanError.oversizedBootstrap
+            }
+            throw SyncBatchPlanError.blockedBootstrap
+        }
+        let batch = try resolveBootstrapBatch(plan: plan, state: state)
         return BootstrapResolveRequest(
             requestId: "bootstrap-resolution-\(UUID().uuidString.lowercased())",
             deviceId: state.deviceId,
             expectedRevision: snapshot.revision,
             strategy: strategy,
-            commands: includesLocalOperations ? uploadableCommands(in: state) : [],
-            taskOperations: includesLocalOperations ? state.pendingTaskOperations : [],
-            durationOperations: includesLocalOperations ? state.pendingDurationOperations : [],
-            autoStartOperations: includesLocalOperations
-                ? Array(state.pendingAutoStartOperations.prefix(4_096))
-                : [],
-            selectedTaskOperations: includesLocalOperations
-                ? Array(state.pendingSelectedTaskOperations.prefix(4_096))
-                : []
+            commands: batch.commands,
+            taskOperations: batch.taskOperations,
+            durationOperations: batch.durationOperations,
+            autoStartOperations: batch.autoStartOperations,
+            selectedTaskOperations: batch.selectedTaskOperations
+        )
+    }
+
+    private func resolveBootstrapBatch(plan: CoreBatchPlan, state: PersistedTimerState) throws -> SyncBatch {
+        let commands = try resolveCommands(ids: plan.selected.commands, state: state)
+        let tasks = try resolveTasks(ids: plan.selected.taskOperations, state: state)
+        let durations = try resolveDurations(ids: plan.selected.durationOperations, state: state)
+        let autoStarts = try resolveAutoStarts(ids: plan.selected.autoStartOperations, state: state)
+        let selected = try resolveSelected(ids: plan.selected.selectedTaskOperations, state: state)
+        return SyncBatch(
+            commands: commands, taskOperations: tasks,
+            durationOperations: durations, autoStartOperations: autoStarts,
+            selectedTaskOperations: selected
         )
     }
 
@@ -256,6 +487,15 @@ extension AccountSynchronization {
                   $0.isValid && $0.deviceId == request.deviceId
               }) else {
             throw AppError.invalidResponse
+        }
+        try validateSavedBootstrapClaim(request)
+    }
+
+    private func validateSavedBootstrapClaim(_ request: BootstrapResolveRequest) throws {
+        let planner = SyncBatchPlanner(core: try loadCore())
+        let verdict = try planner.checkSavedBootstrap(request)
+        guard verdict.status == "replay_saved" else {
+            throw SyncBatchPlanError.oversizedBootstrap
         }
     }
 
@@ -396,23 +636,10 @@ private extension AccountSynchronization {
         resolved.cachedUser = user
         resolved.bootstrapUser = nil
         resolved.pendingBootstrapResolution = nil
+        resolved.outgoingSyncClaim = nil
         resolved.migrateLegacyTimerOwnership()
         resolved.pruneLocalCommandDates()
         return BootstrapResolutionTransition(state: resolved)
-    }
-
-    private func uploadableCommands(
-        in state: PersistedTimerState,
-        limit: Int? = nil
-    ) -> [TimerCommand] {
-        if LegacyBreakDependencyRecovery.requiresReview(state) { return [] }
-        let provisionalTimerIDs = Set(state.provisionalBreaks.map(\.breakTimerId))
-        let blockedCommandIDs = Set(state.pendingTimerDependencies.map(\.operationId))
-        let commands = state.pendingCommands.prefix {
-            !provisionalTimerIDs.contains($0.timerId) && !blockedCommandIDs.contains($0.id)
-        }
-        guard let limit else { return Array(commands) }
-        return Array(commands.prefix(limit))
     }
 
     private func reconcileWithCore(
@@ -456,6 +683,7 @@ private extension AccountSynchronization {
         state.canonicalTimer = output.baseTimer
         state.history = output.baseHistory
         state.tasks = output.baseTasks
+        state.installCanonicalDurations(output.baseDurationsMs)
         state.settings.durationsMs = output.baseDurationsMs
         state.autoStartBreaks = output.baseAutoStartBreaks
         state.selectedTaskID = output.baseSelectedTaskId.flatMap(UUID.init(uuidString:))

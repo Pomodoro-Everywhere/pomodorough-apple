@@ -36,7 +36,10 @@ struct AppStatePublisher: Sendable {
         completionQueuedFor: String?
     ) -> Publication {
         var publishedState = state
-        publishedState.settings.durationsMs = output.durationsMs
+        // R48-AP02 repair: local projection never owns display durations.
+        // Output uses canonical base when suppressed; overwriting settings
+        // would discard optimistic or migrated display values. Authoritative
+        // display updates arrive via successful reconcile only.
         publishedState.mergeKnownTasks(output.tasks)
         let completion = completionPresentation(
             alertTimerID: completionAlertTimerID,

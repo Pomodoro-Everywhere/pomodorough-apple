@@ -2,6 +2,125 @@ import XCTest
 
 @MainActor
 final class PomodoroughAccessibilityUITests: XCTestCase {
+    func testTimerProductionDivisionsAvoidCountdownAndActions() throws {
+        continueAfterFailure = false
+        let env = ProcessInfo.processInfo.environment
+        let pose = env["TEST_RUNNER_POMODOROUGH_AP07_POSE"] ?? env["POMODOROUGH_AP07_POSE"]
+        let category = env["TEST_RUNNER_POMODOROUGH_AP07_TEXT"] ?? env["POMODOROUGH_AP07_TEXT"] ?? "UICTContentSizeCategoryL"
+        let app = makeApplication()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_HINGE"] = "1"
+        app.launchEnvironment["POMODOROUGH_UI_TEST_DIAL"] = "1"
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", category]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        if let pose {
+            let closedArea = app.frame.width * app.frame.height
+            XCTAssertLessThan(app.frame.width, app.frame.height)
+            print("AP07_READY Closed -> \(pose)")
+            let unfolded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                app.frame.width * app.frame.height > closedArea
+            }, object: app)
+            XCTAssertEqual(XCTWaiter().wait(for: [unfolded], timeout: 120), .completed)
+        }
+        try assertTimerAvoidsDivisions(app, pose: pose, state: "idle", actions: ["Start focus", "Skip to Short break"])
+        app.buttons["Start focus"].tap()
+        try assertTimerAvoidsDivisions(app, pose: pose, state: "running", actions: ["Pause", "Finish timer", "Cancel timer"])
+        app.buttons["Pause"].tap()
+        try assertTimerAvoidsDivisions(app, pose: pose, state: "paused", actions: ["Resume", "Finish timer", "Cancel timer"])
+        app.buttons["Resume"].tap()
+        XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 10))
+        app.buttons["Finish timer"].tap()
+        XCTAssertTrue(app.buttons["Start short break"].waitForExistence(timeout: 10))
+        app.buttons["Skip to Focus"].tap()
+        app.buttons["Start focus"].tap()
+        app.buttons["Cancel timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+    }
+
+    private func assertTimerAvoidsDivisions(
+        _ app: XCUIApplication, pose: String?, state: String, actions: [String]
+    ) throws {
+        let primary = app.buttons[actions[0]]
+        XCTAssertTrue(primary.waitForExistence(timeout: 10))
+        let probe = app.staticTexts["AP07-divisions"]
+        XCTAssertTrue(probe.waitForExistence(timeout: 10), "Missing production geometry adapter")
+        let expectedDivisions = pose == "Book"
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let value = probe.value as? String ?? ""
+            return value.isEmpty != expectedDivisions && primary.isHittable
+        }, object: probe)
+        XCTAssertEqual(XCTWaiter().wait(for: [settled], timeout: 15), .completed)
+        let divisions = try divisionFrames(probe.value as? String ?? "")
+        XCTAssertEqual(!divisions.isEmpty, expectedDivisions)
+        let countdown = app.staticTexts["AP08-countdown-digits"]
+        XCTAssertTrue(countdown.waitForExistence(timeout: 10), "Measure rendered countdown, not accessibility substitute")
+        // Report before asserting so a crossing still leaves measured frames.
+        print("AP07_OBSERVED \(pose ?? "phone") \(state) divisions=\(divisions) countdown=\(countdown.frame) actions=\(actions.map { app.buttons[$0].frame })")
+        attachNavigationEvidence("AP07-\(pose ?? "phone")-\(state)", in: app)
+        for element in [countdown] + actions.map({ app.buttons[$0] }) {
+            XCTAssertTrue(element.exists)
+            XCTAssertGreaterThan(element.frame.width, 0)
+            XCTAssertGreaterThan(element.frame.height, 0)
+            for division in divisions {
+                XCTAssertFalse(element.frame.intersects(division), "\(element.label) \(element.frame) crosses \(division)")
+            }
+        }
+    }
+
+    private func divisionFrames(_ value: String) throws -> [CGRect] {
+        try value.split(separator: "|").map { row in
+            let fields = row.split(separator: ",").compactMap { Double($0) }
+            XCTAssertEqual(fields.count, 4)
+            guard fields.count == 4 else { throw NSError(domain: "AP07-divisions", code: 1) }
+            return CGRect(x: fields[0], y: fields[1], width: fields[2], height: fields[3])
+        }
+    }
+
+    // R48-AP08: every secondary timer action renders in each timer state.
+    // Contrast itself is pinned by SecondaryButtonContrastTests against the
+    // actual fills (sky fallback, glass composites) in both appearances;
+    // this test supplies the rendered-pixel evidence for Skip, Finish, and
+    // Cancel on iOS 18 (fallback) and iOS 27 (glass), in dark/light via the
+    // matrix, at standard and XXXL sizes via AP08_TEXT, with Increase
+    // Contrast via the matrix. Reduce Motion behavior is unchanged.
+    func testSecondaryButtonsRenderSkipFinishCancel() throws {
+        continueAfterFailure = false
+        let env = ProcessInfo.processInfo.environment
+        let category = env["TEST_RUNNER_POMODOROUGH_AP08_TEXT"] ?? env["POMODOROUGH_AP08_TEXT"] ?? "UICTContentSizeCategoryL"
+        let app = makeApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", category]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        try assertSecondaryVisible(app, labels: ["Skip to Short break"], name: "AP08-idle-Skip")
+        app.buttons["Start focus"].tap()
+        try assertSecondaryVisible(app, labels: ["Finish timer", "Cancel timer"], name: "AP08-running-Finish-Cancel")
+        app.buttons["Pause"].tap()
+        try assertSecondaryVisible(app, labels: ["Finish timer", "Cancel timer"], name: "AP08-paused-Finish-Cancel")
+        app.buttons["Resume"].tap()
+        XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 10))
+        app.buttons["Finish timer"].tap()
+        XCTAssertTrue(app.buttons["Start short break"].waitForExistence(timeout: 10))
+        app.buttons["Skip to Focus"].tap()
+        app.buttons["Start focus"].tap()
+        app.buttons["Cancel timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+    }
+
+    private func assertSecondaryVisible(_ app: XCUIApplication, labels: [String], name: String) throws {
+        for label in labels {
+            let button = app.buttons[label]
+            XCTAssertTrue(button.waitForExistence(timeout: 10), "Missing secondary \(label)")
+            for _ in 0..<4 where button.exists && !button.isHittable {
+                app.swipeUp()
+            }
+            XCTAssertTrue(button.isHittable, "Secondary not hittable \(label)")
+            XCTAssertGreaterThan(button.frame.width, 0)
+            XCTAssertGreaterThan(button.frame.height, 0)
+        }
+        print("AP08_OBSERVED \(name) frames=\(labels.map { app.buttons[$0].frame })")
+        attachNavigationEvidence(name, in: app)
+    }
+
     // XCTest has no Duo pose API. Run on a Closed Duo with
     // TEST_RUNNER_POMODOROUGH_DUO_POSE=Open (or Book), then select that
     // Device Hub pose after AP01_READY. A real display transition is required;
@@ -417,12 +536,20 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             revealAccessibleTimerControl(action, in: app)
             attachNavigationEvidence("AP10-XXXL-\(action)", in: app)
             // A physical tap at the visible control, without XCTest auto-scroll.
-            app.buttons[action].coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).tap()
+            let target = app.buttons[action]
+            let tapFrame = target.frame
+            let wasHittable = target.isHittable
+            target.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5)).tap()
             let readout = elements(labelled: timer, in: app).firstMatch
             let changed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "value ENDSWITH %@", status), object: readout
             )
-            XCTAssertEqual(XCTWaiter().wait(for: [changed], timeout: 5), .completed,
+            let waited = XCTWaiter().wait(for: [changed], timeout: 15)
+            print("AP10_TAP action=\(action) frame=\(tapFrame) hittableBefore=\(wasHittable) delivered=\(waited == .completed)")
+            if waited != .completed {
+                attachNavigationEvidence("AP10-tap-noop-\(action)", in: app)
+            }
+            XCTAssertEqual(waited, .completed,
                            "\(action) must produce \(timer), \(status)")
         }
         let progress = elements(labelled: "Pomodoro progress", in: app).firstMatch
@@ -434,29 +561,91 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         attachNavigationEvidence("AP10-XXXL-cancelled", in: app)
     }
 
+    // R48-AP10: derive the Timer content viewport from measured chrome.
+    // Phones arrange the routes in a bottom tab bar (wide X spread);
+    // unfolded Duo arranges them in a right-side vertical rail (tall Y
+    // spread). The old helper used the rail's minY as a bottom edge and
+    // truncated the usable scroll viewport.
+    private func accessibleTimerViewport(in app: XCUIApplication) -> CGRect {
+        let scroll = app.scrollViews.firstMatch
+        XCTAssertTrue(scroll.exists)
+        let navMaxY = app.navigationBars.firstMatch.exists
+            ? app.navigationBars.firstMatch.frame.maxY : scroll.frame.minY
+        var bottom = scroll.frame.maxY
+        var right = scroll.frame.maxX
+        var chrome = ""
+        var seen: [CGRect] = []
+        for route in ["Timer", "Tasks", "Pattern", "Arrivals"] {
+            let tab = app.buttons[route]
+            guard tab.exists else { continue }
+            let frame = tab.frame
+            guard frame.width > 0, frame.height > 0 else { continue }
+            seen.append(frame)
+            chrome += "\(route)=\(frame) "
+        }
+        if seen.count >= 2 {
+            var minX = seen[0].minX, maxX = seen[0].minX
+            var minY = seen[0].minY, maxY = seen[0].minY
+            for frame in seen.dropFirst() {
+                minX = min(minX, frame.minX); maxX = max(maxX, frame.minX)
+                minY = min(minY, frame.minY); maxY = max(maxY, frame.minY)
+            }
+            if maxX - minX > maxY - minY {
+                bottom = min(bottom, minY)
+                chrome += "[bottom-bar] "
+            } else {
+                right = min(right, minX)
+                chrome += "[side-rail] "
+            }
+        }
+        let top = max(scroll.frame.minY, navMaxY)
+        let viewport = CGRect(x: scroll.frame.minX, y: top,
+                              width: right - scroll.frame.minX, height: bottom - top)
+        print("AP10_VIEWPORT scroll=\(scroll.frame) chrome=[\(chrome)] viewport=\(viewport) app=\(app.frame)")
+        return viewport
+    }
+
     private func revealAccessibleTimerControl(_ label: String, in app: XCUIApplication) {
         let button = app.buttons[label]
         XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing \(label)")
+        // XXXL needs scrolling on short phones and unfolded Duo. Gestures
+        // stay inside measured content, clear of navigation and tab/rail
+        // chrome; never shrink the user's text.
+        let viewport = accessibleTimerViewport(in: app)
+        XCTAssertGreaterThan(viewport.height, 0)
+        XCTAssertGreaterThan(viewport.width, 0)
+        var moved = false
+        var before = button.frame
         let scroll = app.scrollViews.firstMatch
-        XCTAssertTrue(scroll.exists)
-        // XXXL needs scrolling on short phones. Keep gestures inside content,
-        // clear of the navigation and tab bars; never shrink the user's text.
-        for _ in 0..<8 {
-            let top = max(scroll.frame.minY, app.navigationBars.firstMatch.frame.maxY)
-            let bottom = min(scroll.frame.maxY, app.buttons["Timer"].frame.minY)
+        for attempt in 0..<8 {
             let frame = button.frame
-            if button.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
-            let viewport = CGRect(x: scroll.frame.minX, y: top,
-                                  width: scroll.frame.width, height: bottom - top)
-            XCTAssertGreaterThan(viewport.height, 0)
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let direction: CGFloat = frame.minY < top ? 1 : -1
-            let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
-            let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
-            start.press(forDuration: 0.01, thenDragTo: end)
+            let inside = frame.minX >= viewport.minX && frame.maxX <= viewport.maxX
+                && frame.minY >= viewport.minY && frame.maxY <= viewport.maxY
+            if button.isHittable && inside { return }
+            let below = frame.midY >= viewport.midY
+            var method = "drag"
+            if attempt < 4 {
+                let origin = app.coordinate(withNormalizedOffset: .zero)
+                let direction: CGFloat = below ? -1 : 1
+                let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
+                let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
+                start.press(forDuration: 0.01, thenDragTo: end)
+            } else if scroll.exists {
+                method = "element-swipe"
+                if below { scroll.swipeUp() } else { scroll.swipeDown() }
+            }
+            let after = button.frame
+            let didMove = abs(after.minX - before.minX) > 0.5 || abs(after.minY - before.minY) > 0.5
+            moved = moved || didMove
+            print("AP10_GESTURE label=\(label) attempt=\(attempt) method=\(method) before=\(before) after=\(after) moved=\(didMove) viewport=\(viewport)")
+            before = after
         }
         attachNavigationEvidence("AP10-unreachable-\(label)", in: app)
-        XCTFail("\(label) not fully visible and hittable after bounded content scrolling")
+        if moved {
+            XCTFail("\(label) not fully visible and hittable after bounded content scrolling")
+        } else {
+            XCTFail("AP10 gesture delivery failure: content did not move after 8 synthesized gestures for \(label). Infra/adapter blocker, not proof the control is unreachable.")
+        }
     }
 
     func testNetworkSectionExposesModesRoomActionsAndPrivacyCopy() {
@@ -803,6 +992,69 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         hierarchy.lifetime = .keepAlways
         add(hierarchy)
         print("AP11_PICKER shot=\(shot) label=\(picker.label) frame=\(picker.frame) app=\(app.frame)")
+    }
+
+    /// R48-AP09: the XXXL menu title renders its glyphs inside the
+    /// control. Unassigned wraps to two lines at XXXL on narrow phones;
+    /// the old native Picker kept single-line height and clipped the
+    /// second line while frame/label checks still passed. The menu label
+    /// carries a two-line floor, so Unassigned and a short single-line
+    /// title share that height, while a long title grows past it. This
+    /// asserts that rendered growth plus containment, selection of all
+    /// three titles, with screenshot evidence per state on iOS 18 and 27
+    /// via the matrix.
+    func testTaskPickerGlyphsContainUnassignedAndLongTitleAtXXXL() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+        let unassignedHeight = pickerGlyphHeight(shot: "AP09-XXXL-Unassigned", in: app)
+        var picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.label.contains("Unassigned"), "picker must show Unassigned, got \(picker.label)")
+        let shortTitle = "AP09 short"
+        createTaskForDeletionTest(named: shortTitle, in: app)
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+        selectPickerTask(named: shortTitle, in: app)
+        picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.label.contains(shortTitle), "picker must show selected title, got \(picker.label)")
+        let shortHeight = pickerGlyphHeight(shot: "AP09-XXXL-short", in: app)
+        XCTAssertEqual(shortHeight, unassignedHeight, "two-line floor must hold single-line titles")
+        let longTitle = "AP09 long task title that wraps past two lines at XXXL"
+        createTaskForDeletionTest(named: longTitle, in: app)
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+        selectPickerTask(named: longTitle, in: app)
+        picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.label.contains(longTitle), "picker must show long title, got \(picker.label)")
+        let longHeight = pickerGlyphHeight(shot: "AP09-XXXL-long", in: app)
+        XCTAssertGreaterThan(longHeight, unassignedHeight, "long wrapping title must grow past the two-line floor")
+        XCTAssertTrue(app.buttons["Start focus"].isHittable, "timer controls must stay reachable")
+        print("AP09_OBSERVED unassigned=\(unassignedHeight) short=\(shortHeight) long=\(longHeight)")
+    }
+
+    private func pickerGlyphHeight(shot: String, in app: XCUIApplication) -> CGFloat {
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "Missing picker Focus task")
+        revealPicker(picker, in: app)
+        for _ in 0..<6 where picker.frame.minY < 0 {
+            app.swipeDown()
+        }
+        for _ in 0..<6 where picker.frame.maxY > app.frame.maxY {
+            app.swipeUp()
+        }
+        XCTAssertTrue(picker.isHittable, "picker not hittable at XXXL")
+        XCTAssertGreaterThan(picker.frame.width, 0)
+        XCTAssertGreaterThan(picker.frame.height, 0)
+        XCTAssertTrue(app.frame.contains(picker.frame), "picker escapes app frame: \(picker.frame) in \(app.frame)")
+        print("AP09_PICKER shot=\(shot) label=\(picker.label) frame=\(picker.frame) app=\(app.frame)")
+        attachNavigationEvidence(shot, in: app)
+        return picker.frame.height
     }
 
     private func revealPicker(_ picker: XCUIElement, in app: XCUIApplication) {

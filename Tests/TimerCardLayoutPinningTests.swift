@@ -134,18 +134,35 @@ struct AppleHighFindingsTests {
         #expect(TimerTaskPicker.pickerMultilineAlignment(for: .accessibility3) == .leading)
     }
 
-    @Test func pickerReserveAddsOneLineAtAccessibilitySizes() {
+    @Test func pickerTitleFloorCoversTwoLinesInsideControl() {
         #if os(iOS)
-        #expect(TimerTaskPicker.pickerReserveHeight(for: .large) == 0)
-        #expect(TimerTaskPicker.pickerReserveHeight(for: .accessibility3) > 0)
+        #expect(TimerTaskPicker.pickerTitleMinHeight(for: .large) == 0)
+        #expect(TimerTaskPicker.pickerTitleMinHeight(for: .accessibility3) > 0)
         let large = TimerTaskPicker.menuFont(for: .large).lineHeight
         let xxxl = TimerTaskPicker.menuFont(for: .accessibility5).lineHeight
         #expect(xxxl > large)
-        #expect(TimerTaskPicker.pickerReserveHeight(for: .accessibility5) == xxxl)
+        #expect(TimerTaskPicker.pickerTitleMinHeight(for: .accessibility5) == xxxl * 2)
         #else
-        #expect(TimerTaskPicker.pickerReserveHeight(for: .large) == 0)
-        #expect(TimerTaskPicker.pickerReserveHeight(for: .accessibility3) == 0)
+        #expect(TimerTaskPicker.pickerTitleMinHeight(for: .large) == 0)
+        #expect(TimerTaskPicker.pickerTitleMinHeight(for: .accessibility3) == 0)
         #endif
+    }
+
+    @Test func pickerMenuTitleKeepsUnassignedAndLongTitles() {
+        #expect(TimerTaskPicker.menuTitle(selectedID: nil, tasks: []) == "Unassigned")
+        #expect(TimerTaskPicker.menuTitle(selectedID: UUID(), tasks: []) == "Unassigned")
+        guard let short = FocusTask(title: "AP09 short") else {
+            Issue.record("short fixture failed")
+            return
+        }
+        #expect(TimerTaskPicker.menuTitle(selectedID: short.id, tasks: [short]) == short.title)
+        let longTitle = String(repeating: "AP09 long task ", count: 8)
+        guard let long = FocusTask(title: longTitle) else {
+            Issue.record("long fixture failed")
+            return
+        }
+        #expect(TimerTaskPicker.menuTitle(selectedID: long.id, tasks: [short, long]) == long.title)
+        #expect(TimerTaskPicker.menuTitle(selectedID: UUID(), tasks: [short, long]) == "Unassigned")
     }
 }
 
@@ -298,5 +315,66 @@ struct ProminentButtonContrastTests {
         #expect(PomodoroughTheme.accentSRGB(for: .focus) == PomodoroughTheme.signalSRGB)
         #expect(PomodoroughTheme.accentSRGB(for: .shortBreak) == PomodoroughTheme.mintSRGB)
         #expect(PomodoroughTheme.accentSRGB(for: .longBreak) == PomodoroughTheme.ticketSRGB)
+    }
+}
+
+// Pins the R48-AP08 decision: secondary labels are chosen from the actual
+// button fill, not the scheme alone. The iOS 18 dark fallback was white on
+// sky at 1.23:1; the shipped fallback label is black in both appearances.
+// Glass secondaries keep white in dark and black in light, each picked
+// from the measured composite fill. Increase Contrast headroom comes from
+// the 9:1+ margins, and large text keeps the same pairs.
+@Suite("Secondary button contrast")
+struct SecondaryButtonContrastTests {
+    private func ratio(
+        label: (red: Double, green: Double, blue: Double),
+        fill: (red: Double, green: Double, blue: Double)
+    ) -> Double {
+        let labelLuminance = PomodoroughTheme.relativeLuminance(red: label.red, green: label.green, blue: label.blue)
+        let fillLuminance = PomodoroughTheme.relativeLuminance(red: fill.red, green: fill.green, blue: fill.blue)
+        return PomodoroughTheme.contrastRatio(
+            lighter: max(labelLuminance, fillLuminance),
+            darker: min(labelLuminance, fillLuminance)
+        )
+    }
+
+    @Test func fallbackLabelClearsAAOnSkyInBothAppearances() {
+        for appearance in [PomodoroughTheme.Appearance.light, .dark] {
+            let label = PomodoroughTheme.secondaryFallbackLabelSRGB(for: appearance)
+            #expect(ratio(label: label, fill: PomodoroughTheme.skySRGB) >= 4.5)
+        }
+    }
+
+    @Test func whiteOnSkyIsTheBaselineFailure() {
+        let white = (red: 1.0, green: 1.0, blue: 1.0)
+        #expect(ratio(label: white, fill: PomodoroughTheme.skySRGB) < 3.0)
+    }
+
+    @Test func fallbackSelectorPicksBlackFromSkyFill() {
+        for appearance in [PomodoroughTheme.Appearance.light, .dark] {
+            let label = PomodoroughTheme.secondaryFallbackLabelSRGB(for: appearance)
+            #expect(label == (red: 0.0, green: 0.0, blue: 0.0))
+        }
+    }
+
+    @Test func glassLabelsClearAAOnCompositeFills() {
+        let darkLabel = PomodoroughTheme.glassSecondaryLabelSRGB(for: .dark)
+        #expect(darkLabel == (red: 1.0, green: 1.0, blue: 1.0))
+        #expect(ratio(label: darkLabel, fill: PomodoroughTheme.glassSecondaryDarkFillSRGB) >= 4.5)
+        let lightLabel = PomodoroughTheme.glassSecondaryLabelSRGB(for: .light)
+        #expect(lightLabel == (red: 0.0, green: 0.0, blue: 0.0))
+        #expect(ratio(label: lightLabel, fill: PomodoroughTheme.glassSecondaryLightFillSRGB) >= 4.5)
+    }
+
+    @Test func auditSourceMatchesShippedSecondaryFills() {
+        #expect(abs(PomodoroughTheme.skySRGB.red - 220.0 / 255) < 0.0001)
+        #expect(abs(PomodoroughTheme.skySRGB.green - 234.0 / 255) < 0.0001)
+        #expect(abs(PomodoroughTheme.skySRGB.blue - 241.0 / 255) < 0.0001)
+        let dark = PomodoroughTheme.glassSecondaryDarkFillSRGB
+        #expect(abs(dark.red - (23.0 * 0.84 + 247.0 * 0.16) / 255) < 0.0001)
+        #expect(abs(dark.green - (36.0 * 0.84 + 248.0 * 0.16) / 255) < 0.0001)
+        #expect(abs(dark.blue - (48.0 * 0.84 + 242.0 * 0.16) / 255) < 0.0001)
+        let light = PomodoroughTheme.glassSecondaryLightFillSRGB
+        #expect(light == PomodoroughTheme.porcelainSRGB)
     }
 }
