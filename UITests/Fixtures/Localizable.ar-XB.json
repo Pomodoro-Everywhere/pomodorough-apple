@@ -2,54 +2,14 @@
   "locale": "ar-XB",
   "layoutDirection": "right-to-left",
   "strings": {
-    "Create a new sync request?": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Create a new sync request?⟧"
-      }
-    },
-    "History setup paused: local changes exceed the server limit. Queued changes remain saved.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦History setup paused: local changes exceed the server limit. Queued changes remain saved.⟧"
-      }
-    },
-    "Invalid Core batch plan.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Invalid Core batch plan.⟧"
-      }
-    },
-    "Keep changes and recover": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Keep changes and recover⟧"
-      }
-    },
-    "Recover saved sync request": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Recover saved sync request⟧"
-      }
-    },
-    "Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.⟧"
-      }
-    },
-    "Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.⟧"
-      }
-    },
-    "The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.⟧"
-      }
-    },
+    "Create a new sync request?": { "stringUnit": { "state": "translated", "value": "‏⟦Create a new sync request?⟧" } },
+    "History setup paused: local changes exceed the server limit. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦History setup paused: local changes exceed the server limit. Queued changes remain saved.⟧" } },
+    "Invalid Core batch plan.": { "stringUnit": { "state": "translated", "value": "‏⟦Invalid Core batch plan.⟧" } },
+    "Keep changes and recover": { "stringUnit": { "state": "translated", "value": "‏⟦Keep changes and recover⟧" } },
+    "Recover saved sync request": { "stringUnit": { "state": "translated", "value": "‏⟦Recover saved sync request⟧" } },
+    "Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.⟧" } },
+    "Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.⟧" } },
+    "The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.": { "stringUnit": { "state": "translated", "value": "‏⟦The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.⟧" } },
     "%@ duration": {
       "stringUnit": {
         "state": "translated",
@@ -2189,7 +2149,7 @@
     "Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.⟧"
+        "value": "\u200f⟦Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.⟧"
       }
     },
     "Sync status, %@": {
@@ -2846,72 +2806,17 @@
         "value": "‏⟦This will discard %@ changes still waiting to sync.⟧"
       }
     },
-    "Watch Pause not applied.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Watch Pause not applied.⟧"
-      }
-    },
-    "Focus task, %arg": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Focus task, %arg⟧"
-      }
-    },
-    "durationBase category=%arg reason=%arg ": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦durationBase category=%arg reason=%arg ⟧"
-      }
-    },
-    "pendingDurations=%arg ": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦pendingDurations=%arg ⟧"
-      }
-    },
-    "hasCanonical=%arg usesCanonical=%arg ": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦hasCanonical=%arg usesCanonical=%arg ⟧"
-      }
-    },
-    "suppressed=%arg core=%arg": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦suppressed=%arg core=%arg⟧"
-      }
-    },
-    "mutation category=%arg reason=%arg ": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦mutation category=%arg reason=%arg ⟧"
-      }
-    },
-    "pending=%arg/%arg/%arg/": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦pending=%arg/%arg/%arg/⟧"
-      }
-    },
-    "%arg/%arg queued=%arg ": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%arg/%arg queued=%arg ⟧"
-      }
-    },
-    "applied=%arg ignoredRetarget=%arg ": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦applied=%arg ignoredRetarget=%arg ⟧"
-      }
-    },
-    "core=%arg": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦core=%arg⟧"
-      }
-    }
+    "Watch Pause not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Pause not applied.⟧" } },
+    "Focus task, %arg": { "stringUnit": { "state": "translated", "value": "‏⟦Focus task, %arg⟧" } },
+    "durationBase category=%arg reason=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦durationBase category=%arg reason=%arg ⟧" } },
+    "pendingDurations=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦pendingDurations=%arg ⟧" } },
+    "hasCanonical=%arg usesCanonical=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦hasCanonical=%arg usesCanonical=%arg ⟧" } },
+    "suppressed=%arg core=%arg": { "stringUnit": { "state": "translated", "value": "‏⟦suppressed=%arg core=%arg⟧" } },
+    "mutation category=%arg reason=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦mutation category=%arg reason=%arg ⟧" } },
+    "pending=%arg/%arg/%arg/": { "stringUnit": { "state": "translated", "value": "‏⟦pending=%arg/%arg/%arg/⟧" } },
+    "%arg/%arg queued=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦%arg/%arg queued=%arg ⟧" } },
+    "applied=%arg ignoredRetarget=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦applied=%arg ignoredRetarget=%arg ⟧" } },
+    "core=%arg": { "stringUnit": { "state": "translated", "value": "‏⟦core=%arg⟧" } }
   },
   "version": 1
 }
