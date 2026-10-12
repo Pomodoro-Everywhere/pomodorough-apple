@@ -79,8 +79,8 @@ struct TimerTaskPicker: View {
     /// multiline label, never by truncation in the model. Pure and
     /// nonisolated so background unit probes never trip MainActor.
     nonisolated static func menuTitle(selectedID: UUID?, tasks: [FocusTask]) -> String {
-        guard let selectedID else { return "Unassigned" }
-        return tasks.first(where: { $0.id == selectedID })?.title ?? "Unassigned"
+        guard let selectedID else { return String(localized: "Unassigned") }
+        return tasks.first(where: { $0.id == selectedID })?.title ?? String(localized: "Unassigned")
     }
 
     #if os(iOS)
@@ -136,7 +136,7 @@ struct TimerTaskPicker: View {
             menuLabel
         }
         .tint(PomodoroughTheme.ticket)
-        .accessibilityLabel("Focus task, \(selectedTitle)")
+        .accessibilityLabel(String(localized: "Focus task, \(selectedTitle)"))
         .accessibilityHint("Applies to the current running focus timer and the next timer.")
     }
 

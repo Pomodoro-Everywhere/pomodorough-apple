@@ -560,7 +560,15 @@ def main() -> int:
     permission = read("Sources/Views/PermissionIntroductionView.swift")
     account = read("Sources/Views/AccountView.swift")
     require('Label("Duration changes apply to next timer"' in pattern, "active pattern edits lack next-timer disclosure", failures)
-    require('Picker("Focus task"' in task_picker, "focus task picker missing", failures)
+    # R48-AP09 replaced the native menu Picker (which clipped its second
+    # line at accessibility sizes) with a Menu driven by menuTitle plus a
+    # localized "Focus task" accessibility label. Accept either form.
+    has_legacy_picker = 'Picker("Focus task"' in task_picker
+    has_menu_picker = (
+        "static func menuTitle(" in task_picker
+        and 'accessibilityLabel(String(localized: "Focus task' in task_picker
+    )
+    require(has_legacy_picker or has_menu_picker, "focus task picker missing", failures)
     require('Picker("Next focus task"' not in task_picker, "focus task picker must not split active/next", failures)
     require('Text("Active timer task")' not in task_picker, "focus task must not duplicate the active assignment label", failures)
     guarantee = "subject to the operating system's delivery policy"

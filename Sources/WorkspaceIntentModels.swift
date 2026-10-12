@@ -29,11 +29,11 @@ struct WorkspaceMutationDiagnostics: Sendable {
     let provenance: String
 
     func publicMessage() -> String {
-        "mutation category=\(category.rawValue) reason=\(coreReason) " +
-            "pending=\(pendingCommands)/\(pendingTasks)/\(pendingDurations)/" +
-            "\(pendingAutoStart)/\(pendingSelected) queued=\(queued) " +
-            "applied=\(applied) ignoredRetarget=\(isIgnoredRetarget) " +
-            "core=\(provenance)"
+        String(localized: "mutation category=\(category.rawValue) reason=\(coreReason) ")
+            + String(localized: "pending=\(pendingCommands)/\(pendingTasks)/\(pendingDurations)/")
+            + String(localized: "\(pendingAutoStart)/\(pendingSelected) queued=\(queued) ")
+            + String(localized: "applied=\(applied) ignoredRetarget=\(isIgnoredRetarget) ")
+            + String(localized: "core=\(provenance)")
     }
 }
 

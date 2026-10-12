@@ -33,10 +33,10 @@ struct DurationBaseDiagnostics: Sendable {
     let provenance: String
 
     func publicMessage() -> String {
-        "durationBase category=\(category.rawValue) reason=\(reason) "
-            + "pendingDurations=\(pendingDurations) "
-            + "hasCanonical=\(hasCanonical) usesCanonical=\(usesCanonical) "
-            + "suppressed=\(suppressed) core=\(provenance)"
+        String(localized: "durationBase category=\(category.rawValue) reason=\(reason) ")
+            + String(localized: "pendingDurations=\(pendingDurations) ")
+            + String(localized: "hasCanonical=\(hasCanonical) usesCanonical=\(usesCanonical) ")
+            + String(localized: "suppressed=\(suppressed) core=\(provenance)")
     }
 }
 
