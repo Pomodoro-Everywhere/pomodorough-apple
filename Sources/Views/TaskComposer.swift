@@ -38,15 +38,19 @@ struct TaskComposer: View {
             .submitLabel(.done)
             .onSubmit(add)
             .accessibilityLabel("New task")
-        // R49-U03 rework: borderedProminent forces white on Xcode 26.6 /
-        // iPhone 17 standard size even with inner+outer foregroundStyle.
-        // Plain leaves foreground alone, so explicit signal fill plus
-        // fill-derived black label survive both themes and sizes.
+        // R49-U03 label: LabelStyle.automatic resolves standard-path title to
+        // white on Xcode 26.6 / iPhone 17 even under .plain + foregroundStyle.
+        // Explicit Text + decorative Image remove Label from color path.
         Button(action: add) {
-            Label("Add task", systemImage: "plus")
-                .foregroundStyle(PomodoroughTheme.taskComposerLabel)
-                .padding()
-                .background(PomodoroughTheme.signal, in: Capsule())
+            HStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .accessibilityHidden(true)
+                    .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+                Text("Add task")
+                    .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+            }
+            .padding()
+            .background(PomodoroughTheme.signal, in: Capsule())
         }
         .buttonStyle(.plain)
         .opacity(canAdd ? 1 : 0.5)
