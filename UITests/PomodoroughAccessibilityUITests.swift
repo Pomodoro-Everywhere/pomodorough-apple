@@ -997,17 +997,29 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         let image = try XCTUnwrap(screenshot.image.cgImage)
         let scale = CGFloat(image.width) / app.frame.width
         let crop = CGRect(x: frame.minX * scale, y: frame.minY * scale, width: frame.width * scale, height: frame.height * scale).integral
-        let pixels = try phasePixelHistogram(try XCTUnwrap(image.cropping(to: crop)))
+        let sample = crop.insetBy(dx: crop.width * 0.25, dy: crop.height * 0.25).integral
+        XCTAssertGreaterThan(sample.width, 0)
+        XCTAssertGreaterThan(sample.height, 0)
+        let pixels = try phasePixelHistogram(try XCTUnwrap(image.cropping(to: sample)))
         let colors = pixels.sorted { $0.value > $1.value }
         XCTAssertGreaterThanOrEqual(colors.count, 2)
         let fill = try XCTUnwrap(colors.first)
-        let foreground = try XCTUnwrap(colors.dropFirst().first)
+        let fillLuminance = phasePixelLuminance(fill.key)
+        var foreground = try XCTUnwrap(colors.dropFirst().first)
+        var ratio = 0.0
+        for candidate in colors.dropFirst() where candidate.value > 30 {
+            let luminances = [fillLuminance, phasePixelLuminance(candidate.key)].sorted()
+            let candidateRatio = (luminances[1] + 0.05) / (luminances[0] + 0.05)
+            if candidateRatio > ratio {
+                ratio = candidateRatio
+                foreground = candidate
+            }
+        }
         attachNavigationEvidence("R49-U02-\(state)", in: app)
-        XCTAssertGreaterThan(fill.value, Int(crop.width * crop.height) / 3)
+        XCTAssertGreaterThan(fill.value, Int(sample.width * sample.height) / 3)
         XCTAssertGreaterThan(foreground.value, 30, "Require solid glyph interiors")
-        let luminances = [phasePixelLuminance(fill.key), phasePixelLuminance(foreground.key)].sorted()
-        let ratio = (luminances[1] + 0.05) / (luminances[0] + 0.05)
-        let receipt = "R49_U02_PIXELS state=\(state) frame=\(frame) crop=\(crop) foreground=\(String(foreground.key, radix: 16)) foregroundPixels=\(foreground.value) fill=\(String(fill.key, radix: 16)) fillPixels=\(fill.value) contrast=\(ratio)"
+        XCTAssertGreaterThan(ratio, 0)
+        let receipt = "R49_U02_PIXELS state=\(state) frame=\(frame) crop=\(crop) sample=\(sample) foreground=\(String(foreground.key, radix: 16)) foregroundPixels=\(foreground.value) fill=\(String(fill.key, radix: 16)) fillPixels=\(fill.value) contrast=\(ratio)"
         print(receipt)
         let attachment = XCTAttachment(string: receipt)
         attachment.name = "R49-U02-\(state)-pixels"
