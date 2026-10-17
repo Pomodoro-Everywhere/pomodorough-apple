@@ -38,11 +38,17 @@ struct TaskComposer: View {
             .submitLabel(.done)
             .onSubmit(add)
             .accessibilityLabel("New task")
-        Button("Add task", systemImage: "plus", action: add)
-            .buttonStyle(.borderedProminent)
-            .tint(PomodoroughTheme.signal)
-            .foregroundStyle(PomodoroughTheme.taskComposerLabel)
-            .disabled(!canAdd)
+        // R49-U03: the prominent style resolves the shorthand label color
+        // from the button level on some SDKs, so carry the fill-derived
+        // foreground on both the inner label and the button itself.
+        Button(action: add) {
+            Label("Add task", systemImage: "plus")
+                .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(PomodoroughTheme.signal)
+        .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+        .disabled(!canAdd)
     }
 }
 

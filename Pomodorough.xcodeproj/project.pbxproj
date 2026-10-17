@@ -354,6 +354,7 @@
 		C88B13BA75199FDD755559DD /* R48AP01DurableAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD89F2D2F191B6F85F10E6D6 /* R48AP01DurableAdmissionTests.swift */; };
 		C92783BAD90EFB471FACC321 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 339967D3D78893FBEB4565F6 /* HistoryScreen.swift */; };
 		CAFAF05CF473357E46BBCE21 /* JoinIrohRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A1C76FDED66E83942D625F /* JoinIrohRoomView.swift */; };
+		CB730E0F3D58ED31DE88515D /* PomodoroughAddTaskU03ContrastUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F19CB58296311E5F5729082 /* PomodoroughAddTaskU03ContrastUITests.swift */; };
 		CB89EE8F88949BD320CE9224 /* TimerHingeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BF3F7FED0E32F32A493364 /* TimerHingeLayout.swift */; };
 		CBBA8D8D66F1934FA96B0502 /* LegacyTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFAFD32702932CC335D6F13D /* LegacyTabs.swift */; };
 		CBD6A118EB50CD13A585FD53 /* ServicePatternCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE6D3C420FC1AB911E53262 /* ServicePatternCard.swift */; };
@@ -601,6 +602,7 @@
 		4D9BC41A79C51FBE333670D1 /* WatchSyncPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncPayload.swift; sourceTree = "<group>"; };
 		4E2B22FF291B7EA7C3547795 /* StepButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepButton.swift; sourceTree = "<group>"; };
 		4E70ABFB780690269C33E577 /* PomodoroughWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughWatchApp.swift; sourceTree = "<group>"; };
+		4F19CB58296311E5F5729082 /* PomodoroughAddTaskU03ContrastUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughAddTaskU03ContrastUITests.swift; sourceTree = "<group>"; };
 		5131154CE2452672A3A4F700 /* EndpointIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointIdentity.swift; sourceTree = "<group>"; };
 		544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomStore.swift; sourceTree = "<group>"; };
 		548C52633BAFF8D04FF3C33C /* AppStatePersistenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStatePersistenceCoordinator.swift; sourceTree = "<group>"; };
@@ -971,6 +973,7 @@
 			isa = PBXGroup;
 			children = (
 				9223397CA303F7E682AC131A /* PomodoroughAccessibilityUITests.swift */,
+				4F19CB58296311E5F5729082 /* PomodoroughAddTaskU03ContrastUITests.swift */,
 				9C30CF22C2104AE306728CEB /* PomodoroughHistoryRefreshUITests.swift */,
 				0EFAB86CC0ADE4867B4A82FE /* PomodoroughRoomJoinSafetyUITests.swift */,
 				315B527B45DDC450EEFF760D /* PomodoroughTimerAlertsRecoveryUITests.swift */,
@@ -1774,6 +1777,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B52ADEA1251692A7CD150328 /* PomodoroughAccessibilityUITests.swift in Sources */,
+				CB730E0F3D58ED31DE88515D /* PomodoroughAddTaskU03ContrastUITests.swift in Sources */,
 				7180787487196791B4BC5DBD /* PomodoroughHistoryRefreshUITests.swift in Sources */,
 				0AF4C50D480CC6082A74DE13 /* PomodoroughRoomJoinSafetyUITests.swift in Sources */,
 				581FCE6E75E99A19ED4C5545 /* PomodoroughTimerAlertsRecoveryUITests.swift in Sources */,
