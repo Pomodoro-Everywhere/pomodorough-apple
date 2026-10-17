@@ -38,16 +38,18 @@ struct TaskComposer: View {
             .submitLabel(.done)
             .onSubmit(add)
             .accessibilityLabel("New task")
-        // R49-U03: the prominent style resolves the shorthand label color
-        // from the button level on some SDKs, so carry the fill-derived
-        // foreground on both the inner label and the button itself.
+        // R49-U03 rework: borderedProminent forces white on Xcode 26.6 /
+        // iPhone 17 standard size even with inner+outer foregroundStyle.
+        // Plain leaves foreground alone, so explicit signal fill plus
+        // fill-derived black label survive both themes and sizes.
         Button(action: add) {
             Label("Add task", systemImage: "plus")
                 .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+                .padding()
+                .background(PomodoroughTheme.signal, in: Capsule())
         }
-        .buttonStyle(.borderedProminent)
-        .tint(PomodoroughTheme.signal)
-        .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+        .buttonStyle(.plain)
+        .opacity(canAdd ? 1 : 0.5)
         .disabled(!canAdd)
     }
 }
