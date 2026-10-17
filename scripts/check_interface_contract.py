@@ -56,6 +56,19 @@ VAR_STRING_DECLARATION_RE = re.compile(
 FUNC_STRING_DECLARATION_RE = re.compile(
     r"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^{}]*\)\s*(?:async\s+)?(?:throws\s+)?->\s*String\??\s*\{"
 )
+TYPE_DECLARATION_RE = re.compile(
+    r"\b(?:struct|class|enum|actor|protocol|extension)\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"\s*(?:(?::|\bwhere\b)[^{}]*)?\{"
+)
+# Exempt only these reviewed members from the computed-name heuristic. Explicit
+# UI APIs and localization calls remain subject to catalog coverage everywhere.
+LOG_ONLY_COMPUTED_MEMBERS = {
+    ("Sources/AppModel.swift", "SyncFailureDiagnostics", "errorDescription"):
+        "reportSyncBoundaryFailure sends this to OSLog/Sentry and rethrows the original error.",
+    ("Sources/WorkspaceIntentModels.swift", "SuppressedSelectionDiagnostics", "publicMessage"):
+        "TimerSessionController.reportSuppressedSelection sends this only to OSLog.notice.",
+}
 
 
 def has_tagged_primary_destination(source: str, title: str, tab: str) -> bool:
@@ -345,46 +358,114 @@ def matching_brace(source: str, opening: int) -> int:
     return len(source)
 
 
+def swift_code_mask(source: str) -> str:
+    """Keep offsets/braces while hiding strings and comments from scope matching."""
+    masked = list(source)
+    index = 0
+    while index < len(source):
+        end = index
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            if end == -1:
+                end = len(source)
+        elif source.startswith("/*", index):
+            end = index + 2
+            depth = 1
+            while end < len(source) and depth:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+        elif source[index] == '"':
+            parsed = swift_string_at(source, index)
+            end = parsed[1] if parsed else len(source)
+        if end > index:
+            masked[index:end] = ("\n" if character == "\n" else " " for character in source[index:end])
+            index = end
+        else:
+            index += 1
+    return "".join(masked)
+
+
+def log_only_computed_declarations(source: str, relative_path: str) -> set[int]:
+    if not any(path == relative_path for path, _, _ in LOG_ONLY_COMPUTED_MEMBERS):
+        return set()
+    code = swift_code_mask(source)
+    owners = {
+        match.end() - 1: re.sub(r"\s+", "", match.group(1))
+        for match in TYPE_DECLARATION_RE.finditer(code)
+    }
+    scopes: list[int] = []
+    exempt: set[int] = set()
+    for token in re.finditer(r"[{}]|\bvar\b", code):
+        if token.group() == "{":
+            scopes.append(token.start())
+        elif token.group() == "}":
+            if scopes:
+                scopes.pop()
+        elif len(scopes) == 1:
+            # Only direct members of an exact top-level owner are reviewed.
+            # Every intervening brace blocks inheritance, even for unknown syntax.
+            declaration = VAR_STRING_DECLARATION_RE.match(code, token.start())
+            if declaration is not None:
+                identity = (relative_path, owners.get(scopes[0]), declaration.group(1))
+                if identity in LOG_ONLY_COMPUTED_MEMBERS:
+                    exempt.add(declaration.start())
+    return exempt
+
+
+def localized_call_ranges(block: str) -> list[tuple[int, int]]:
+    localized_ranges: list[tuple[int, int]] = []
+    for match in re.finditer(r"(?:String|LocalizedStringResource)\s*\(\s*localized\s*:\s*", block):
+        opening_call = block.find("(", match.start())
+        depth = 0
+        end = len(block)
+        in_string = False
+        escaped = False
+        for index in range(opening_call, len(block)):
+            character = block[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_string = False
+                continue
+            if character == '"':
+                in_string = True
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        localized_ranges.append((match.start(), end))
+    return localized_ranges
+
+
 def find_uncatalogued_computed_literals(source: str, relative_path: str) -> list[str]:
     source = strip_debug_regions(source)
     failures: list[str] = []
+    log_only = log_only_computed_declarations(source, relative_path)
     declarations = sorted(
         [*VAR_STRING_DECLARATION_RE.finditer(source), *FUNC_STRING_DECLARATION_RE.finditer(source)],
         key=lambda match: match.start(),
     )
     for declaration in declarations:
         name = declaration.group(1)
+        if declaration.start() in log_only:
+            continue
         if TECHNICAL_NAME_RE.search(name) or not USER_VISIBLE_NAME_RE.search(name):
             continue
         opening = source.find("{", declaration.start())
         block = source[opening + 1:matching_brace(source, opening)]
-        localized_ranges: list[tuple[int, int]] = []
-        for match in re.finditer(r"(?:String|LocalizedStringResource)\s*\(\s*localized\s*:\s*", block):
-            opening_call = block.find("(", match.start())
-            depth = 0
-            end = len(block)
-            in_string = False
-            escaped = False
-            for index in range(opening_call, len(block)):
-                character = block[index]
-                if in_string:
-                    if escaped:
-                        escaped = False
-                    elif character == "\\":
-                        escaped = True
-                    elif character == '"':
-                        in_string = False
-                    continue
-                if character == '"':
-                    in_string = True
-                elif character == "(":
-                    depth += 1
-                elif character == ")":
-                    depth -= 1
-                    if depth == 0:
-                        end = index + 1
-                        break
-            localized_ranges.append((match.start(), end))
+        localized_ranges = localized_call_ranges(block)
         for literal in SWIFT_LITERAL_RE.finditer(block):
             value = literal.group(1)
             if not value or any(start <= literal.start(1) < end for start, end in localized_ranges):

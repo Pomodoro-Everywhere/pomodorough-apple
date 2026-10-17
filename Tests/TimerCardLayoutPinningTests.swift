@@ -318,6 +318,44 @@ struct ProminentButtonContrastTests {
     }
 }
 
+// Pins the R49-U02 decision: the Task composer Add label is derived from
+// the actual signal fill, not the scheme alone. White on signal is the
+// 2.98:1 baseline failure; the shipped label is black at ~7.0:1 and
+// matches the prominent timer foreground in both appearances.
+@Suite("Task composer contrast")
+struct TaskComposerContrastTests {
+    private func ratio(
+        label: (red: Double, green: Double, blue: Double),
+        fill: (red: Double, green: Double, blue: Double)
+    ) -> Double {
+        let labelLuminance = PomodoroughTheme.relativeLuminance(red: label.red, green: label.green, blue: label.blue)
+        let fillLuminance = PomodoroughTheme.relativeLuminance(red: fill.red, green: fill.green, blue: fill.blue)
+        return PomodoroughTheme.contrastRatio(
+            lighter: max(labelLuminance, fillLuminance),
+            darker: min(labelLuminance, fillLuminance)
+        )
+    }
+
+    @Test func composerLabelDerivesBlackFromSignalFill() {
+        #expect(PomodoroughTheme.taskComposerLabelSRGB() == (red: 0.0, green: 0.0, blue: 0.0))
+    }
+
+    @Test func composerLabelClearsAAOnSignalFill() {
+        #expect(ratio(label: PomodoroughTheme.taskComposerLabelSRGB(), fill: PomodoroughTheme.signalSRGB) >= 4.5)
+    }
+
+    @Test func composerLabelMatchesProminentTimerForeground() {
+        for appearance in [PomodoroughTheme.Appearance.light, .dark] {
+            #expect(PomodoroughTheme.taskComposerLabelSRGB() == PomodoroughTheme.prominentLabelSRGB(for: appearance))
+        }
+    }
+
+    @Test func whiteOnSignalIsBaselineFailure() {
+        let white = (red: 1.0, green: 1.0, blue: 1.0)
+        #expect(ratio(label: white, fill: PomodoroughTheme.signalSRGB) < 4.5)
+    }
+}
+
 // Pins the R48-AP08 decision: secondary labels are chosen from the actual
 // button fill, not the scheme alone. The iOS 18 dark fallback was white on
 // sky at 1.23:1; the shipped fallback label is black in both appearances.

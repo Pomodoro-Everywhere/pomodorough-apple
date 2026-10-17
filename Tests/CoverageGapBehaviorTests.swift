@@ -495,7 +495,7 @@ struct SynchronizedMutationCoverageBehaviorTests {
         #expect(transition.state.hasExplicitPhaseSelection)
         #expect(transition.state.selectedPhaseGeneration == 1)
         #expect(transition.projection == nil)
-        #expect(transition.effects == [.persist])
+        #expect(transition.effects == [.persistAtomically(previous: state, rebuildsOnRollback: true)])
     }
 
     @Test @MainActor

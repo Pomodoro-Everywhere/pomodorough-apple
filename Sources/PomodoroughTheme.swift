@@ -70,6 +70,18 @@ enum PomodoroughTheme {
         }
     }
 
+    /// Task composer Add label (R49-U02): derived from the actual signal
+    /// fill, not the scheme alone. Black clears AA at ~7.0:1; white is the
+    /// 2.98:1 baseline failure. Matches the prominent timer foreground.
+    static func taskComposerLabelSRGB() -> (red: Double, green: Double, blue: Double) {
+        secondaryLabelSRGB(forFill: signalSRGB)
+    }
+
+    static var taskComposerLabel: Color {
+        let label = taskComposerLabelSRGB()
+        return Color(red: label.red, green: label.green, blue: label.blue)
+    }
+
     /// Effective secondary fills (R48-AP08). The pre-iOS-26 fallback fill
     /// is opaque sky, identical in both appearances. The iOS-26 glass
     /// secondary tints porcelain at 16% over the card backdrop: night
@@ -135,6 +147,29 @@ enum PomodoroughTheme {
     /// sRGB components of the darkened signal red used for small text on light
     /// surfaces. Kept separate so the vivid accent stays for decoration only.
     static let signalTextLightRGB = (red: 172.0 / 255, green: 32.0 / 255, blue: 28.0 / 255)
+
+    /// Small signal text follows its actual fill. Keep the vivid accent when
+    /// it clears AA, otherwise use darkened signal or a readable neutral.
+    static func signalTextSRGB(
+        onFill fill: (red: Double, green: Double, blue: Double)
+    ) -> (red: Double, green: Double, blue: Double) {
+        let fillLuminance = relativeLuminance(red: fill.red, green: fill.green, blue: fill.blue)
+        for foreground in [signalSRGB, signalTextLightRGB] {
+            let foregroundLuminance = relativeLuminance(
+                red: foreground.red, green: foreground.green, blue: foreground.blue
+            )
+            if contrastRatio(lighter: max(fillLuminance, foregroundLuminance),
+                             darker: min(fillLuminance, foregroundLuminance)) >= 4.5 {
+                return foreground
+            }
+        }
+        return secondaryLabelSRGB(forFill: fill)
+    }
+
+    static func signalText(onFill fill: (red: Double, green: Double, blue: Double)) -> Color {
+        let foreground = signalTextSRGB(onFill: fill)
+        return Color(red: foreground.red, green: foreground.green, blue: foreground.blue)
+    }
 
     /// Small-text foreground: darkened signal on light appearances, vivid
     /// signal on dark appearances.

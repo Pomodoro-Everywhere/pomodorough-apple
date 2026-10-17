@@ -44,6 +44,62 @@ private struct AppModelCoordinators {
     let alarmEffectCoordinator: AlarmEffectCoordinator
 }
 
+struct SyncFailureDiagnostics: Error, LocalizedError, Sendable {
+    enum Stage: String, Sendable { case preSend, possibleDelivery, reconciliation, commit }
+    enum Rollback: String, Sendable { case restored, snapshotChanged, deliveryPossible, notEligible, persistenceFailed }
+    enum Reason: String, Sendable { case cancelled, transport, core, invalidResponse, invalidLocalClock, batch, other }
+    let stage: Stage
+    let rollback: Rollback
+    let reason: Reason
+    let pending: [Int]
+    let hasClaim: Bool
+
+    init(error: Error, stage: Stage, rollback: Rollback, state: PersistedTimerState) {
+        self.stage = stage
+        self.rollback = rollback
+        reason = Self.reason(for: error)
+        pending = [state.pendingCommands.count, state.pendingTaskOperations.count,
+                   state.pendingDurationOperations.count, state.pendingAutoStartOperations.count,
+                   state.pendingSelectedTaskOperations.count]
+        hasClaim = state.outgoingSyncClaim != nil
+    }
+
+    private static func reason(for error: Error) -> Reason {
+        switch error {
+        case is CancellationError: .cancelled
+        case let transport as URLError: transport.code == .cancelled ? .cancelled : .transport
+        case is SharedCoreError: .core
+        case AppError.invalidResponse: .invalidResponse
+        case AppError.invalidLocalClock: .invalidLocalClock
+        case is SyncBatchPlanError: .batch
+        default: .other
+        }
+    }
+
+    var key: String { "sync-boundary-\(stage.rawValue)-\(rollback.rawValue)-\(reason.rawValue)" }
+    var warrantsCapture: Bool { reason == .core || reason == .invalidResponse || reason == .batch }
+    var errorDescription: String? {
+        "sync stage=\(stage.rawValue) rollback=\(rollback.rawValue) reason=\(reason.rawValue) "
+            + "pending=\(pending.map(String.init).joined(separator: "/")) claim=\(hasClaim) "
+            + "core=\(WorkspaceIntentProvenance.current().prefix(160))"
+    }
+
+    struct Budget {
+        private var counts: [String: Int] = [:]
+        mutating func record(_ diagnostic: SyncFailureDiagnostics) -> Bool {
+            let count = counts[diagnostic.key, default: 0]
+            guard count < 3 else { return false }
+            counts[diagnostic.key] = count + 1
+            return true
+        }
+    }
+}
+
+@MainActor
+private final class SyncDeliveryAttempt {
+    var stage = SyncFailureDiagnostics.Stage.preSend
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -81,6 +137,7 @@ final class AppModel {
     @ObservationIgnored private var timerCompletionSuspensions = 0
     @ObservationIgnored private var centralizedSyncTask: Task<Bool, Never>?
     @ObservationIgnored private var centralizedSyncTaskID: UUID?
+    @ObservationIgnored private var syncFailureDiagnosticBudget = SyncFailureDiagnostics.Budget()
     @ObservationIgnored private var completionQueuedFor: String?
     @ObservationIgnored private var physicalAnchor: (wall: Date, uptime: TimeInterval)?
     @ObservationIgnored private var taskIdentityCore: SharedCore?
@@ -721,8 +778,7 @@ final class AppModel {
         guard !isDeferred || command.allowsDeferredDelivery else { return false }
         switch command.name {
         case "start":
-            start()
-            return true
+            return applyWatchStartCommand()
         case "pause":
             guard isWatchCommandTargetCurrent(command), activeTimer?.status == .running else { return false }
             guard pause() else {
@@ -731,24 +787,16 @@ final class AppModel {
             }
             return true
         case "resume":
-            guard isWatchCommandTargetCurrent(command), activeTimer?.status == .paused else { return false }
-            resume()
-            return true
+            return applyWatchResumeCommand(command)
         case "finish":
-            guard isWatchCommandTargetCurrent(command) else { return false }
-            finish()
-            return true
+            return applyWatchFinishCommand(command)
         case "selectPhase":
-            if let raw = command.phase, let phase = TimerPhase(rawValue: raw) {
-                selectPhase(phase)
-            }
-            return true
+            guard let raw = command.phase, let phase = TimerPhase(rawValue: raw) else { return false }
+            return selectPhase(phase)
         case "setDuration":
-            if let raw = command.phase, let phase = TimerPhase(rawValue: raw),
-               let minutes = command.minutes {
-                setDurationMinutes(minutes, for: phase)
-            }
-            return true
+            guard let raw = command.phase, let phase = TimerPhase(rawValue: raw),
+                  let minutes = command.minutes else { return false }
+            return setDurationMinutes(minutes, for: phase)
         default:
             Self.logger.error("unknown watch command: \(command.name, privacy: .public)")
             SentryCapture.captureOnce(key: "watch-command-unknown", error: WatchUnknownCommandError(name: command.name))
@@ -773,12 +821,64 @@ final class AppModel {
         }
     }
 
-    func selectPhase(_ phase: TimerPhase) {
-        _ = performWorkspaceMutation(.selectPhase(phase))
+    private func applyWatchStartCommand() -> Bool {
+        guard start() else {
+            reportWatchStartRefusal()
+            return false
+        }
+        return true
     }
 
-    func setDurationMinutes(_ minutes: Int, for phase: TimerPhase) {
-        _ = performWorkspaceMutation(.setDurationMinutes(minutes, for: phase))
+    private func applyWatchResumeCommand(_ command: WatchTimerCommand) -> Bool {
+        guard isWatchCommandTargetCurrent(command), activeTimer?.status == .paused else { return false }
+        guard resume() else {
+            reportWatchResumeRefusal()
+            return false
+        }
+        return true
+    }
+
+    private func applyWatchFinishCommand(_ command: WatchTimerCommand) -> Bool {
+        guard isWatchCommandTargetCurrent(command) else { return false }
+        guard finish() else {
+            reportWatchFinishRefusal()
+            return false
+        }
+        return true
+    }
+
+    private func reportWatchStartRefusal() {
+        Self.logger.error("watch start refused")
+        SentryCapture.captureOnce(key: "watch-command-start-refused", error: WatchStartRefusedError())
+        if errorMessage == nil {
+            errorMessage = String(localized: "Watch Start not applied.")
+        }
+    }
+
+    private func reportWatchResumeRefusal() {
+        Self.logger.error("watch resume refused")
+        SentryCapture.captureOnce(key: "watch-command-resume-refused", error: WatchResumeRefusedError())
+        if errorMessage == nil {
+            errorMessage = String(localized: "Watch Resume not applied.")
+        }
+    }
+
+    private func reportWatchFinishRefusal() {
+        Self.logger.error("watch finish refused")
+        SentryCapture.captureOnce(key: "watch-command-finish-refused", error: WatchFinishRefusedError())
+        if errorMessage == nil {
+            errorMessage = String(localized: "Watch Finish not applied.")
+        }
+    }
+
+    @discardableResult
+    func selectPhase(_ phase: TimerPhase) -> Bool {
+        performWorkspaceMutation(.selectPhase(phase))
+    }
+
+    @discardableResult
+    func setDurationMinutes(_ minutes: Int, for phase: TimerPhase) -> Bool {
+        performWorkspaceMutation(.setDurationMinutes(minutes, for: phase))
     }
 
     @discardableResult
@@ -1399,8 +1499,9 @@ final class AppModel {
         accountSessionCoordinator.handleGoogleSignInURL(url)
     }
 
-    func start() {
-        _ = performWorkspaceMutation(.startTimer)
+    @discardableResult
+    func start() -> Bool {
+        performWorkspaceMutation(.startTimer)
     }
 
     @discardableResult
@@ -1409,9 +1510,10 @@ final class AppModel {
         return performWorkspaceMutation(.pauseTimer(at: date))
     }
 
-    func resume(at explicitDate: Date? = nil) {
+    @discardableResult
+    func resume(at explicitDate: Date? = nil) -> Bool {
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
-        _ = performWorkspaceMutation(.resumeTimer(at: date))
+        return performWorkspaceMutation(.resumeTimer(at: date))
     }
 
     /// Widget deep-link entry point: mirrors the main Start/Pause/Resume button.
@@ -1426,16 +1528,17 @@ final class AppModel {
         }
     }
 
-    func finish(at explicitDate: Date? = nil) {
-        guard !isWorkspaceMutationBlocked else { return }
+    @discardableResult
+    func finish(at explicitDate: Date? = nil) -> Bool {
+        guard !isWorkspaceMutationBlocked else { return false }
         if foregroundSyncPending, needsForegroundSync {
             // AP120: no sync result exists yet, so the copy must not claim
             // another device changed the timer — only that a sync gates finish.
             errorMessage = String(localized: "Syncing latest state before finish.")
-            return
+            return false
         }
         let date = explicitDate ?? effectivePhysicalNow() ?? now()
-        finish(at: date, cancelsAlarm: true)
+        return finish(at: date, cancelsAlarm: true)
     }
 
     @discardableResult
@@ -1958,32 +2061,50 @@ final class AppModel {
         guard persistAtomically(previous: preSendPrevious, rebuildsOnRollback: true) else {
             throw AppError.invalidResponse
         }
+        let attempt = SyncDeliveryAttempt()
         do {
-            return try await sendReconcileAndCommit(plan, lease: lease)
+            return try await sendReconcileAndCommit(plan, lease: lease, attempt: attempt)
         } catch {
-            restorePreSendClaim(error, previous: preSendPrevious, retired: prepared.retired)
+            let rollback = restorePreSendClaim(
+                error, previous: preSendPrevious, retired: prepared.retired, stage: attempt.stage
+            )
+            reportSyncBoundaryFailure(error, stage: attempt.stage, rollback: rollback)
             throw error
         }
     }
 
+    private func selectedTaskProjectionAfterRetirement() throws -> CoreProjectionOutput? {
+        guard !timerState.pendingSelectedTaskOperations.isEmpty else { return nil }
+        return try project(timerState)
+    }
+
     private func sendReconcileAndCommit(
         _ plan: AccountSynchronization.SyncPlan,
-        lease: CentralizedAccountSessionCoordinator.SyncLease
+        lease: CentralizedAccountSessionCoordinator.SyncLease,
+        attempt: SyncDeliveryAttempt
     ) async throws -> Bool {
         let previousTimer = activeTimer
-        let sampledResponse = try await accountSessionCoordinator.sendSync(plan, state: timerState)
+        let retiredProjection = try selectedTaskProjectionAfterRetirement()
+        let sampledResponse = try await accountSessionCoordinator.sendSync(plan, state: timerState) {
+            attempt.stage = .possibleDelivery
+            if let retiredProjection {
+                projectedSelectedTaskID = retiredProjection.selectedTaskId.flatMap(UUID.init(uuidString:))
+            }
+        }
         let receivedAt = effectivePhysicalNow() ?? now()
         guard accountSessionCoordinator.ownsCentralizedReplication(
             lease.operation,
             modeGeneration: lease.modeGeneration,
             workspace: centralizedWorkspace
         ) else { return false }
+        attempt.stage = .reconciliation
         let transition = try accountSessionCoordinator.reconcileSync(
             sampledResponse,
             plan: plan,
             state: timerState
         )
         if let message = transition.conflictMessage { conflictMessage = message }
+        attempt.stage = .commit
         try commitSyncedState(transition.state, previousTimer: previousTimer, receivedAt: receivedAt)
         return true
     }
@@ -1991,11 +2112,26 @@ final class AppModel {
     private func restorePreSendClaim(
         _ error: Error,
         previous: PersistedTimerState,
-        retired: PersistedTimerState
-    ) {
-        guard shouldRestorePreSendClaim(for: error) else { return }
+        retired: PersistedTimerState,
+        stage: SyncFailureDiagnostics.Stage
+    ) -> SyncFailureDiagnostics.Rollback {
+        guard stage == .preSend else { return .deliveryPossible }
+        guard shouldRestorePreSendClaim(for: error) else { return .notEligible }
+        // Restore only the exact snapshot whose metadata this unsent attempt retired.
+        guard timerState == retired else { return .snapshotChanged }
         timerState = previous
-        _ = persistAtomically(previous: retired, rebuildsOnRollback: false)
+        return persistAtomically(previous: retired, rebuildsOnRollback: false)
+            ? .restored : .persistenceFailed
+    }
+
+    private func reportSyncBoundaryFailure(
+        _ error: Error, stage: SyncFailureDiagnostics.Stage, rollback: SyncFailureDiagnostics.Rollback
+    ) {
+        let diagnostic = SyncFailureDiagnostics(error: error, stage: stage, rollback: rollback, state: timerState)
+        guard syncFailureDiagnosticBudget.record(diagnostic) else { return }
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        guard diagnostic.warrantsCapture else { return }
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
     private func shouldRestorePreSendClaim(for error: Error) -> Bool {
@@ -2195,7 +2331,7 @@ final class AppModel {
             tasks: tasks,
             durationsMs: timerState.canonicalDurations(),
             autoStartBreaks: autoStartBreaks,
-            selectedTaskId: timerState.selectedTaskID?.uuidString.lowercased(),
+            selectedTaskId: selectedTaskID?.uuidString.lowercased(),
             hlcWallMs: timerState.hlcWallMs,
             hlcCounter: timerState.hlcCounter
         )
@@ -2208,7 +2344,7 @@ final class AppModel {
             tasks: state.tasks,
             durationsMs: state.canonicalDurations(),
             autoStartBreaks: state.autoStartBreaks,
-            selectedTaskId: state.selectedTaskID?.uuidString.lowercased(),
+            selectedTaskId: state.canonicalSelectedTaskID?.uuidString.lowercased(),
             hlcWallMs: state.hlcWallMs,
             hlcCounter: state.hlcCounter
         )
@@ -2440,6 +2576,9 @@ final class AppModel {
     private func applyWorkspaceMutation(
         _ transition: SynchronizedWorkspaceMutationController.Transition
     ) -> Bool {
+        if transition.projection == nil {
+            return applyLocalWorkspaceMutation(transition)
+        }
         var working = transition.state
         for effect in transition.effects {
             if case .setExplicitPhaseSelection(let value) = effect {
@@ -2468,6 +2607,39 @@ final class AppModel {
             }
         }
         installPreparedPublication(publication)
+        for effect in deferred {
+            guard applyWorkspaceMutationEffect(effect) else { return false }
+        }
+        return true
+    }
+
+    private func applyLocalWorkspaceMutation(
+        _ transition: SynchronizedWorkspaceMutationController.Transition
+    ) -> Bool {
+        var working = transition.state
+        var deferred: [SynchronizedWorkspaceMutationController.Effect] = []
+        for effect in transition.effects {
+            switch effect {
+            case .setExplicitPhaseSelection(let value):
+                working.hasExplicitPhaseSelection = value
+            case .persist, .persistAtomically:
+                break
+            default:
+                deferred.append(effect)
+            }
+        }
+        let previous = transition.effects.compactMap { effect -> PersistedTimerState? in
+            if case .persistAtomically(let prev, _) = effect { return prev }
+            return nil
+        }.first ?? timerState
+        let destination = persistenceDestination(for: working)
+        let coordinatorTransition = accountSessionCoordinator.persistAtomically(
+            previous: previous,
+            proposed: working,
+            to: destination,
+            rebuildsOnRollback: true
+        )
+        guard applyPersistenceTransition(coordinatorTransition) else { return false }
         for effect in deferred {
             guard applyWorkspaceMutationEffect(effect) else { return false }
         }

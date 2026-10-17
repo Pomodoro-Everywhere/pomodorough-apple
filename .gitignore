@@ -22,3 +22,4 @@ Supporting/SentryDSN.local
 .ruff_cache/
 .pytest_cache/
 /.audit/
+/scratch/

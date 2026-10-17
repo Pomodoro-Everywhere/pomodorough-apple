@@ -61,6 +61,7 @@ final class TimerSessionController {
 
     private let sharedCoreProvider: @MainActor () throws -> SharedCore
     private var sharedCore: SharedCore?
+    private var suppressedSelectionDiagnosticCount = 0
 
     /// Delay for the single millisecond-boundary recheck in planFinish. Covers the
     /// sub-millisecond trusted/physical mapping disagreement; completion timestamps
@@ -402,6 +403,7 @@ extension TimerSessionController {
         let safeCommands = state.safeProjectionCommands()
         let projectedCommands = state.localProjection(of: safeCommands)
         let pending = projectionPending(for: state, commands: projectedCommands)
+        reportSuppressedSelection(state: state, pending: pending)
         let replayDate = projectionReplayDate(
             explicitDate: projectionDate,
             base: base,
@@ -765,9 +767,19 @@ private extension TimerSessionController {
     /// materialized selection only; pending selection operations still
     /// converge through the pending queues.
     private func materializedSelectedTaskID(in state: PersistedTimerState) -> String? {
-        guard let selected = state.selectedTaskID,
+        guard let selected = state.canonicalSelectedTaskID,
               state.tasks.contains(where: { $0.id == selected }) else { return nil }
         return selected.uuidString.lowercased()
+    }
+
+    private func reportSuppressedSelection(state: PersistedTimerState, pending: CoreProjectionPending) {
+        guard !state.pendingSelectedTaskOperations.isEmpty,
+              pending.selectedTaskOperations.isEmpty,
+              suppressedSelectionDiagnosticCount < 3 else { return }
+        suppressedSelectionDiagnosticCount += 1
+        let diagnostic = SuppressedSelectionDiagnostics(state: state)
+        Logger(subsystem: "me.egigoka.pomodorough", category: "SelectedTaskBase")
+            .notice("\(diagnostic.publicMessage, privacy: .public)")
     }
 
     private func projectionPending(

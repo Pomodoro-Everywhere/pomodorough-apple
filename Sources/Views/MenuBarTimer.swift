@@ -110,7 +110,7 @@ struct MenuBarTimerMenu: View {
             } else if model.canonicalTimer?.status == .paused {
                 Button("Resume timer", systemImage: "play.fill") { model.resume() }
             } else {
-                Button("Start \(model.selectedPhase.title.lowercased())", systemImage: "play.fill", action: model.start)
+                Button("Start \(model.selectedPhase.title.lowercased())", systemImage: "play.fill") { _ = model.start() }
             }
             if model.hasActiveCompletionAlert {
                 Button("Stop sound", systemImage: "speaker.slash", action: model.stopSound)

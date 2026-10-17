@@ -522,3 +522,235 @@ struct WatchCommandIdentityTests {
         return try JSONSerialization.data(withJSONObject: dict ?? [:])
     }
 }
+
+@Suite("R49-AP05 Watch settings committed outcomes", .serialized)
+struct R49AP05WatchSettingsCommitTests {
+    @Test @MainActor
+    func malformedSettingsDoNotMutate() throws {
+        let fixture = try R49AP05SettingsFixture()
+        defer { fixture.cleanup() }
+        let before = try fixture.observation()
+        let commands = [
+            WatchTimerCommand(name: "selectPhase", sentAt: .now),
+            .selectPhase("invalid-phase"),
+            WatchTimerCommand(name: "setDuration", minutes: 20, sentAt: .now),
+            .setDuration(minutes: 20, forPhaseRawValue: "invalid-phase"),
+            WatchTimerCommand(name: "setDuration", phase: "focus", sentAt: .now)
+        ]
+        for command in commands {
+            let accepted = fixture.model.applyWatchCommand(command)
+            #expect(!accepted)
+            #expect(try fixture.observation() == before)
+        }
+    }
+
+    @Test(arguments: ["selectPhase", "setDuration"]) @MainActor
+    func blockedSettingsReturnFalse(name: String) throws {
+        var seed = PersistedTimerState.fresh()
+        seed.pendingAccountSwitchUser = User(
+            id: "ap05-user", email: "ap05@example.invalid", name: "AP05", avatarUrl: ""
+        )
+        let fixture = try R49AP05SettingsFixture(seed: seed)
+        defer { fixture.cleanup() }
+        try #require(fixture.model.isWorkspaceMutationBlocked)
+        let before = try fixture.observation()
+        let accepted = fixture.model.applyWatchCommand(fixture.command(name))
+        #expect(!accepted)
+        #expect(try fixture.observation() == before)
+    }
+
+    @Test(arguments: ["selectPhase", "setDuration"], [false, true]) @MainActor
+    func deniedWriteReturnsFalseAndRetryCommits(name: String, active: Bool) async throws {
+        let fixture = try R49AP05SettingsFixture()
+        defer { fixture.cleanup() }
+        if active { try #require(fixture.model.start()) }
+        await fixture.model.waitForAlarmOperations()
+        fixture.alarms.operations.removeAll()
+        let before = try fixture.observation()
+        try fixture.setWritable(false)
+        let accepted = fixture.model.applyWatchCommand(fixture.command(name))
+        #expect(!accepted)
+        await fixture.model.waitForAlarmOperations()
+        #expect(try fixture.observation() == before)
+        #expect(fixture.alarms.operations.isEmpty)
+        try fixture.setWritable(true)
+        let retried = fixture.model.applyWatchCommand(fixture.command(name))
+        #expect(retried)
+        await fixture.model.waitForAlarmOperations()
+        try fixture.expectCommitted(name, previous: before, active: active)
+        let reopened = fixture.reopen()
+        #expect(reopened.selectedPhase == fixture.model.selectedPhase)
+        #expect(reopened.durationMinutes(for: .focus) == fixture.model.durationMinutes(for: .focus))
+        #expect(reopened.makeWatchSnapshot() == fixture.model.makeWatchSnapshot())
+    }
+
+    @Test @MainActor
+    func frozenCoreRefusesDurationButLocalPhaseStillCommits() async throws {
+        let fixture = try R49AP05SettingsFixture()
+        defer { fixture.cleanup() }
+        try #require(fixture.model.start())
+        await fixture.model.waitForAlarmOperations()
+        fixture.alarms.operations.removeAll()
+        fixture.refusesCore = true
+        let before = try fixture.observation()
+        let accepted = fixture.model.applyWatchCommand(fixture.command("setDuration"))
+        #expect(!accepted)
+        #expect(try fixture.observation() == before)
+        #expect(fixture.alarms.operations.isEmpty)
+        let phaseAccepted = fixture.model.applyWatchCommand(fixture.command("selectPhase"))
+        #expect(phaseAccepted)
+        try fixture.expectCommitted("selectPhase", previous: before, active: true)
+    }
+
+    @Test(arguments: ["selectPhase", "setDuration"]) @MainActor
+    func deferredSettingsStillCommitWithoutTimerTarget(name: String) throws {
+        let fixture = try R49AP05SettingsFixture()
+        defer { fixture.cleanup() }
+        let before = try fixture.observation()
+        let command = fixture.command(name)
+        #expect(command.timerId == nil)
+        #expect(command.expectedTimerRevision == nil)
+        let accepted = fixture.model.applyWatchCommand(command, isDeferred: true)
+        #expect(accepted)
+        try fixture.expectCommitted(name, previous: before, active: false)
+    }
+
+    @Test @MainActor
+    func durationNoOpRefusedAndClampPreserved() throws {
+        let fixture = try R49AP05SettingsFixture()
+        defer { fixture.cleanup() }
+        let before = try fixture.observation()
+        let current = fixture.model.durationMinutes(for: .focus)
+        let unchanged = fixture.model.applyWatchCommand(.setDuration(minutes: current, forPhaseRawValue: "focus"))
+        #expect(!unchanged)
+        #expect(try fixture.observation() == before)
+        for (requested, expected) in [(Int.min, 1), (Int.max, 180)] {
+            let accepted = fixture.model.applyWatchCommand(.setDuration(minutes: requested, forPhaseRawValue: "focus"))
+            #expect(accepted)
+            #expect(fixture.model.durationMinutes(for: .focus) == expected)
+            let durable = try JSONDecoder.api.decode(PersistedTimerState.self, from: fixture.observation().bytes)
+            #expect(durable.settings.minutes(for: .focus) == expected)
+        }
+    }
+
+    @Test(arguments: ["selectPhase", "setDuration"], [false, true]) @MainActor
+    func replacementUncertaintyReturnsFalseAndKeepsQuarantine(name: String, active: Bool) async throws {
+        let fixture = try R49AP05SettingsFixture()
+        defer { fixture.cleanup() }
+        if active { try #require(fixture.model.start()) }
+        await fixture.model.waitForAlarmOperations()
+        fixture.alarms.operations.removeAll()
+        let before = try fixture.observation()
+        fixture.failsAfterReplacement.value = true
+        let accepted = fixture.model.applyWatchCommand(fixture.command(name))
+        #expect(!accepted)
+        #expect(fixture.model.snapshotLoadFailure != nil)
+        #expect(fixture.model.isWorkspaceMutationBlocked)
+        let after = try fixture.observation()
+        #expect(after.bytes != before.bytes)
+        #expect(after.mirror == before.mirror)
+        let observed = try JSONDecoder.api.decode(PersistedTimerState.self, from: after.bytes)
+        if name == "selectPhase" {
+            #expect(observed.settings.selectedPhase == .longBreak)
+        } else {
+            #expect(observed.settings.minutes(for: .focus) == 20)
+        }
+        #expect(fixture.alarms.operations.isEmpty)
+    }
+}
+
+@MainActor
+private final class R49AP05SettingsFixture {
+    struct Observation: Equatable {
+        let bytes: Data
+        let mirror: Data?
+        let snapshot: WatchTimerSnapshot
+        let timer: CanonicalTimer?
+    }
+
+    let suite = "PomodoroughTests.R49AP05.\(UUID().uuidString)"
+    let defaults: UserDefaults
+    let directory: URL
+    let store: AtomicDurableFileStore
+    let alarms = RecordingAlarmScheduler()
+    let core: SharedCore
+    let coreRefusal = LockedTestValue(false)
+    let failsAfterReplacement = LockedTestValue(false)
+    var refusesCore: Bool {
+        get { coreRefusal.value }
+        set { coreRefusal.value = newValue }
+    }
+    private(set) lazy var model = reopen()
+
+    init(seed: PersistedTimerState = .fresh()) throws {
+        defaults = try #require(UserDefaults(suiteName: suite))
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        store = AtomicDurableFileStore(
+            fileURL: directory.appendingPathComponent("workspace.json"),
+            afterReplacement: { [failsAfterReplacement] in
+                if failsAfterReplacement.value { throw POSIXError(.EIO) }
+            }
+        )
+        core = SharedCore(moduleURL: try SharedCore.bundledModuleURL(), freeResultValidator: { [coreRefusal] _ in
+            if coreRefusal.value { throw SharedCoreError.core("AP05 frozen Core") }
+        })
+        try store.write(JSONEncoder.api.encode(seed))
+        defaults.set(ReplicationMode.offline.rawValue, forKey: "replication-mode-v1")
+        defaults.set(try JSONEncoder.api.encode(seed), forKey: "timer-state-v2")
+        try #require(model.snapshotLoadFailure == nil)
+    }
+
+    func reopen() -> AppModel {
+        AppModel(
+            api: APIClient(keychain: EmptyTokenStore()),
+            defaults: defaults, durableLocalStore: store,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
+            alarmScheduler: alarms,
+            now: { Date(timeIntervalSince1970: 1_785_000_000) }, uptime: { 100 },
+            sharedCoreProvider: { [core] in core }
+        )
+    }
+
+    func observation() throws -> Observation {
+        Observation(
+            bytes: try #require(try store.read()), mirror: defaults.data(forKey: "timer-state-v2"),
+            snapshot: model.makeWatchSnapshot(), timer: model.canonicalTimer
+        )
+    }
+
+    func command(_ name: String) -> WatchTimerCommand {
+        name == "selectPhase" ? .selectPhase("long_break") : .setDuration(minutes: 20, forPhaseRawValue: "focus")
+    }
+
+    func expectCommitted(_ name: String, previous: Observation, active: Bool) throws {
+        let after = try observation()
+        #expect(after.bytes != previous.bytes)
+        let durable = try JSONDecoder.api.decode(PersistedTimerState.self, from: after.bytes)
+        #expect(try JSONDecoder.api.decode(PersistedTimerState.self, from: #require(after.mirror)) == durable)
+        if name == "selectPhase" {
+            #expect(model.selectedPhase == .longBreak)
+            #expect(durable.settings.selectedPhase == .longBreak)
+            #expect(durable.selectedPhaseGeneration == 1)
+            #expect(durable.hasExplicitPhaseSelection)
+            if active { #expect(after.timer == previous.timer) }
+        } else {
+            #expect(model.durationMinutes(for: .focus) == 20)
+            #expect(durable.settings.minutes(for: .focus) == 20)
+            #expect(after.timer == previous.timer)
+            #expect(after.snapshot.timerRevision == previous.snapshot.timerRevision)
+        }
+    }
+
+    func setWritable(_ writable: Bool) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: writable ? 0o700 : 0o555], ofItemAtPath: directory.path
+        )
+    }
+
+    func cleanup() {
+        try? setWritable(true)
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: directory)
+    }
+}

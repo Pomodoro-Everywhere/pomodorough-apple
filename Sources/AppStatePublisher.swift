@@ -86,7 +86,7 @@ struct AppStatePublisher: Sendable {
             history: state.history,
             tasks: tasks,
             autoStartBreaks: state.autoStartBreaks,
-            selectedTaskID: state.selectedTaskID.flatMap { selected in
+            selectedTaskID: state.canonicalSelectedTaskID.flatMap { selected in
                 tasks.contains(where: { $0.id == selected }) ? selected : nil
             },
             completionAlertTimerID: nil,

@@ -132,7 +132,10 @@ private extension SynchronizedWorkspaceMutationController {
             )
             state.settings.selectedPhase = phase
             state.hasExplicitPhaseSelection = true
-            return local(state, effect: .persist)
+            return local(
+                state,
+                effect: .persistAtomically(previous: snapshot.state, rebuildsOnRollback: true)
+            )
         }
         let occurredAt = try occurrenceDate(snapshot)
         let command = try makeCommand(
@@ -627,6 +630,7 @@ private extension SynchronizedWorkspaceMutationController {
         at occurredAt: Date,
         to state: inout PersistedTimerState
     ) throws -> String {
+        state.captureCanonicalSelectedTaskIfNeeded()
         try state.advanceClock(at: occurredAt)
         let operationID = try state.reserveUuidV7()[0]
         state.pendingSelectedTaskOperations.append(SelectedTaskOperation(

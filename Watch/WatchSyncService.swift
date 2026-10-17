@@ -34,6 +34,8 @@ final class WatchSyncService: NSObject, ObservableObject {
     /// Pull: ask the phone for a fresh snapshot. Called on appear/activation/reachability.
     func requestSync() {
         let session = WCSession.default
+        // Unsupported or not-yet-activated sessions are expected here.
+        // Activation failures are logged by the delegate, not by each pull.
         guard WCSession.isSupported(), session.activationState == .activated else { return }
         let payload = [WatchSyncKeys.requestSync: true]
         if session.isReachable {
@@ -169,6 +171,15 @@ extension WatchSyncService: WCSessionDelegate {
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) {
+        if error != nil {
+            // Fixed state keys bound log volume without exposing error payloads.
+            switch activationState {
+            case .notActivated: Self.logOnce(key: "watch-activation-failed-not-activated")
+            case .inactive: Self.logOnce(key: "watch-activation-failed-inactive")
+            case .activated: Self.logOnce(key: "watch-activation-failed-activated")
+            @unknown default: Self.logOnce(key: "watch-activation-failed-unknown")
+            }
+        }
         let reachable = session.isReachable
         Task { @MainActor [weak self] in
             self?.isReachable = reachable

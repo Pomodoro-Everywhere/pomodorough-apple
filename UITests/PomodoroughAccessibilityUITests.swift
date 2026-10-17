@@ -1,7 +1,113 @@
 import XCTest
+import UIKit
 
 @MainActor
 final class PomodoroughAccessibilityUITests: XCTestCase {
+    func testPortraitFocusLabelRenderedContrast() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_DIAL"] = "1"
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        try assertRenderedPhaseContrast("FOCUS", state: "idle", in: app)
+        app.buttons["Start focus"].tap()
+        XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 10))
+        try assertRenderedPhaseContrast("FOCUS", state: "running", in: app)
+        app.buttons["Pause"].tap()
+        XCTAssertTrue(app.buttons["Resume"].waitForExistence(timeout: 10))
+        try assertRenderedPhaseContrast("FOCUS", state: "paused", in: app)
+    }
+
+    func testAccessibleReadoutKeepsVividPhaseAccents() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_DIAL"] = "1"
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        let focus = try assertRenderedPhaseContrast("Focus", state: "readout-focus", in: app)
+        XCTAssertEqual(focus, 0xFF604F, "Dark readout keeps vivid signal, not the sky-label foreground")
+        revealAccessibleTimerControl("Skip to Short break", in: app)
+        app.buttons["Skip to Short break"].tap()
+        let shortBreak = try assertRenderedPhaseContrast("Short break", state: "readout-short-break", in: app)
+        XCTAssertEqual(shortBreak, 0xA8D9CB)
+        app.buttons["Pattern"].tap()
+        XCTAssertTrue(app.buttons["Long break"].waitForExistence(timeout: 10))
+        app.buttons["Long break"].tap()
+        app.buttons["Timer"].tap()
+        let longBreak = try assertRenderedPhaseContrast("Long break", state: "readout-long-break", in: app)
+        XCTAssertEqual(longBreak, 0xF5D05B)
+    }
+
+    @discardableResult
+    private func assertRenderedPhaseContrast(_ label: String, state: String, in app: XCUIApplication) throws -> UInt32 {
+        let text = app.staticTexts.matching(NSPredicate(format: "label == %@", label)).firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 10))
+        for _ in 0..<4 where !app.frame.contains(text.frame) { app.swipeDown() }
+        XCTAssertTrue(app.frame.contains(text.frame))
+        let frame = text.frame.insetBy(dx: -text.frame.height * 0.2, dy: -text.frame.height * 0.2)
+        return try assertRenderedTextContrast(frame: frame, label: label, state: state, in: app)
+    }
+
+    @discardableResult
+    private func assertRenderedTextContrast(frame: CGRect, label: String, state: String, in app: XCUIApplication) throws -> UInt32 {
+        let screenshot = XCUIScreen.main.screenshot()
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        let crop = CGRect(x: frame.minX * scale, y: frame.minY * scale,
+                          width: frame.width * scale, height: frame.height * scale).integral
+        let pixels = try phasePixelHistogram(try XCTUnwrap(image.cropping(to: crop)))
+        let colors = pixels.sorted { $0.value > $1.value }
+        XCTAssertGreaterThanOrEqual(colors.count, 2)
+        let fill = try XCTUnwrap(colors.first)
+        let foreground = try XCTUnwrap(colors.dropFirst().first)
+        attachNavigationEvidence("R49-U01-\(state)", in: app)
+        XCTAssertGreaterThan(fill.value, Int(crop.width * crop.height) / 2)
+        XCTAssertGreaterThan(foreground.value, 30, "Require solid glyph interiors, not one antialias pixel")
+        let luminances = [phasePixelLuminance(fill.key), phasePixelLuminance(foreground.key)].sorted()
+        let ratio = (luminances[1] + 0.05) / (luminances[0] + 0.05)
+        let receipt = "R49_U01_PIXELS state=\(state) label=\(label) frame=\(frame) crop=\(crop) foreground=\(String(foreground.key, radix: 16)) foregroundPixels=\(foreground.value) fill=\(String(fill.key, radix: 16)) fillPixels=\(fill.value) contrast=\(ratio)"
+        print(receipt)
+        let attachment = XCTAttachment(string: receipt)
+        attachment.name = "R49-U01-\(state)-pixels"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThanOrEqual(ratio, 4.5, receipt)
+        return foreground.key
+    }
+
+    private func phasePixelHistogram(_ image: CGImage) throws -> [UInt32: Int] {
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        try bytes.withUnsafeMutableBytes { storage in
+            let context = try XCTUnwrap(CGContext(
+                data: storage.baseAddress, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        var histogram: [UInt32: Int] = [:]
+        for offset in stride(from: 0, to: bytes.count, by: 4) {
+            XCTAssertEqual(bytes[offset + 3], 255)
+            let rgb = UInt32(bytes[offset]) << 16 | UInt32(bytes[offset + 1]) << 8 | UInt32(bytes[offset + 2])
+            histogram[rgb, default: 0] += 1
+        }
+        return histogram
+    }
+
+    private func phasePixelLuminance(_ rgb: UInt32) -> Double {
+        let components = [Double((rgb >> 16) & 255), Double((rgb >> 8) & 255), Double(rgb & 255)]
+        let linear = components.map { channel in
+            let value = channel / 255
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+
     func testTimerProductionDivisionsAvoidCountdownAndActions() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
@@ -826,6 +932,101 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         summonDeleteDialog(in: app)
         app.buttons["Delete task"].tap()
         XCTAssertFalse(row.waitForExistence(timeout: 5))
+    }
+
+    // R49-U02: enabled Add task renders readable text on signal fill.
+    // Contrast itself is pinned by TaskComposerContrastTests; this walk
+    // supplies rendered-pixel evidence with the keyboard visible, keeps
+    // disabled/submit/validation, and asserts exactly one new task.
+    // Runs in light/dark via the matrix, standard and XXXL via
+    // content-size, both Increase Contrast states via the matrix.
+    func testAddTaskButtonRenderedContrast() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+        openTasksComposer(in: app)
+        assertAddDisabledWhenEmpty(in: app)
+        fillComposerTitle("R49 U02 contrast", in: app)
+        try assertRenderedAddTaskContrast(state: "enabled", in: app)
+        submitComposerAndAssertOneTask(title: "R49 U02 contrast", in: app)
+    }
+
+    private func openTasksComposer(in app: XCUIApplication) {
+        app.buttons["Tasks"].tap()
+        let field = elements(labelled: "New task", in: app).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !field.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(field.isHittable)
+    }
+
+    private func assertAddDisabledWhenEmpty(in app: XCUIApplication) {
+        let add = app.buttons["Add task"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        XCTAssertFalse(add.isEnabled, "Empty title must keep Add disabled")
+    }
+
+    private func fillComposerTitle(_ title: String, in app: XCUIApplication) {
+        let field = elements(labelled: "New task", in: app).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(title)
+        let add = app.buttons["Add task"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        XCTAssertTrue(add.isEnabled, "Typed title must enable Add")
+        XCTAssertTrue(add.isHittable, "Enabled Add must stay hittable")
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "Software keyboard must be visible")
+    }
+
+    @discardableResult
+    private func assertRenderedAddTaskContrast(state: String, in app: XCUIApplication) throws -> UInt32 {
+        let button = app.buttons["Add task"]
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        XCTAssertTrue(button.isEnabled)
+        let frame = button.frame
+        XCTAssertGreaterThan(frame.width, 0)
+        XCTAssertGreaterThan(frame.height, 0)
+        XCTAssertTrue(app.frame.contains(frame), "Add escapes app frame: \(frame) in \(app.frame)")
+        let screenshot = XCUIScreen.main.screenshot()
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        let crop = CGRect(x: frame.minX * scale, y: frame.minY * scale, width: frame.width * scale, height: frame.height * scale).integral
+        let pixels = try phasePixelHistogram(try XCTUnwrap(image.cropping(to: crop)))
+        let colors = pixels.sorted { $0.value > $1.value }
+        XCTAssertGreaterThanOrEqual(colors.count, 2)
+        let fill = try XCTUnwrap(colors.first)
+        let foreground = try XCTUnwrap(colors.dropFirst().first)
+        attachNavigationEvidence("R49-U02-\(state)", in: app)
+        XCTAssertGreaterThan(fill.value, Int(crop.width * crop.height) / 3)
+        XCTAssertGreaterThan(foreground.value, 30, "Require solid glyph interiors")
+        let luminances = [phasePixelLuminance(fill.key), phasePixelLuminance(foreground.key)].sorted()
+        let ratio = (luminances[1] + 0.05) / (luminances[0] + 0.05)
+        let receipt = "R49_U02_PIXELS state=\(state) frame=\(frame) crop=\(crop) foreground=\(String(foreground.key, radix: 16)) foregroundPixels=\(foreground.value) fill=\(String(fill.key, radix: 16)) fillPixels=\(fill.value) contrast=\(ratio)"
+        print(receipt)
+        let attachment = XCTAttachment(string: receipt)
+        attachment.name = "R49-U02-\(state)-pixels"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThanOrEqual(ratio, 4.5, receipt)
+        return foreground.key
+    }
+
+    private func submitComposerAndAssertOneTask(title: String, in app: XCUIApplication) {
+        app.buttons["Add task"].tap()
+        let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", title))
+        XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(matches.count, 1, "Tapping Add must create exactly one task")
+        let field = elements(labelled: "New task", in: app).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        let cleared = field.value as? String ?? ""
+        XCTAssertTrue(cleared == "" || cleared == "Write release notes", "Submit must clear the field, got \(cleared)")
+        XCTAssertFalse(app.buttons["Add task"].isEnabled, "Cleared field must disable Add again")
     }
 
     func testTaskDeleteTargetEdgesAndCorners() {

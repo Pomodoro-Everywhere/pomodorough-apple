@@ -942,9 +942,10 @@ extension CentralizedAccountSessionCoordinator {
     }
 
     func sendSync(
-        _ plan: AccountSynchronization.SyncPlan, state: PersistedTimerState
+        _ plan: AccountSynchronization.SyncPlan, state: PersistedTimerState,
+        willSend: @MainActor () -> Void = {}
     ) async throws -> TimedHTTPResponse<SyncResponse> {
-        try await synchronization.sendSync(plan, state: state)
+        try await synchronization.sendSync(plan, state: state, willSend: willSend)
     }
 
     func reconcileSync(

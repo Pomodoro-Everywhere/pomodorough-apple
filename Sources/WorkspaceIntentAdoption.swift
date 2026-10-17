@@ -11,6 +11,7 @@ extension WorkspaceIntentAdmission {
         let parts = try validatedParts(response: response, category: category, snapshot: snapshot)
         try ensureChanged(response: response, category: category, snapshot: snapshot)
         var state = snapshot.state
+        state.captureCanonicalSelectedTaskIfNeeded()
         try applyQueues(workspaceLocal: parts.local, neverSent: parts.neverSent, state: &state)
         applyAllocation(allocation: parts.allocation, state: &state)
         try applyObservation(observation: parts.observation, state: &state)

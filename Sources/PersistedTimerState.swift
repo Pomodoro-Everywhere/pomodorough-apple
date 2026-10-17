@@ -2,6 +2,18 @@ import Foundation
 import OSLog
 
 extension PersistedTimerState {
+    var canonicalSelectedTaskID: UUID? {
+        if let canonicalSelectedTask { return canonicalSelectedTask.taskID }
+        // Only an unambiguous legacy snapshot may seed the separate base.
+        guard pendingSelectedTaskOperations.isEmpty, !hasCorruptPendingOperations else { return nil }
+        return selectedTaskID
+    }
+
+    mutating func captureCanonicalSelectedTaskIfNeeded() {
+        guard canonicalSelectedTask == nil else { return }
+        canonicalSelectedTask = CanonicalSelectedTask(taskID: canonicalSelectedTaskID)
+    }
+
     mutating func pruneLegacyUnresolvedCommandsToPending() {
         legacyUnresolvedCommandIDs.formIntersection(pendingCommands.map(\.id))
         if legacyUnresolvedCommandIDs.isEmpty && !hasCorruptPendingOperations {

@@ -1,5 +1,11 @@
 import Foundation
 
+struct CanonicalSelectedTask: Codable, Equatable, Sendable {
+    // The containing object distinguishes canonical unassigned from a legacy
+    // snapshot that has not captured a separate canonical selection yet.
+    let taskID: UUID?
+}
+
 struct PersistedTimerState: Codable, Equatable, Sendable {
     var deviceId: String
     var nextSequence: Int64
@@ -33,6 +39,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
     var tasks: [FocusTask]
     var knownTasks: [FocusTask]
     var selectedTaskID: UUID?
+    var canonicalSelectedTask: CanonicalSelectedTask? = nil
     // Decode-only: immutable retarget supersedes this map; never write.
     var legacyTaskAssignments: [String: UUID]
     var irohLegacyTaskMigration: IrohLegacyTaskMigration? = nil
@@ -83,6 +90,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         case autoStartBreaks, localTimerOwners, provisionalBreaks, provisionalPhaseAdvances
         case selectedPhaseGeneration, hasExplicitPhaseSelection, canonicalTimer, history
         case tasks, knownTasks, selectedTaskID, legacyTaskAssignments, hasCorruptPendingOperations
+        case canonicalSelectedTask
         case neverSentCommandIDs, neverSentTaskOperationIDs, neverSentDurationOperationIDs
         case neverSentAutoStartOperationIDs, neverSentSelectedTaskOperationIDs
         case canonicalHeadWallMs, canonicalHeadCounter
@@ -200,6 +208,7 @@ struct PersistedTimerState: Codable, Equatable, Sendable {
         self = try PersistedStateSchema.decode(from: decoder)
         let values = try decoder.container(keyedBy: CodingKeys.self)
         irohLegacyTaskMigration = try values.decodeIfPresent(IrohLegacyTaskMigration.self, forKey: .irohLegacyTaskMigration)
+        canonicalSelectedTask = try values.decodeIfPresent(CanonicalSelectedTask.self, forKey: .canonicalSelectedTask)
         pruneLegacyUnresolvedCommandsToPending()
     }
 }

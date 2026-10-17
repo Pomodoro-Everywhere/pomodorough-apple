@@ -112,6 +112,7 @@ enum PersistedLegacyMigration {
               ).contains(where: { $0.id == selectedTaskID }) else {
             return LegacyOperationMigrationResult(didMigrate: false, operationID: nil)
         }
+        state.captureCanonicalSelectedTaskIfNeeded()
         try state.advanceClock(at: date)
         let operation = SelectedTaskOperation(
             id: try state.reserveUuidV7()[0],

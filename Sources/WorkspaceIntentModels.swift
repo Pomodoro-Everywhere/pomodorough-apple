@@ -37,6 +37,29 @@ struct WorkspaceMutationDiagnostics: Sendable {
     }
 }
 
+struct SuppressedSelectionDiagnostics: Sendable {
+    let pending: Int
+    let proof: Int
+    let dependencies: Int
+    let hasClaim: Bool
+    let hasHead: Bool
+    let provenance: String
+
+    init(state: PersistedTimerState) {
+        pending = state.pendingSelectedTaskOperations.count
+        proof = state.neverSentSelectedTaskOperationIDs.count
+        dependencies = state.pendingTimerDependencies.count
+        hasClaim = state.outgoingSyncClaim != nil
+        hasHead = state.canonicalHeadWallMs != nil && state.canonicalHeadCounter != nil
+        provenance = String(WorkspaceIntentProvenance.current().prefix(160))
+    }
+
+    var publicMessage: String {
+        "selectedTaskBase reason=suppressedSelectionUsesCanonical pending=\(pending) proof=\(proof) "
+            + "dependencies=\(dependencies) claim=\(hasClaim) head=\(hasHead) core=\(provenance)"
+    }
+}
+
 enum WorkspaceIntentProvenance {
     static func current() -> String {
         let tag = bundledValue(name: "CORE_RELEASE_TAG")

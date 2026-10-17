@@ -2170,7 +2170,11 @@ struct IntegrationNegativeTests {
 
         await model.restore()
 
-        #expect(try persistedState(defaults) == initial)
+        let expected = try AccountSynchronization(
+            api: APIClient(keychain: EmptyTokenStore()),
+            sharedCoreProvider: { try SharedCore.bundled() }
+        ).prepareSyncPlan(state: initial).retired
+        #expect(try persistedState(defaults) == expected)
         #expect(model.pendingChangeCount == 12)
         #expect(model.errorMessage?.contains("12 queued changes remain") == true)
         #expect(!model.isOffline)

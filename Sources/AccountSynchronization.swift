@@ -285,11 +285,16 @@ final class AccountSynchronization {
         }
     }
 
-    func sendSync(_ plan: SyncPlan, state: PersistedTimerState) async throws -> TimedHTTPResponse<SyncResponse> {
+    func sendSync(
+        _ plan: SyncPlan, state: PersistedTimerState,
+        willSend: @MainActor () -> Void = {}
+    ) async throws -> TimedHTTPResponse<SyncResponse> {
         guard !plan.legacyDependencyReviewRequired else { throw LegacyTimerDependencyReview.required }
         try validateLegacyTimerSubmission(state: state)
         guard plan.coreStatus != "blocked_dependency" else { throw SyncBatchPlanError.blockedSync }
         try validateSyncRequest(plan.request, state: state)
+        // From this point, actor suspension or transport failure cannot prove non-delivery.
+        willSend()
         return try await api.sync(plan.request)
     }
 
@@ -687,6 +692,7 @@ private extension AccountSynchronization {
         state.settings.durationsMs = output.baseDurationsMs
         state.autoStartBreaks = output.baseAutoStartBreaks
         state.selectedTaskID = output.baseSelectedTaskId.flatMap(UUID.init(uuidString:))
+        state.canonicalSelectedTask = CanonicalSelectedTask(taskID: state.selectedTaskID)
         state.storeCanonicalHead(wallMs: response.serverHlcWallMs, counter: response.serverHlcCounter)
         state.pruneNeverSentProofToPending()
         // Core v2 projectionPending is the authoritative safe subset used for

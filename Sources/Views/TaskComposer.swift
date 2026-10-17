@@ -41,6 +41,7 @@ struct TaskComposer: View {
         Button("Add task", systemImage: "plus", action: add)
             .buttonStyle(.borderedProminent)
             .tint(PomodoroughTheme.signal)
+            .foregroundStyle(PomodoroughTheme.taskComposerLabel)
             .disabled(!canAdd)
     }
 }

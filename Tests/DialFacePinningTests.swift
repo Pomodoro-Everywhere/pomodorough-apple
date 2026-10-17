@@ -7,6 +7,15 @@ import Testing
 // preference max.
 @Suite("Dial face pinning")
 struct DialFacePinningTests {
+    @Test func smallSignalTextFollowsFillInsteadOfAppearance() {
+        #expect(PomodoroughTheme.signalTextSRGB(onFill: PomodoroughTheme.skySRGB)
+                == PomodoroughTheme.signalTextLightRGB)
+        #expect(PomodoroughTheme.signalTextSRGB(onFill: PomodoroughTheme.platformDeepSRGB)
+                == PomodoroughTheme.signalSRGB)
+        let middleGray = (red: 0.5, green: 0.5, blue: 0.5)
+        #expect(PomodoroughTheme.signalTextSRGB(onFill: middleGray) == (red: 0, green: 0, blue: 0))
+    }
+
     @Test func longBreakIndicatorDerivesProgressFromCompletedToday() {
         let cases: [(completed: Int, progress: Int)] = [
             (0, 0), (1, 1), (2, 2), (3, 3), (4, 4),

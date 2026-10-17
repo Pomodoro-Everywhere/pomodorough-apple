@@ -18,6 +18,159 @@ def unit(value: str) -> dict:
     return {"stringUnit": {"state": "translated", "value": value}}
 
 
+class R49AP07DiagnosticClassificationTests(unittest.TestCase):
+    def test_reviewed_log_only_members_do_not_require_localization(self) -> None:
+        cases = [
+            ("Sources/AppModel.swift", '''
+struct SyncFailureDiagnostics: Error, LocalizedError, Sendable {
+    var errorDescription: String? {
+        "sync stage=\\(stage.rawValue) rollback=\\(rollback.rawValue) reason=\\(reason.rawValue) "
+            + "pending=\\(pending.map(String.init).joined(separator: "/")) claim=\\(hasClaim) "
+            + "core=\\(WorkspaceIntentProvenance.current().prefix(160))"
+    }
+}
+'''),
+            ("Sources/WorkspaceIntentModels.swift", '''
+struct SuppressedSelectionDiagnostics: Sendable {
+    var publicMessage: String {
+        "selectedTaskBase reason=suppressedSelectionUsesCanonical pending=\\(pending) proof=\\(proof) "
+            + "dependencies=\\(dependencies) claim=\\(hasClaim) head=\\(hasHead) core=\\(provenance)"
+    }
+}
+'''),
+        ]
+        for path, source in cases:
+            with self.subTest(path=path):
+                self.assertEqual(checker.find_uncatalogued_computed_literals(source, path), [])
+                self.assertEqual(checker.extract_localizable_keys(source), set())
+
+    def test_user_visible_diagnostics_and_errors_still_require_localization(self) -> None:
+        cases = [
+            ("Sources/AppModel.swift", "UserFacingError", "var errorDescription: String?"),
+            ("Sources/WorkspaceIntentModels.swift", "WorkspaceMutationDiagnostics", "func publicMessage() -> String"),
+            ("Sources/AppModel.swift", "SyncFailureDiagnostics", "var statusLabel: String"),
+            ("Sources/Other.swift", "SyncFailureDiagnostics", "var errorDescription: String?"),
+            ("Sources/Other.swift", "SuppressedSelectionDiagnostics", "var publicMessage: String"),
+        ]
+        for path, owner, declaration in cases:
+            source = f'struct {owner} {{\n    {declaration} {{ "Needs attention" }}\n}}'
+            with self.subTest(path=path, owner=owner, declaration=declaration):
+                self.assertEqual(
+                    checker.find_uncatalogued_computed_literals(source, path),
+                    [f"uncatalogued computed user-visible literal: {path}:2: Needs attention"],
+                )
+
+    def test_diagnostic_scope_does_not_hide_adjacent_or_nested_ui_members(self) -> None:
+        source = '''struct SyncFailureDiagnostics {
+    var errorDescription: String? { "sync stage=failed" }
+    struct UserFacingError {
+        var errorDescription: String? { "Nested visible error" }
+    }
+}
+struct UserFacingError {
+    var errorDescription: String? { "Adjacent visible error" }
+}
+'''
+        self.assertEqual(
+            checker.find_uncatalogued_computed_literals(source, "Sources/AppModel.swift"),
+            [
+                "uncatalogued computed user-visible literal: Sources/AppModel.swift:4: Nested visible error",
+                "uncatalogued computed user-visible literal: Sources/AppModel.swift:8: Adjacent visible error",
+            ],
+        )
+
+    def test_comment_and_string_lookalikes_cannot_create_diagnostic_scope(self) -> None:
+        prefixes = [
+            '// struct SyncFailureDiagnostics {\n',
+            '/* struct SyncFailureDiagnostics { */\n',
+            '/* outer /* nested */ struct SyncFailureDiagnostics { */\n',
+            'let example = "struct SyncFailureDiagnostics {"\n',
+        ]
+        for prefix in prefixes:
+            source = prefix + 'var errorDescription: String? { "Visible failure" }\n'
+            with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    checker.find_uncatalogued_computed_literals(source, "Sources/AppModel.swift"),
+                    ["uncatalogued computed user-visible literal: Sources/AppModel.swift:2: Visible failure"],
+                )
+
+    def test_type_scope_forms_and_closing_brace_keep_exact_member_boundary(self) -> None:
+        for kind in ("struct", "class", "enum", "extension"):
+            source = f'''{kind} SyncFailureDiagnostics {{
+    // }} struct UserFacingError {{
+    /* }} */
+    var errorDescription: String? {{ "sync stage=\\(values.joined(separator: "}}"))" }}
+}}
+var errorDescription: String? {{ "Visible after diagnostic" }}
+'''
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    checker.find_uncatalogued_computed_literals(source, "Sources/AppModel.swift"),
+                    ["uncatalogued computed user-visible literal: Sources/AppModel.swift:6: Visible after diagnostic"],
+                )
+
+    def test_visible_apis_and_localization_calls_inside_diagnostic_still_require_catalog(self) -> None:
+        source = '''struct SyncFailureDiagnostics {
+    var errorDescription: String? {
+        let label = Text("Visible label")
+        return String(localized: "Visible failure")
+    }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = root / "Sources"
+            sources.mkdir()
+            (sources / "AppModel.swift").write_text(source, encoding="utf-8")
+            self.assertEqual(
+                checker.validate_source_coverage(root, {"strings": {}}),
+                [
+                    "uncatalogued production-visible key: Sources/AppModel.swift: Visible failure",
+                    "uncatalogued production-visible key: Sources/AppModel.swift: Visible label",
+                ],
+            )
+
+    def test_raw_text_and_accessibility_checks_still_apply_inside_log_only_member(self) -> None:
+        source = '''struct SyncFailureDiagnostics {
+    var errorDescription: String? {
+        Text(ready ? "Ready now" : "Not ready")
+            .accessibilityLabel(ready ? "Ready label" : "Not ready label")
+    }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = root / "Sources"
+            sources.mkdir()
+            (sources / "AppModel.swift").write_text(source, encoding="utf-8")
+            self.assertEqual(
+                checker.validate_source_coverage(root, {"strings": {}}),
+                [
+                    "raw a11y conditional literal: Sources/AppModel.swift:4",
+                    "raw Text conditional literal: Sources/AppModel.swift:3",
+                ],
+            )
+
+    def test_watch_refusal_ui_keys_require_catalog_even_beside_logs(self) -> None:
+        keys = {f"Watch {action} not applied." for action in ("Start", "Resume", "Finish")}
+        source = "\n".join(
+            f'logger.error("watch {action.lower()} refused")\n'
+            f'errorMessage = String(localized: "Watch {action} not applied.")'
+            for action in ("Start", "Resume", "Finish")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = root / "Sources"
+            sources.mkdir()
+            (sources / "AppModel.swift").write_text(source, encoding="utf-8")
+            self.assertEqual(checker.extract_localizable_keys(source), keys)
+            self.assertEqual(
+                checker.validate_source_coverage(root, {"strings": {}}),
+                [f"uncatalogued production-visible key: Sources/AppModel.swift: {key}" for key in sorted(keys)],
+            )
+            self.assertEqual(checker.validate_source_coverage(root, {"strings": dict.fromkeys(keys)}), [])
+
+
 class LocalizationContractTests(unittest.TestCase):
     def test_discovers_static_and_interpolated_swiftui_strings(self) -> None:
         source = '''

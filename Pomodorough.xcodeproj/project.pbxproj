@@ -208,6 +208,7 @@
 		731B3DE45ECB478060507C96 /* TimerHingeLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B151C53A3A86AF4A416560B1 /* TimerHingeLayoutTests.swift */; };
 		73FE484AFEAC128009F00993 /* TickMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA59D00B6874FCABDC0711C /* TickMarks.swift */; };
 		74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D043EE67CA1960F20CF2749 /* MacOSTests.swift */; };
+		751EFB7C6D41D6227F199F81 /* R49AP05WatchSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8067952C007FBA5B5F3B349B /* R49AP05WatchSettingsTests.swift */; };
 		7564DA5618CDD127FD5532B2 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD275FEDF06634D4FC072390 /* AccountView.swift */; };
 		76231512AB810E2424C54239 /* TimerControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B908C0CE40CB2094D4A76D84 /* TimerControls.swift */; };
 		76704F0E8D2DDCCD7F628E18 /* Pomodorough.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = F44FBD7F4AFB28A7C738ECCF /* Pomodorough.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -431,6 +432,7 @@
 		F19BEEED9D0FEBDE76E3F7F0 /* IdleTimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAFD33994A5626DA7A3C9C1 /* IdleTimerDial.swift */; };
 		F31A841ABA1908C0C8D37DD8 /* R48AP05TransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E238D6E6C0752DF720B959E9 /* R48AP05TransportTests.swift */; };
 		F3ECC3BB7D65DBE0012FAA35 /* TimerLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = F049A3826A52A4AC843C8B22 /* TimerLiveActivity.swift */; };
+		F45D98F0FAB728A447330767 /* R49AP05WatchSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8067952C007FBA5B5F3B349B /* R49AP05WatchSettingsTests.swift */; };
 		F4BE66AB1CB4EEC7EF2CAD48 /* TimerLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9929E4AB578F516B750C8479 /* TimerLiveActivityCoordinator.swift */; };
 		F4D79635F50585FBF8977E0D /* R48AP05BatchPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7E728577D1847013F7DEDE /* R48AP05BatchPlanTests.swift */; };
 		F50FC2371DDE3878423A965E /* R48AP06WatchPauseRefusalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7776B082FCABC248166054DD /* R48AP06WatchPauseRefusalTests.swift */; };
@@ -647,6 +649,7 @@
 		7CB8A3D0D846E271842A41CF /* R48AP02CanonicalBaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R48AP02CanonicalBaseTests.swift; sourceTree = "<group>"; };
 		7D84F25BA4D62AF95DAAD00C /* TimerWidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerWidgetSnapshotTests.swift; sourceTree = "<group>"; };
 		7E0255DC2576EECA4059C086 /* LegacyPendingOperationRebase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyPendingOperationRebase.swift; sourceTree = "<group>"; };
+		8067952C007FBA5B5F3B349B /* R49AP05WatchSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R49AP05WatchSettingsTests.swift; sourceTree = "<group>"; };
 		80A775511EF0C665343A6BF3 /* Pomodorough.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pomodorough.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		83402C8BC26381491CFC050B /* pomodorough_core.wasm */ = {isa = PBXFileReference; path = pomodorough_core.wasm; sourceTree = "<group>"; };
 		84E125424571F58D03EDC5DB /* WorkspaceIntentRequestDetails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceIntentRequestDetails.swift; sourceTree = "<group>"; };
@@ -926,6 +929,7 @@
 				0A7E728577D1847013F7DEDE /* R48AP05BatchPlanTests.swift */,
 				E238D6E6C0752DF720B959E9 /* R48AP05TransportTests.swift */,
 				7776B082FCABC248166054DD /* R48AP06WatchPauseRefusalTests.swift */,
+				8067952C007FBA5B5F3B349B /* R49AP05WatchSettingsTests.swift */,
 				897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */,
 				43EA519036AFB88FDBC5322E /* RetainedRoomRejoinTests.swift */,
 				AAB884EB9E8593E740893441 /* RoomReplicationControllerTests.swift */,
@@ -1493,6 +1497,7 @@
 				F4D79635F50585FBF8977E0D /* R48AP05BatchPlanTests.swift in Sources */,
 				89E5141592E78BB8B7660216 /* R48AP05TransportTests.swift in Sources */,
 				F50FC2371DDE3878423A965E /* R48AP06WatchPauseRefusalTests.swift in Sources */,
+				751EFB7C6D41D6227F199F81 /* R49AP05WatchSettingsTests.swift in Sources */,
 				F805FD21E2BBAB7469704A09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */,
 				8F167EF6736553C362FC10DF /* RetainedRoomRejoinTests.swift in Sources */,
 				F55FE30F7BB363948E39896C /* RoomReplicationControllerTests.swift in Sources */,
@@ -1582,6 +1587,7 @@
 				7AE583CF25D307D583137052 /* R48AP05BatchPlanTests.swift in Sources */,
 				F31A841ABA1908C0C8D37DD8 /* R48AP05TransportTests.swift in Sources */,
 				EC562BB42E405266C25854C2 /* R48AP06WatchPauseRefusalTests.swift in Sources */,
+				F45D98F0FAB728A447330767 /* R49AP05WatchSettingsTests.swift in Sources */,
 				32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */,
 				666D26C401566CBE207B5573 /* RetainedRoomRejoinTests.swift in Sources */,
 				F0B39A4D97D4DA6D7C2E4D23 /* RoomReplicationControllerTests.swift in Sources */,
@@ -2186,7 +2192,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2208,7 +2214,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.48.0;
+				MARKETING_VERSION = 0.49.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -2328,7 +2334,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -2344,7 +2350,7 @@
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.48.0;
+				MARKETING_VERSION = 0.49.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

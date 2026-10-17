@@ -3929,8 +3929,17 @@
         }
       }
     },
+    "Watch Finish not applied." : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Watch Finish not applied." } } }
+    },
     "Watch Pause not applied." : {
       "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Watch Pause not applied." } } }
+    },
+    "Watch Resume not applied." : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Watch Resume not applied." } } }
+    },
+    "Watch Start not applied." : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Watch Start not applied." } } }
     },
     "Focus task, %arg" : {
       "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Focus task, %arg" } } }

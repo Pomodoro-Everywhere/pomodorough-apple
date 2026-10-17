@@ -43,7 +43,7 @@ extension WorkspaceIntentAdmission {
     }
 
     func materializedSelection(state: PersistedTimerState) -> String? {
-        guard let selected = state.selectedTaskID,
+        guard let selected = state.canonicalSelectedTaskID,
               state.tasks.contains(where: { $0.id == selected }) else { return nil }
         return selected.uuidString.lowercased()
     }

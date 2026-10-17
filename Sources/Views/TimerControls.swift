@@ -219,7 +219,7 @@ struct TimerControls: View {
                 glassID: .primary,
                 prominent: true,
                 glass: glass,
-                action: model.start
+                action: { _ = model.start() }
             )
         }
     }

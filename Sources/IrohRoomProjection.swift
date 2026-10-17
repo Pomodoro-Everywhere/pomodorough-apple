@@ -222,6 +222,7 @@ enum IrohRoomProjection {
         state.settings.durationsMs = output.durationsMs
         state.autoStartBreaks = output.autoStartBreaks
         state.selectedTaskID = output.selectedTaskId.flatMap(UUID.init(uuidString:))
+        state.canonicalSelectedTask = CanonicalSelectedTask(taskID: state.selectedTaskID)
         state.pendingCommands = []
         state.legacyTimerDependencyUpgrade = false
         state.legacyUnresolvedCommandIDs = []

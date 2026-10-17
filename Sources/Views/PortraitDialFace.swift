@@ -45,7 +45,7 @@ struct PortraitDialFace: View {
             VStack(spacing: labelSize * 0.35) {
                 Text(phase.title.localizedUppercase)
                     .font(labelFont)
-                    .foregroundStyle(PomodoroughTheme.signalText)
+                    .foregroundStyle(PomodoroughTheme.signalText(onFill: PomodoroughTheme.skySRGB))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 VStack {

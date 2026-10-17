@@ -191,6 +191,30 @@ extension WatchPauseRefusedError: LocalizedError {
     var errorDescription: String? { "pause" }
 }
 
+/// Start refused after commit attempt: bare name only, never timer ids,
+/// revisions, or snapshots. Mirrors Pause refusal separation.
+struct WatchStartRefusedError: Error, Sendable {}
+
+extension WatchStartRefusedError: LocalizedError {
+    var errorDescription: String? { "start" }
+}
+
+/// Resume refused after current-target validation: bare name only, never
+/// timer ids, revisions, or snapshots. Mirrors Pause refusal separation.
+struct WatchResumeRefusedError: Error, Sendable {}
+
+extension WatchResumeRefusedError: LocalizedError {
+    var errorDescription: String? { "resume" }
+}
+
+/// Finish refused after current-target validation: bare name only, never
+/// timer ids, revisions, or snapshots. Mirrors Pause refusal separation.
+struct WatchFinishRefusedError: Error, Sendable {}
+
+extension WatchFinishRefusedError: LocalizedError {
+    var errorDescription: String? { "finish" }
+}
+
 /// Watch ingest ordering: a delayed refresh reply must not overwrite a
 /// newer application-context snapshot adopted earlier. A changed install
 /// seed (high 32 bits) always adopts, so a reinstall — or an epoch

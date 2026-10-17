@@ -2806,7 +2806,10 @@
         "value": "‏⟦This will discard %@ changes still waiting to sync.⟧"
       }
     },
+    "Watch Finish not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Finish not applied.⟧" } },
     "Watch Pause not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Pause not applied.⟧" } },
+    "Watch Resume not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Resume not applied.⟧" } },
+    "Watch Start not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Start not applied.⟧" } },
     "Focus task, %arg": { "stringUnit": { "state": "translated", "value": "‏⟦Focus task, %arg⟧" } },
     "durationBase category=%arg reason=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦durationBase category=%arg reason=%arg ⟧" } },
     "pendingDurations=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦pendingDurations=%arg ⟧" } },
