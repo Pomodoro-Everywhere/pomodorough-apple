@@ -401,7 +401,8 @@ struct RoomReplicationControllerTests {
         let irohAction = await iroh.controller.refreshAfterForeground(
             environment: environment(for: roomState)
         )
-        #expect(irohAction == .none)
+        let irohRoomID = try #require(iroh.store.activeRoomID)
+        #expect(irohAction == .irohRefreshed(roomID: irohRoomID, modeGeneration: 0))
         #expect(await iroh.service.startedContexts.count >= 1)
         #expect(await iroh.service.syncCount == 1)
     }

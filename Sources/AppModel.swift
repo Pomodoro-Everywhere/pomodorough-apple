@@ -95,6 +95,49 @@ struct SyncFailureDiagnostics: Error, LocalizedError, Sendable {
     }
 }
 
+// R50-AP01: bounded account-switch confirm outcome. Counts only, no
+// account IDs, titles, credentials, or payloads.
+struct AccountSwitchConfirmDiagnostics: Error, LocalizedError, Sendable {
+    enum Outcome: String, Sendable { case failed, uncertain }
+    let outcome: Outcome
+    let quarantined: Bool
+    let pendingOperations: Int
+
+    var key: String { "account-switch-confirm-\(outcome.rawValue)" }
+    var errorDescription: String? {
+        "account-switch stage=confirm outcome=\(outcome.rawValue) "
+            + "quarantined=\(quarantined) pending=\(pendingOperations)"
+    }
+}
+
+// R50-AP02: bounded bootstrap install outcome. Counts only, no timer
+// IDs, titles, account IDs, or response bodies.
+struct BootstrapInstallDiagnostics: Error, LocalizedError, Sendable {
+    enum Outcome: String, Sendable { case failed, uncertain }
+    let outcome: Outcome
+    let quarantined: Bool
+    let pendingOperations: Int
+
+    var key: String { "bootstrap-install-\(outcome.rawValue)" }
+    var errorDescription: String? {
+        "bootstrap stage=install outcome=\(outcome.rawValue) "
+            + "quarantined=\(quarantined) pending=\(pendingOperations)"
+    }
+}
+
+// R50-AP03: bounded Iroh foreground refresh outcome. Backend and gate
+// transition only, no room IDs, invites, secrets, or timer IDs.
+struct IrohForegroundRefreshDiagnostics: Error, LocalizedError, Sendable {
+    enum Outcome: String, Sendable { case released, retained }
+    let outcome: Outcome
+    let backend = "iroh"
+
+    var key: String { "iroh-foreground-refresh-\(outcome.rawValue)" }
+    var errorDescription: String? {
+        "foreground backend=\(backend) outcome=\(outcome.rawValue)"
+    }
+}
+
 @MainActor
 private final class SyncDeliveryAttempt {
     var stage = SyncFailureDiagnostics.Stage.preSend
@@ -117,6 +160,7 @@ final class AppModel {
     private let accountDeletionJournal: AccountDeletionJournal?
     private let roomStore: IrohRoomStore
     private let endpointKeyStore: any IrohEndpointKeyStoring
+    private let roomServiceFactory: (@MainActor @Sendable (RoomReplicationController.ServiceHandlers) -> any RoomReplicationServing)?
     private let alarmScheduler: any TimerAlarmScheduling
     private let completionScheduler: TimerCompletionScheduler
     private let retryDelay: Duration
@@ -178,6 +222,7 @@ final class AppModel {
         durableLocalStore: AtomicDurableFileStore? = nil,
         roomStore: IrohRoomStore = IrohRoomStore(),
         endpointKeyStore: any IrohEndpointKeyStoring = IrohEndpointKeychainStore(),
+        roomServiceFactory: (@MainActor @Sendable (RoomReplicationController.ServiceHandlers) -> any RoomReplicationServing)? = nil,
         alarmScheduler: (any TimerAlarmScheduling)? = nil,
         completionScheduler: TimerCompletionScheduler = TimerCompletionScheduler(),
         googleIdentityProvider: any GoogleIdentityProviding = SystemGoogleIdentityProvider(),
@@ -197,6 +242,7 @@ final class AppModel {
         self.accountDeletionJournal = startup.accountDeletionJournal
         self.roomStore = roomStore
         self.endpointKeyStore = endpointKeyStore
+        self.roomServiceFactory = roomServiceFactory
         self.alarmScheduler = alarmScheduler ?? TimerAlarmScheduler()
         self.completionScheduler = completionScheduler
         self.retryDelay = retryDelay
@@ -502,14 +548,27 @@ final class AppModel {
                     roomSecret: roomSecret
                 ).encoded()
             },
-            makeService: { [roomStore, endpointKeyStore] handlers in
-                IrohReplicationService(
-                    store: roomStore,
-                    keyStore: endpointKeyStore,
-                    statusHandler: { handlers.status($0) },
-                    projectionHandler: { handlers.projection($0, $1) }
+            makeService: { [roomStore, endpointKeyStore, roomServiceFactory] handlers in
+                Self.makeRoomService(
+                    handlers: handlers, roomStore: roomStore,
+                    endpointKeyStore: endpointKeyStore, factory: roomServiceFactory
                 )
             }
+        )
+    }
+
+    private static func makeRoomService(
+        handlers: RoomReplicationController.ServiceHandlers,
+        roomStore: IrohRoomStore,
+        endpointKeyStore: any IrohEndpointKeyStoring,
+        factory: (@MainActor @Sendable (RoomReplicationController.ServiceHandlers) -> any RoomReplicationServing)?
+    ) -> any RoomReplicationServing {
+        if let factory { return factory(handlers) }
+        return IrohReplicationService(
+            store: roomStore,
+            keyStore: endpointKeyStore,
+            statusHandler: { handlers.status($0) },
+            projectionHandler: { handlers.projection($0, $1) }
         )
     }
 
@@ -1036,21 +1095,46 @@ final class AppModel {
     }
 
     func confirmAccountSwitch() async {
-        guard let state = accountSessionCoordinator.confirmAccountSwitch(
+        guard let proposed = accountSessionCoordinator.confirmAccountSwitch(
             state: timerState,
             authenticatedUser: user
         ) else { return }
-        if let timer = canonicalTimer {
-            cancelAlarm(timerID: timer.id)
-        }
-        applyCoordinatorPublication(accountSessionCoordinator.publication)
-        let saved = accountSessionCoordinator.persist(state, to: .local)
+        // R50-AP01: commit previous/proposed atomically. Install the
+        // switched projection and alarm only after durable success.
+        let previous = timerState
+        let previousTimer = canonicalTimer
+        let saved = accountSessionCoordinator.persistAtomically(
+            previous: previous,
+            proposed: proposed,
+            to: .local,
+            rebuildsOnRollback: false
+        )
         guard applyPersistenceTransition(saved) else {
+            reportAccountSwitchPersistFailure()
             errorMessage = String(localized: "Account switch paused because local data could not be saved.")
             return
         }
+        applyCoordinatorPublication(accountSessionCoordinator.finishConfirmedAccountSwitch())
         rebuildOptimisticState()
+        reconcileAlarm(
+            from: previousTimer,
+            to: activeTimer,
+            at: effectivePhysicalNow() ?? now()
+        )
         await sync(force: true)
+    }
+
+    private func reportAccountSwitchPersistFailure() {
+        let quarantined = snapshotLoadFailure != nil
+        let outcome: AccountSwitchConfirmDiagnostics.Outcome =
+            quarantined ? .uncertain : .failed
+        let diagnostic = AccountSwitchConfirmDiagnostics(
+            outcome: outcome,
+            quarantined: quarantined,
+            pendingOperations: pendingChangeCount
+        )
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
     func cancelAccountSwitch() async {
@@ -2049,7 +2133,19 @@ final class AppModel {
     private func performSyncRound(
         _ lease: CentralizedAccountSessionCoordinator.SyncLease
     ) async throws -> Bool {
-        let prepared = try accountSessionCoordinator.prepareSyncPlan(state: timerState)
+        // R50-L03: preparation failures never reach the delivery-stage
+        // report below. Record malformed plans at pre-send with counts
+        // and Core provenance; expected limit/dependency outcomes stay
+        // quiet and keep the coordinator presentation-only shape.
+        let prepared: (plan: AccountSynchronization.SyncPlan, retired: PersistedTimerState)
+        do {
+            prepared = try accountSessionCoordinator.prepareSyncPlan(state: timerState)
+        } catch {
+            if let batch = error as? SyncBatchPlanError, batch.isInvalidResponse {
+                reportSyncBoundaryFailure(error, stage: .preSend, rollback: .notEligible)
+            }
+            throw error
+        }
         let plan = prepared.plan
         if plan.legacyDependencyReviewRequired { throw LegacyTimerDependencyReview.required }
         if plan.coreStatus == "blocked_dependency" { throw SyncBatchPlanError.blockedSync }
@@ -2230,17 +2326,44 @@ final class AppModel {
         let action = await roomReplicationController.refreshAfterForeground(
             environment: roomReplicationEnvironment
         )
-        guard action == .synchronize else {
+        switch action {
+        case .synchronize:
+            let installed = await sync(force: true)
+            guard installed || isExplicitForegroundGateReleaseAllowed else { return }
+            clearForegroundSyncGate()
+            reconcileTimerCompletion()
+        case .irohRefreshed(let roomID, let modeGeneration):
+            guard releaseIrohForegroundGate(roomID: roomID, modeGeneration: modeGeneration) else {
+                reportIrohForegroundRefresh(outcome: .retained)
+                return
+            }
+            reportIrohForegroundRefresh(outcome: .released)
+        case .none:
             if isExplicitForegroundGateReleaseAllowed {
                 clearForegroundSyncGate()
                 reconcileTimerCompletion()
             }
-            return
         }
-        let installed = await sync(force: true)
-        guard installed || isExplicitForegroundGateReleaseAllowed else { return }
+    }
+
+    // R50-AP03: room-fenced Iroh release. Backend-owner check only;
+    // never clears the centralized stale-completion gate.
+    private func releaseIrohForegroundGate(roomID: String, modeGeneration: Int) -> Bool {
+        guard replicationMode == .iroh,
+            roomReplicationController.modeGeneration == modeGeneration,
+            roomStore.activeSnapshot?.roomID == roomID,
+            roomStore.activeSnapshot?.conflict == nil
+        else { return false }
         clearForegroundSyncGate()
         reconcileTimerCompletion()
+        return true
+    }
+
+    private func reportIrohForegroundRefresh(outcome: IrohForegroundRefreshDiagnostics.Outcome) {
+        let diagnostic = IrohForegroundRefreshDiagnostics(outcome: outcome)
+        Self.logger.info("\(diagnostic.localizedDescription, privacy: .public)")
+        guard outcome == .retained else { return }
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
     /// S1 OOM relief (POMODOROUGH-37): drops cached WasmKit runtimes after
@@ -3201,16 +3324,34 @@ final class AppModel {
     }
 
     private func installBootstrapResolution(_ resolved: PersistedTimerState) throws {
+        // R50-AP02: prepare/commit/install. Never publish the proposed
+        // projection or effects before the durable commit. Mirrors
+        // commitSyncedState. Uncertain replacement keeps observed
+        // durable state under quarantine via persistAtomically.
         let projection = try project(resolved)
         let previousState = timerState
-        timerState = resolved
-        installProjection(projection)
+        let publication = prepareWorkspacePublication(state: resolved, output: projection)
+        timerState = publication?.state ?? resolved
         pruneLocalTimerOwners()
         guard persistAtomically(previous: previousState, rebuildsOnRollback: true) else {
+            reportBootstrapInstallPersistFailure()
             throw AppError.invalidResponse
         }
+        installPreparedPublication(publication)
         applyCoordinatorPublication(accountSessionCoordinator.finishBootstrapResolution())
         errorMessage = nil
+    }
+
+    private func reportBootstrapInstallPersistFailure() {
+        let quarantined = snapshotLoadFailure != nil
+        let outcome: BootstrapInstallDiagnostics.Outcome = quarantined ? .uncertain : .failed
+        let diagnostic = BootstrapInstallDiagnostics(
+            outcome: outcome,
+            quarantined: quarantined,
+            pendingOperations: pendingChangeCount
+        )
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
     private func verifyRestoredSession(

@@ -2144,3 +2144,328 @@ private struct SentryTestKeyStore: IrohEndpointKeyStoring {
     func load() throws -> Data? { Data(repeating: 7, count: 32) }
     func save(_ secret: Data) throws {}
 }
+
+// R50-L03: malformed batch plans report bounded diagnostics at the
+// bootstrap and sync pre-send boundaries. Expected limit/dependency
+// outcomes stay quiet. Payload strings never enter keys or messages.
+@Suite("R50-L03 invalid batch-plan diagnostics")
+struct R50L03BatchPlanDiagnosticsTests {
+    private func counts(
+        commands: Int = 0, tasks: Int = 0, durations: Int = 0,
+        autoStarts: Int = 0, selected: Int = 0
+    ) -> CoreBatchPlanCounts {
+        CoreBatchPlanCounts(
+            commands: commands, taskOperations: tasks,
+            durationOperations: durations,
+            autoStartOperations: autoStarts,
+            selectedTaskOperations: selected
+        )
+    }
+
+    private func ids(_ commands: [String] = []) -> CoreBatchPlanSelected {
+        CoreBatchPlanSelected(
+            commands: commands, taskOperations: [],
+            durationOperations: [], autoStartOperations: [],
+            selectedTaskOperations: []
+        )
+    }
+
+    private func plan(
+        status: String, selected: CoreBatchPlanSelected,
+        nextDomain: String? = "commands", held: String? = nil,
+        counts: CoreBatchPlanCounts, total: Int
+    ) -> CoreBatchPlan {
+        CoreBatchPlan(
+            status: status, selected: selected,
+            nextDomain: nextDomain, heldTimerOperationId: held,
+            counts: counts, total: total
+        )
+    }
+
+    private func record() -> LockedTestValue<[String]> {
+        SentryCapture.resetForTesting()
+        let recorded = LockedTestValue<[String]>([])
+        SentryCapture.setTestBackend { error in
+            var current = recorded.value
+            current.append(error.localizedDescription)
+            recorded.value = current
+        }
+        return recorded
+    }
+
+    @Test
+    func malformedSyncValidatorsShareOneFixedCategory() throws {
+        #expect(SyncBatchPlanError.oversizedSaved.isInvalidResponse == false)
+        #expect(SyncBatchPlanError.blockedSync.isInvalidResponse == false)
+        #expect(SyncBatchPlanError.blockedBootstrap.isInvalidResponse == false)
+        #expect(SyncBatchPlanError.oversizedBootstrap.isInvalidResponse == false)
+        #expect(SyncBatchPlanError.invalidResponse("secret-op-1").isInvalidResponse)
+        try SyncBatchPlanner.checkStatus("planned")
+        try SyncBatchPlanner.checkStatus("oversized")
+        try SyncBatchPlanner.checkStatus("blocked_dependency")
+        do {
+            try SyncBatchPlanner.checkStatus("secret-status")
+            Issue.record("unknown status must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+        let mismatched = plan(
+            status: "planned", selected: ids(["a"]),
+            counts: counts(commands: 2), total: 2
+        )
+        do {
+            try SyncBatchPlanner.checkCounts(
+                mismatched, commandCount: 1, taskCount: 0,
+                durationCount: 0, autoStartCount: 0, selectedCount: 0
+            )
+            Issue.record("count mismatch must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+        do {
+            try SyncBatchPlanner.checkSubset(
+                mismatched, commandIDs: [], taskIDs: [],
+                durationIDs: [], autoStartIDs: [], selectedIDs: []
+            )
+            Issue.record("unknown IDs must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+    }
+
+    @Test
+    func malformedCursorAndSavedClaimsShareFixedCategory() throws {
+        let empty = ids()
+        let zero = counts()
+        for status in ["planned", "blocked_dependency"] {
+            do {
+                try SyncBatchPlanner.checkSyncCursor(
+                    plan(status: status, selected: empty, nextDomain: "secret-cursor", counts: zero, total: 0),
+                    cursor: "commands"
+                )
+                Issue.record("invalid sync cursor must reject")
+            } catch let error as SyncBatchPlanError {
+                #expect(error.isInvalidResponse)
+            }
+        }
+        do {
+            try SyncBatchPlanner.checkBootstrapCursor(
+                plan(status: "planned", selected: empty, nextDomain: nil, counts: zero, total: 0)
+            )
+            Issue.record("missing bootstrap cursor must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+        let replay = plan(
+            status: "replay_saved", selected: ids(["a"]),
+            nextDomain: nil, counts: counts(commands: 1), total: 1
+        )
+        #expect(try SyncBatchPlanner.validatedSaved(replay, ids: ids(["a"])) == replay)
+        do {
+            _ = try SyncBatchPlanner.validatedSaved(replay, ids: ids(["mine"]))
+            Issue.record("saved-claim mismatch must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+        do {
+            _ = try SyncBatchPlanner.validatedSaved(
+                plan(status: "planned", selected: empty, counts: zero, total: 0),
+                ids: empty
+            )
+            Issue.record("non-saved status must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+    }
+
+    @Test @MainActor
+    func bootstrapInvalidBatchPlanCapturesBoundedFixedDiagnostic() {
+        let recorded = record()
+        defer { SentryCapture.resetForTesting() }
+        let lifecycle = AccountLifecycleController(
+            api: APIClient(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        let first = lifecycle.bootstrapFailure(
+            SyncBatchPlanError.invalidResponse("secret-op-1"), stage: .preflight
+        )
+        #expect(first.historyResolutionState == .retryable(nil))
+        #expect(!first.isOffline)
+        #expect(first.errorMessage == String(localized: "History setup paused because the server returned an invalid response. Local data remains on this device."))
+        #expect(first.effects.isEmpty)
+        let second = lifecycle.bootstrapFailure(
+            SyncBatchPlanError.invalidResponse("secret-op-2"), stage: .submission(.merge)
+        )
+        #expect(second.historyResolutionState == .retryable(.merge))
+        #expect(!second.isOffline)
+        #expect(second.effects.isEmpty)
+        #expect(recorded.value.count == 2)
+        #expect(recorded.value[0].contains("stage=preflight reason=invalid-plan core="))
+        #expect(!recorded.value[0].contains("secret"))
+        #expect(recorded.value[1].contains("stage=submission reason=invalid-plan core="))
+        #expect(!recorded.value[1].contains("secret"))
+        for index in 3...5 {
+            _ = lifecycle.bootstrapFailure(
+                SyncBatchPlanError.invalidResponse("secret-op-\(index)"), stage: .preflight
+            )
+        }
+        #expect(recorded.value.filter { $0.contains("stage=preflight") }.count == 3)
+        #expect(recorded.value.count == 4)
+    }
+
+    @MainActor
+    private func quietCoordinator() -> (
+        CentralizedAccountSessionCoordinator,
+        CentralizedAccountSessionCoordinator.SyncLease,
+        CentralizedAccountSessionCoordinator.Workspace
+    ) {
+        let api = APIClient(keychain: StaticTokenStore())
+        let coordinator = CentralizedAccountSessionCoordinator(
+            lifecycle: AccountLifecycleController(api: api, googleIdentityProvider: RecordingGoogleIdentityProvider()),
+            synchronization: AccountSynchronization(api: api, sharedCoreProvider: { try SharedCore.bundled() }),
+            initialPublication: .init(sessionState: .signedIn(TestFixtures.user))
+        )
+        let lease = CentralizedAccountSessionCoordinator.SyncLease(
+            id: UUID(), operation: coordinator.currentOperation, modeGeneration: 0, showsActivity: false
+        )
+        let workspace = CentralizedAccountSessionCoordinator.Workspace(
+            state: .fresh(), replicationMode: .centralized, modeGeneration: 0, isMutationBlocked: false
+        )
+        return (coordinator, lease, workspace)
+    }
+
+    @Test @MainActor
+    func expectedBootstrapLimitTransportAndCancelStayQuiet() {
+        let recorded = record()
+        defer { SentryCapture.resetForTesting() }
+        let lifecycle = AccountLifecycleController(
+            api: APIClient(keychain: StaticTokenStore()),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+        for error: Error in [
+            SyncBatchPlanError.oversizedBootstrap, SyncBatchPlanError.blockedBootstrap,
+            URLError(.networkConnectionLost), CancellationError()
+        ] {
+            let transition = lifecycle.bootstrapFailure(error, stage: .submission(.keepRemote))
+            #expect(transition.historyResolutionState == .retryable(.keepRemote))
+            #expect(transition.isOffline)
+            #expect(transition.errorMessage == nil)
+            #expect(transition.effects == [.scheduleRetry])
+        }
+        #expect(recorded.value.isEmpty)
+    }
+
+    @Test @MainActor
+    func expectedSyncLimitTransportCancelAndStaleStayQuiet() {
+        let recorded = record()
+        defer { SentryCapture.resetForTesting() }
+        let (coordinator, lease, workspace) = quietCoordinator()
+        for error: Error in [
+            SyncBatchPlanError.oversizedSaved, SyncBatchPlanError.blockedSync,
+            SyncBatchPlanError.invalidResponse("secret-op-9")
+        ] {
+            let failure = coordinator.syncFailure(error, lease: lease, workspace: workspace, pendingChangeCount: 2)
+            #expect(failure.action == .blocksFollowUp)
+            #expect(!failure.publication.isOffline)
+            #expect(!failure.effects.contains(.scheduleRetry))
+        }
+        for error: Error in [URLError(.networkConnectionLost), CancellationError()] {
+            let failure = coordinator.syncFailure(error, lease: lease, workspace: workspace, pendingChangeCount: 2)
+            #expect(failure.action == .schedulesRetry)
+        }
+        let staleLease = CentralizedAccountSessionCoordinator.SyncLease(
+            id: UUID(), operation: coordinator.currentOperation, modeGeneration: 9, showsActivity: false
+        )
+        let stale = coordinator.syncFailure(
+            SyncBatchPlanError.invalidResponse("secret-op-9"),
+            lease: staleLease, workspace: workspace, pendingChangeCount: 2
+        )
+        #expect(stale.action == .stale)
+        let staleBootstrap = coordinator.bootstrapFailure(
+            SyncBatchPlanError.invalidResponse("secret-op-9"), stage: .preflight,
+            operation: coordinator.currentOperation, modeGeneration: 9, workspace: workspace
+        )
+        #expect(staleBootstrap.action == .stale)
+        #expect(recorded.value.isEmpty)
+    }
+
+    @MainActor
+    private func deviceMismatchedClaimState() -> PersistedTimerState {
+        // Commands, tasks, and durations carry no device identity, so the
+        // mismatched claim device passes the beginSync gate and reaches
+        // the saved-plan validator that reports it.
+        let batch = R48AP05BatchPlanTests()
+        var seed = PersistedTimerState.fresh()
+        seed.cachedUser = TestFixtures.user
+        seed.pendingCommands = batch.makeCommands(count: 1, baseWallMs: 1_710_000_000_000)
+        seed.pendingTaskOperations = batch.makeTasks(count: 1, baseWallMs: 1_710_001_000_000)
+        seed.pendingDurationOperations = batch.makeDurations(count: 1, baseWallMs: 1_710_002_000_000)
+        seed.outgoingSyncClaim = batch.requestForAll(seed)
+        seed.deviceId = "secret-device-r50-l03"
+        return seed
+    }
+
+    @Test @MainActor
+    func syncPreSendInvalidPlanReportsOnceWithoutTransport() async throws {
+        let recorded = record()
+        defer { SentryCapture.resetForTesting() }
+        let scenario = "r50-l03-sync-presend-\(UUID().uuidString)"
+        R48AP04StubState.shared.configure(scenario: scenario, mode: .succeed)
+        let suite = "PomodoroughTests.R50L03SyncPreSend.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AtomicDurableFileStore(fileURL: dir.appendingPathComponent("workspace.json"))
+        try store.write(JSONEncoder.api.encode(deviceMismatchedClaimState()))
+        let before = try #require(try store.read())
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [R48AP04StubProtocol.self]
+        configuration.httpAdditionalHeaders = ["X-R48AP04-Scenario": scenario]
+        let model = AppModel(
+            api: APIClient(session: URLSession(configuration: configuration), keychain: StaticTokenStore()),
+            defaults: defaults, durableLocalStore: store,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: dir),
+            alarmScheduler: RecordingAlarmScheduler(), retryDelay: .seconds(3600),
+            now: { Date(timeIntervalSince1970: 1_710_100_000) }, uptime: { 100 }
+        )
+        await model.restore()
+        // Restore replays the same saved claim through resumeCached, so
+        // clear its identical report and assert one report per sync.
+        recorded.value = []
+        #expect(await model.sync(force: true) == false)
+        #expect(R48AP04StubState.shared.postCount(for: scenario) == 0)
+        #expect(try store.read() == before)
+        #expect(recorded.value.count == 1)
+        let message = try #require(recorded.value.first)
+        #expect(message.contains("stage=preSend rollback=notEligible reason=batch"))
+        #expect(message.contains("pending=1/1/1/0/0 claim=true core="))
+        #expect(!message.contains("secret-device-r50-l03"))
+        #expect(!message.contains("batch-command-00000"))
+        #expect(!message.contains("Batch task"))
+    }
+
+    @Test @MainActor
+    func correctedClaimReplansThroughRealPlanner() throws {
+        var state = deviceMismatchedClaimState()
+        let sync = AccountSynchronization(
+            api: APIClient(keychain: StaticTokenStore()),
+            sharedCoreProvider: { try SharedCore.bundled() }
+        )
+        do {
+            _ = try sync.prepareSyncPlan(state: state)
+            Issue.record("device-mismatched claim must reject")
+        } catch let error as SyncBatchPlanError {
+            #expect(error.isInvalidResponse)
+        }
+        state.deviceId = try #require(state.outgoingSyncClaim?.deviceId)
+        let prepared = try sync.prepareSyncPlan(state: state)
+        #expect(prepared.plan.isSavedReplay)
+        #expect(prepared.plan.coreStatus == "replay_saved")
+        #expect(prepared.plan.batch.commands == state.pendingCommands)
+        #expect(prepared.plan.batch.taskOperations == state.pendingTaskOperations)
+        #expect(prepared.retired.outgoingSyncClaim == state.outgoingSyncClaim)
+        #expect(prepared.retired.syncBatchCursor == state.syncBatchCursor)
+    }
+}

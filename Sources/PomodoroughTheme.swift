@@ -199,6 +199,29 @@ enum PomodoroughTheme {
 #endif
     }
 
+    /// Pattern guidance fill (R50-U01): opaque system background behind
+    /// the ServicePatternCard callout. White in light, black in dark.
+    /// The card uses `.background` on both OS branches, so unlike the
+    /// glass secondaries there is no iOS-18/iOS-26 fill divergence here.
+    static func patternGuidanceFillSRGB(
+        for appearance: Appearance
+    ) -> (red: Double, green: Double, blue: Double) {
+        switch appearance {
+        case .light: (red: 1, green: 1, blue: 1)
+        case .dark: (red: 0, green: 0, blue: 0)
+        }
+    }
+
+    /// Pattern guidance label (R50-U01): small signal text chosen from
+    /// the actual card fill. Darkened signal in light (~7.05:1 on
+    /// white); vivid signal in dark (~7.04:1 on black). The old vivid
+    /// on white pair is the 2.98:1 baseline failure.
+    static func patternGuidanceSRGB(
+        for appearance: Appearance
+    ) -> (red: Double, green: Double, blue: Double) {
+        signalTextSRGB(onFill: patternGuidanceFillSRGB(for: appearance))
+    }
+
     /// WCAG relative luminance for an sRGB color with components in 0...1.
     static func relativeLuminance(red: Double, green: Double, blue: Double) -> Double {
         func linear(_ component: Double) -> Double {

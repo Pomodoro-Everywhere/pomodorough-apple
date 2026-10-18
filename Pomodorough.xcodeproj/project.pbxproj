@@ -35,8 +35,10 @@
 		1048F26158F4DD98631A2EBC /* LegacyPendingOperationRebase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0255DC2576EECA4059C086 /* LegacyPendingOperationRebase.swift */; };
 		10649455CA7469E9BEF8014E /* TimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EFD2642B87CC51E870120B /* TimerDial.swift */; };
 		107D87882114A2E2EBA887DE /* R48AP01GroupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9290305E643AF26FFA724D3F /* R48AP01GroupTests.swift */; };
+		1088D3C19A48F3D7C8853FF8 /* PatternGuidanceContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEF45B54E18F96C76F893139 /* PatternGuidanceContrastTests.swift */; };
 		109A5F0593DACAA600FEB78E /* SentryCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */; };
 		10B4ADC05D413A8686A18C36 /* IROH_THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = E364A035A4079958FFAFFE94 /* IROH_THIRD_PARTY_LICENSES.md */; };
+		10F4A773C3054E5DBFC4D770 /* PatternGuidanceContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEF45B54E18F96C76F893139 /* PatternGuidanceContrastTests.swift */; };
 		115E7FE098975B760A87E56B /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 096DF78AFDEF90CCC25319EB /* Sentry */; };
 		11AB92A0968D38950FB91B91 /* TimerDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EFD2642B87CC51E870120B /* TimerDial.swift */; };
 		11BA335C3A8DB0743B028CDB /* AuthenticationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92728957F3129B011194935E /* AuthenticationModels.swift */; };
@@ -71,6 +73,7 @@
 		24EA75C73188170A43526BBF /* IrohLegacyTaskMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7473097A54FEEC975EC408 /* IrohLegacyTaskMigration.swift */; };
 		24F82419C7483BD364F2E187 /* CoverageGapBehaviorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */; };
 		25D823E92068B5ED728F0BA2 /* UnitNegativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB64ABDE6D1BCDDA0900CA91 /* UnitNegativeTests.swift */; };
+		26B76D5E1D5C858469833E77 /* StepperSymbolContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36F1FC5A347AA00A19674724 /* StepperSymbolContrastTests.swift */; };
 		270B68C547A38260159578BE /* AuthenticationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92728957F3129B011194935E /* AuthenticationModels.swift */; };
 		27779C63BC48502D8128D137 /* RailwayNetworkLines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724244F638BCEA9648A23B9A /* RailwayNetworkLines.swift */; };
 		27B798A28C490F1DC7540C90 /* LegacyOperationReducers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458216150D3F03D63BA6BFC2 /* LegacyOperationReducers.swift */; };
@@ -149,6 +152,7 @@
 		505B2B0AF04A88EB671C899A /* IrohLib in Frameworks */ = {isa = PBXBuildFile; productRef = F883AB1431F3186814AACEF4 /* IrohLib */; };
 		50A16F648EA3E41B4C14BEF0 /* TimerWidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D84F25BA4D62AF95DAAD00C /* TimerWidgetSnapshotTests.swift */; };
 		5204E798A30C57AA6E2E0DF4 /* AppStatePublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BE335886A3A7C806ECEB12F /* AppStatePublisher.swift */; };
+		52CBF96E54ADD416B71FA654 /* R50AP02BootstrapCommitOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CC71EE02630D6B7DD32C86E /* R50AP02BootstrapCommitOrderTests.swift */; };
 		5501ED3615BEE0850B88FCA0 /* SSERevisionStreamLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645DF6461B89E328FD8FDD43 /* SSERevisionStreamLimitsTests.swift */; };
 		56D3EE33635A0C1BB8516409 /* SyncBatchPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4F4ADFA50987E4B962FCD6 /* SyncBatchPlan.swift */; };
 		570A96C71EC12D92DC7E0536 /* NetworkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54E2C7C5FCA242076B7751F /* NetworkScreen.swift */; };
@@ -322,9 +326,11 @@
 		B57C743A40692C34E0F27381 /* SharedCoreFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2DFF90CAA228519DC52B9E3 /* SharedCoreFallbackTests.swift */; };
 		B589F5C71C40CD7ACEFA1240 /* SentryCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A34698C60B032A8032EC0A5 /* SentryCaptureTests.swift */; };
 		B593D4067308E77304EA5EF3 /* R48AP01TestHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63400BB89C392A4C2170FC44 /* R48AP01TestHelpers.swift */; };
+		B5F63E101D45CE35014E8141 /* StepperSymbolContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36F1FC5A347AA00A19674724 /* StepperSymbolContrastTests.swift */; };
 		B63B1BD1E5CF2B64E194DAA3 /* WorkspaceIntentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE75B0929164FB0DF8F8861 /* WorkspaceIntentModels.swift */; };
 		B6A47A49D89C6AF0D3B2F728 /* KeychainBenignFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A040A3D761A005F486E5D8B4 /* KeychainBenignFallbackTests.swift */; };
 		B71F20D329485A7FF86CB636 /* AccountSyncToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84DEE32289EACDBF9832151 /* AccountSyncToolbarButton.swift */; };
+		B7D87B37CE23A371DBEDF11B /* R50AP03IrohForegroundGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44070DCD9595E0005C576DF /* R50AP03IrohForegroundGateTests.swift */; };
 		BBE2A74C824DCB4C7CEB3409 /* PersistedStateMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 555A3AB6D44B26130AB0E534 /* PersistedStateMigration.swift */; };
 		BCEBE32FBCDB606DB1A612C7 /* TimerBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72BF1D497AF443928BE729AE /* TimerBackdrop.swift */; };
 		BD513CCC19FD160067E8A585 /* TimerCompletionSchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */; };
@@ -348,6 +354,7 @@
 		C6E287C347E7FFCC158CD69B /* StepButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E2B22FF291B7EA7C3547795 /* StepButton.swift */; };
 		C71685A085B7B597A55EDA9B /* AppModelDecompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99FD08EB834A612834A4FC51 /* AppModelDecompositionTests.swift */; };
 		C75D18BDC7A0C65CE7BCA116 /* RailwayBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 935A2C059B1EFF1A26152B0A /* RailwayBackdrop.swift */; };
+		C784A83EB27E7046112DF9EF /* PomodoroughThemeStepper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C338AF8D25FEC4B7B11B9C6 /* PomodoroughThemeStepper.swift */; };
 		C82A580024F003B3D10E96D9 /* AccountLifecycleTransitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3325B223134EBC2103C1C3F /* AccountLifecycleTransitions.swift */; };
 		C847E12C64F14316362C242C /* BreakTaskDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75212AE538E68653553C2BFA /* BreakTaskDisplayTests.swift */; };
 		C86ECC53782716C2E2B95DF6 /* CanonicalDurationBase.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECCE663CFB9E95F47476F6F4 /* CanonicalDurationBase.swift */; };
@@ -389,9 +396,11 @@
 		D78ED3D504C0542605BB9A61 /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
 		D89474D724A1904C8240127C /* SentrySetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503581F23F5EA85ECC4D0C /* SentrySetup.swift */; };
 		D8BD828CDA6832E8C118088B /* SessionRevocationPersistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2978C70B1FF2160179F07D04 /* SessionRevocationPersistTests.swift */; };
+		D8CB445159FDA9327F42F964 /* R50AP03IrohForegroundGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44070DCD9595E0005C576DF /* R50AP03IrohForegroundGateTests.swift */; };
 		D9748460069EA29BC8F5E723 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */; };
 		DA1DFD591E18C291AB2CBC36 /* CORE_SHA256 in Resources */ = {isa = PBXBuildFile; fileRef = F25AD6E967BEF51C57828124 /* CORE_SHA256 */; };
 		DA4A39504FF57E9ACB4251CC /* SentryCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41DAEF25DD519EA966E58700 /* SentryCapture.swift */; };
+		DBB267154624433E12FF3B25 /* R50AP02BootstrapCommitOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CC71EE02630D6B7DD32C86E /* R50AP02BootstrapCommitOrderTests.swift */; };
 		DBC69D471125D6F4AAF1A130 /* RouteClockMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2455C8C8ECE4B1401FA78CC8 /* RouteClockMark.swift */; };
 		DBE062F45B36BEB21BF35F20 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A2F56FE27D4AA634729FFC7 /* WasmKit */; };
 		DC28BCF468CAD773253EBF08 /* SynchronizedWorkspaceMutationDurable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6C1ED47FB29243322F86C0 /* SynchronizedWorkspaceMutationDurable.swift */; };
@@ -421,6 +430,7 @@
 		EA15A7496B9065E29499C87A /* SynchronizationLifecycleModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756912FE081EC76B3B459175 /* SynchronizationLifecycleModels.swift */; };
 		EA8004B96846CCAED63A35D1 /* RPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21209644D253E40E15EC9998 /* RPCMessage.swift */; };
 		EB9E59598634C9B5CCFC2367 /* PortraitDialFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB75F33697B6208245E8B417 /* PortraitDialFace.swift */; };
+		EBD796CD61E739A5DC1B4C2C /* PomodoroughThemeStepper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C338AF8D25FEC4B7B11B9C6 /* PomodoroughThemeStepper.swift */; };
 		EC562BB42E405266C25854C2 /* R48AP06WatchPauseRefusalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7776B082FCABC248166054DD /* R48AP06WatchPauseRefusalTests.swift */; };
 		EC6961E673E9AEDE42647FD8 /* AccountSynchronization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EE47740E78A20825AAD507B /* AccountSynchronization.swift */; };
 		ED568D143FD55313C51B97C0 /* IrohRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 544ED21EEB3D31545CA60A30 /* IrohRoomStore.swift */; };
@@ -577,6 +587,7 @@
 		353DCF659D4CD2AED9A982D5 /* DialFacePinningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialFacePinningTests.swift; sourceTree = "<group>"; };
 		363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomReplicationController.swift; sourceTree = "<group>"; };
 		36A8F361E21D197A0C56D2CA /* NetworkSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkSectionView.swift; sourceTree = "<group>"; };
+		36F1FC5A347AA00A19674724 /* StepperSymbolContrastTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepperSymbolContrastTests.swift; sourceTree = "<group>"; };
 		38E2B967974C1E80FDE7E8EE /* DialFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialFace.swift; sourceTree = "<group>"; };
 		39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCoreWASMTests.swift; sourceTree = "<group>"; };
 		39F166E83B43964696B39D1B /* LegacyMigrationCrashRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyMigrationCrashRecoveryTests.swift; sourceTree = "<group>"; };
@@ -612,6 +623,7 @@
 		5763B6AA139E86DBCDE4D11C /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		5A103133E9F435A049D9BC6F /* CoverageGapBehaviorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageGapBehaviorTests.swift; sourceTree = "<group>"; };
 		5A8F4B9B9BCCA8F2070D63D3 /* MainContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainContainer.swift; sourceTree = "<group>"; };
+		5C338AF8D25FEC4B7B11B9C6 /* PomodoroughThemeStepper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PomodoroughThemeStepper.swift; sourceTree = "<group>"; };
 		5CBFFA1E9D9565B804B08961 /* RPCMessageCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RPCMessageCodec.swift; sourceTree = "<group>"; };
 		5EA070B31BB3538D64FE60C7 /* IrohRoomProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomProjection.swift; sourceTree = "<group>"; };
 		5EA9D8F351248CDEAAFCD570 /* LegacyMigrationDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyMigrationDurabilityTests.swift; sourceTree = "<group>"; };
@@ -649,6 +661,7 @@
 		7B6C1ED47FB29243322F86C0 /* SynchronizedWorkspaceMutationDurable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizedWorkspaceMutationDurable.swift; sourceTree = "<group>"; };
 		7C5E25585456B28CD48ED4E0 /* ImmutableReconciliationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImmutableReconciliationPolicy.swift; sourceTree = "<group>"; };
 		7CB8A3D0D846E271842A41CF /* R48AP02CanonicalBaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R48AP02CanonicalBaseTests.swift; sourceTree = "<group>"; };
+		7CC71EE02630D6B7DD32C86E /* R50AP02BootstrapCommitOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R50AP02BootstrapCommitOrderTests.swift; sourceTree = "<group>"; };
 		7D84F25BA4D62AF95DAAD00C /* TimerWidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerWidgetSnapshotTests.swift; sourceTree = "<group>"; };
 		7E0255DC2576EECA4059C086 /* LegacyPendingOperationRebase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyPendingOperationRebase.swift; sourceTree = "<group>"; };
 		8067952C007FBA5B5F3B349B /* R49AP05WatchSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R49AP05WatchSettingsTests.swift; sourceTree = "<group>"; };
@@ -698,6 +711,7 @@
 		B1E3C90D70D49C8F69F513DE /* WatchTimerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchTimerView.swift; sourceTree = "<group>"; };
 		B2BB423CB3E1BA12419562FC /* WireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireModels.swift; sourceTree = "<group>"; };
 		B2D9675E9F575D3FA808F403 /* IrohRoomStoreRollbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IrohRoomStoreRollbackTests.swift; sourceTree = "<group>"; };
+		B44070DCD9595E0005C576DF /* R50AP03IrohForegroundGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R50AP03IrohForegroundGateTests.swift; sourceTree = "<group>"; };
 		B89BDAA2BB7DF807BB2552DC /* ServicePatternScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServicePatternScreen.swift; sourceTree = "<group>"; };
 		B908C0CE40CB2094D4A76D84 /* TimerControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerControls.swift; sourceTree = "<group>"; };
 		B984C6E067218858ECFB2608 /* WatchAlertContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAlertContractTests.swift; sourceTree = "<group>"; };
@@ -761,6 +775,7 @@
 		FBAFD33994A5626DA7A3C9C1 /* IdleTimerDial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdleTimerDial.swift; sourceTree = "<group>"; };
 		FD89F2D2F191B6F85F10E6D6 /* R48AP01DurableAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = R48AP01DurableAdmissionTests.swift; sourceTree = "<group>"; };
 		FEF41672292DCB78703E33FF /* TaskComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskComposer.swift; sourceTree = "<group>"; };
+		FEF45B54E18F96C76F893139 /* PatternGuidanceContrastTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatternGuidanceContrastTests.swift; sourceTree = "<group>"; };
 		FFE75B0929164FB0DF8F8861 /* WorkspaceIntentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceIntentModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -827,6 +842,7 @@
 				EB318E39A9F2F2070F3114D6 /* PersistedTimerState.swift */,
 				EDD5C1A7BCAC4E8DC9B69286 /* PomodoroughApp.swift */,
 				4755E1928278877B4EA62348 /* PomodoroughTheme.swift */,
+				5C338AF8D25FEC4B7B11B9C6 /* PomodoroughThemeStepper.swift */,
 				F2DAF4E662E4C20C79D0D812 /* PreviewSupport.swift */,
 				363A28EC8F3C243326CB0790 /* RoomReplicationController.swift */,
 				E07295C5A8844F45C157C394 /* RoomReplicationTransitions.swift */,
@@ -919,6 +935,7 @@
 				6D043EE67CA1960F20CF2749 /* MacOSTests.swift */,
 				6E0DF56A8BAC9EA72FFAAC94 /* MenuBarTimerTests.swift */,
 				23E73A1D6F89C1AAFBC49A74 /* ModelsSourceSplitCompatibilityTests.swift */,
+				FEF45B54E18F96C76F893139 /* PatternGuidanceContrastTests.swift */,
 				9A3CD9AE3AA80976EBF73221 /* PersistedStateCompatibilityTests.swift */,
 				181DAAB1D476F55EC7262DCE /* PersistedStateCorruptSkipTests.swift */,
 				22D5557D0263C4F6B68C9B28 /* PersistedStateDecouplingCompatibilityTests.swift */,
@@ -932,6 +949,8 @@
 				E238D6E6C0752DF720B959E9 /* R48AP05TransportTests.swift */,
 				7776B082FCABC248166054DD /* R48AP06WatchPauseRefusalTests.swift */,
 				8067952C007FBA5B5F3B349B /* R49AP05WatchSettingsTests.swift */,
+				7CC71EE02630D6B7DD32C86E /* R50AP02BootstrapCommitOrderTests.swift */,
+				B44070DCD9595E0005C576DF /* R50AP03IrohForegroundGateTests.swift */,
 				897200D592A2F7DF8B5EF559 /* ResponsibilitySplitCompatibilityTests.swift */,
 				43EA519036AFB88FDBC5322E /* RetainedRoomRejoinTests.swift */,
 				AAB884EB9E8593E740893441 /* RoomReplicationControllerTests.swift */,
@@ -941,6 +960,7 @@
 				39A8C0C03CC9F6675DF01C0A /* SharedCoreWASMTests.swift */,
 				95459C448D13FAA06E6007CD /* SnapshotReplacementRecoveryTests.swift */,
 				645DF6461B89E328FD8FDD43 /* SSERevisionStreamLimitsTests.swift */,
+				36F1FC5A347AA00A19674724 /* StepperSymbolContrastTests.swift */,
 				6DDB19D3B83EA6B9769F9D5E /* TestSupport.swift */,
 				A5751B4BD7B2A251AE34EDD7 /* TimerCardLayoutPinningTests.swift */,
 				7446867EABA8256D4F141B8B /* TimerCompletionSchedulingTests.swift */,
@@ -1488,6 +1508,7 @@
 				586A4CA348AF502B7AC45711 /* MacOSTests.swift in Sources */,
 				E18951533779205398B8BDC2 /* MenuBarTimerTests.swift in Sources */,
 				773AEB98B6A6EE50655C58E7 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
+				1088D3C19A48F3D7C8853FF8 /* PatternGuidanceContrastTests.swift in Sources */,
 				7B32DC7AAB3CACBC785C665C /* PersistedStateCompatibilityTests.swift in Sources */,
 				3501CE7CCAE635903F8A0F6C /* PersistedStateCorruptSkipTests.swift in Sources */,
 				A8E0A6723798097C7C4DF550 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */,
@@ -1501,6 +1522,8 @@
 				89E5141592E78BB8B7660216 /* R48AP05TransportTests.swift in Sources */,
 				F50FC2371DDE3878423A965E /* R48AP06WatchPauseRefusalTests.swift in Sources */,
 				751EFB7C6D41D6227F199F81 /* R49AP05WatchSettingsTests.swift in Sources */,
+				52CBF96E54ADD416B71FA654 /* R50AP02BootstrapCommitOrderTests.swift in Sources */,
+				D8CB445159FDA9327F42F964 /* R50AP03IrohForegroundGateTests.swift in Sources */,
 				F805FD21E2BBAB7469704A09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */,
 				8F167EF6736553C362FC10DF /* RetainedRoomRejoinTests.swift in Sources */,
 				F55FE30F7BB363948E39896C /* RoomReplicationControllerTests.swift in Sources */,
@@ -1510,6 +1533,7 @@
 				5943FC0B7A12C0B3D0BEBA2D /* SharedCoreFallbackTests.swift in Sources */,
 				D7275302330A8EA5092BE7A7 /* SharedCoreWASMTests.swift in Sources */,
 				3EE87C877D0FA149A2EE210E /* SnapshotReplacementRecoveryTests.swift in Sources */,
+				26B76D5E1D5C858469833E77 /* StepperSymbolContrastTests.swift in Sources */,
 				0F89BCC2C85246CC18C3A30B /* TestSupport.swift in Sources */,
 				5A714EAD93BE36D6A60C9E05 /* TimerCardLayoutPinningTests.swift in Sources */,
 				BD513CCC19FD160067E8A585 /* TimerCompletionSchedulingTests.swift in Sources */,
@@ -1578,6 +1602,7 @@
 				74715322869CD0C1BA9D19E2 /* MacOSTests.swift in Sources */,
 				58ADF2DECA9FFCB65B063AD1 /* MenuBarTimerTests.swift in Sources */,
 				9A572722943C8D6ABA5DDD97 /* ModelsSourceSplitCompatibilityTests.swift in Sources */,
+				10F4A773C3054E5DBFC4D770 /* PatternGuidanceContrastTests.swift in Sources */,
 				24398B245363C38C96EF7316 /* PersistedStateCompatibilityTests.swift in Sources */,
 				6F46E8FD82F49B722264C760 /* PersistedStateCorruptSkipTests.swift in Sources */,
 				E5957DF586FCF854A38FA531 /* PersistedStateDecouplingCompatibilityTests.swift in Sources */,
@@ -1591,6 +1616,8 @@
 				F31A841ABA1908C0C8D37DD8 /* R48AP05TransportTests.swift in Sources */,
 				EC562BB42E405266C25854C2 /* R48AP06WatchPauseRefusalTests.swift in Sources */,
 				F45D98F0FAB728A447330767 /* R49AP05WatchSettingsTests.swift in Sources */,
+				DBB267154624433E12FF3B25 /* R50AP02BootstrapCommitOrderTests.swift in Sources */,
+				B7D87B37CE23A371DBEDF11B /* R50AP03IrohForegroundGateTests.swift in Sources */,
 				32C8EBBA9FDB24AB14F77B09 /* ResponsibilitySplitCompatibilityTests.swift in Sources */,
 				666D26C401566CBE207B5573 /* RetainedRoomRejoinTests.swift in Sources */,
 				F0B39A4D97D4DA6D7C2E4D23 /* RoomReplicationControllerTests.swift in Sources */,
@@ -1600,6 +1627,7 @@
 				B57C743A40692C34E0F27381 /* SharedCoreFallbackTests.swift in Sources */,
 				99EFFE32E536E90D52596E0D /* SharedCoreWASMTests.swift in Sources */,
 				C4619B3E2C2FF52F2A6D85DF /* SnapshotReplacementRecoveryTests.swift in Sources */,
+				B5F63E101D45CE35014E8141 /* StepperSymbolContrastTests.swift in Sources */,
 				A8A4A9DDE702DE6C2EB47885 /* TestSupport.swift in Sources */,
 				E08C776CBAA4D81325F3A8A5 /* TimerCardLayoutPinningTests.swift in Sources */,
 				CC8A04E89886DFA189F17026 /* TimerCompletionSchedulingTests.swift in Sources */,
@@ -1701,6 +1729,7 @@
 				9FE55B82B0A27174E45404C8 /* PersistedTimerState.swift in Sources */,
 				B2295D5A227E68C6503F6D36 /* PomodoroughApp.swift in Sources */,
 				A82A448F35A0420C5A719FE1 /* PomodoroughTheme.swift in Sources */,
+				EBD796CD61E739A5DC1B4C2C /* PomodoroughThemeStepper.swift in Sources */,
 				D5C32DBB4C9015F58CA59E14 /* PortraitDialFace.swift in Sources */,
 				798158AF55188B7FA65D6F9F /* PreviewSupport.swift in Sources */,
 				12389EBDBDA43A8A9AA94A1C /* PrimaryRouteAccountToolbar.swift in Sources */,
@@ -1849,6 +1878,7 @@
 				39CE74E11A83E03F99F5975A /* PersistedTimerState.swift in Sources */,
 				58D9FB99984C3C9DE6B8E2A5 /* PomodoroughApp.swift in Sources */,
 				356D58FFF6FC74C9885068D6 /* PomodoroughTheme.swift in Sources */,
+				C784A83EB27E7046112DF9EF /* PomodoroughThemeStepper.swift in Sources */,
 				EB9E59598634C9B5CCFC2367 /* PortraitDialFace.swift in Sources */,
 				2FE2B8F3D32C47449D4298C3 /* PreviewSupport.swift in Sources */,
 				EFEE813347CEE956297AFAD7 /* PrimaryRouteAccountToolbar.swift in Sources */,

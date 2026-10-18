@@ -16,6 +16,19 @@ enum AccountHistoryResolutionState: Equatable, Sendable {
     case retryable(BootstrapResolutionStrategy?)
 }
 
+// R50-L03: bounded batch-plan bootstrap outcome. Fixed stage and reason
+// with bundled Core provenance. No operation IDs, payloads, account
+// data, or Core response text.
+struct BootstrapBatchPlanDiagnostics: Error, LocalizedError, Sendable {
+    enum Stage: String, Sendable { case preflight, submission }
+    let stage: Stage
+    var key: String { "bootstrap-batch-invalid-\(stage.rawValue)" }
+    var errorDescription: String? {
+        "bootstrap-batch stage=\(stage.rawValue) reason=invalid-plan "
+            + "core=\(WorkspaceIntentProvenance.current().prefix(160))"
+    }
+}
+
 @MainActor
 final class AccountLifecycleController {
     private static let logger = Logger(
@@ -397,6 +410,8 @@ final class AccountLifecycleController {
                 errorMessage: AppError.historyReplacementUnavailable.localizedDescription,
                 effects: []
             )
+        case let batch as SyncBatchPlanError where batch.isInvalidResponse:
+            return invalidBatchPlanTransition(strategy: strategy, message: invalidResponseMessage, stage: stage)
         default:
             return BootstrapFailureTransition(
                 historyResolutionState: .retryable(strategy),
@@ -405,6 +420,27 @@ final class AccountLifecycleController {
                 effects: [.scheduleRetry]
             )
         }
+    }
+
+    private func invalidBatchPlanTransition(
+        strategy: BootstrapResolutionStrategy?,
+        message: String,
+        stage: BootstrapStage
+    ) -> BootstrapFailureTransition {
+        let diagnosticStage: BootstrapBatchPlanDiagnostics.Stage
+        switch stage {
+        case .preflight: diagnosticStage = .preflight
+        case .submission: diagnosticStage = .submission
+        }
+        let diagnostic = BootstrapBatchPlanDiagnostics(stage: diagnosticStage)
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        return BootstrapFailureTransition(
+            historyResolutionState: .retryable(strategy),
+            isOffline: false,
+            errorMessage: message,
+            effects: []
+        )
     }
 
     func bootstrapRetryAction(

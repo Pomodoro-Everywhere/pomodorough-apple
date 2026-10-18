@@ -7,9 +7,12 @@ struct ServicePatternCard: View {
         VStack(alignment: .leading, spacing: 16) {
             SectionHeading(kicker: "ROUTE", title: "Service pattern", subtitle: "Choose a mode and duration")
             if model.isTimerActive {
+                // R50-U01: fill-derived foreground on the system-background
+                // card. Vivid signal is 2.98:1 on white; signalText keeps
+                // darkened signal in light and vivid signal in dark.
                 Label("Duration changes apply to next timer", systemImage: "forward.end.fill")
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(PomodoroughTheme.signal)
+                    .foregroundStyle(PomodoroughTheme.signalText)
                     .accessibilityHint("Duration changes do not alter the running or paused timer. Auto-start controls the break after the current focus.")
             }
             ForEach(TimerPhase.allCases) { phase in

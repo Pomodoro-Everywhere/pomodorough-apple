@@ -105,6 +105,15 @@ struct CoreBatchPlan: Decodable, Equatable, Sendable {
     let total: Int
 }
 
+extension SyncBatchPlanError {
+    // R50-L03: separates malformed plans (diagnostic) from expected
+    // limit/dependency outcomes (quiet) without matching the payload.
+    var isInvalidResponse: Bool {
+        if case .invalidResponse = self { return true }
+        return false
+    }
+}
+
 enum SyncBatchPlanError: LocalizedError, Equatable, Sendable {
     case invalidResponse(String)
     case oversizedSaved
@@ -277,7 +286,9 @@ struct SyncBatchPlanner: Sendable {
     }
 }
 
-private extension SyncBatchPlanner {
+// R50-L03: internal (not private) so regression tests drive the exact
+// malformed-plan validators with synthetic Core outputs.
+extension SyncBatchPlanner {
     static func descriptors(
         commands: [TimerCommand],
         tasks: [TaskOperation],

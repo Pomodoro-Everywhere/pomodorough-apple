@@ -1,6 +1,17 @@
 import Foundation
 import OSLog
 
+// R50-AP04: bounded Iroh foreground-sync false outcome. Backend and
+// outcome only, no room IDs, invites, secrets, or timer IDs.
+struct IrohForegroundSyncDiagnostics: Error, LocalizedError, Sendable {
+    let backend = "iroh"
+
+    var key: String { "iroh-foreground-sync-false" }
+    var errorDescription: String? {
+        "foreground backend=\(backend) outcome=sync-false"
+    }
+}
+
 @MainActor
 final class RoomReplicationController {
     private static let logger = Logger(
@@ -114,15 +125,44 @@ final class RoomReplicationController {
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationForegroundAction {
         if mode == .iroh {
-            await startIrohIfNeeded(environment: environment)
-            await service.syncNow()
-            return .none
+            return await refreshIrohAfterForeground(environment: environment)
         }
         guard mode == .centralized else { return .none }
         let state = dependencies.centralizedState()
         guard state.isSignedIn else { return .none }
         if !state.isWorkspaceMutationBlocked { startCentralizedStreams() }
         return .synchronize
+    }
+
+    // R50-AP03: backend-owner room-fenced Iroh success. Releases only
+    // on current-room start + sync with unchanged mode/room and no
+    // conflict. Failed or stale refreshes stay fail-closed (.none).
+    private func refreshIrohAfterForeground(
+        environment: RoomReplicationEnvironment
+    ) async -> RoomReplicationForegroundAction {
+        guard let snapshot = dependencies.roomStore.activeSnapshot,
+            snapshot.conflict == nil
+        else { return .none }
+        let roomID = snapshot.roomID
+        let generation = modeGeneration
+        guard await startIrohIfNeeded(environment: environment) else { return .none }
+        guard await service.foregroundSync() else {
+            Self.reportForegroundSyncFailure()
+            return .none
+        }
+        guard mode == .iroh, modeGeneration == generation,
+            dependencies.roomStore.activeSnapshot?.roomID == roomID,
+            dependencies.roomStore.activeSnapshot?.conflict == nil
+        else { return .none }
+        return .irohRefreshed(roomID: roomID, modeGeneration: generation)
+    }
+
+    // R50-AP04: count-only diagnostics for the dark sync-false edge.
+    // Fail-closed .none behavior unchanged; bounded by captureRecurring.
+    private static func reportForegroundSyncFailure() {
+        let diagnostic = IrohForegroundSyncDiagnostics()
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
     func changeMode(
@@ -482,14 +522,17 @@ final class RoomReplicationController {
         return true
     }
 
-    func startIrohIfNeeded(environment: RoomReplicationEnvironment) async {
-        guard let context = activeContext(environment: environment) else { return }
+    @discardableResult
+    func startIrohIfNeeded(environment: RoomReplicationEnvironment) async -> Bool {
+        guard let context = activeContext(environment: environment) else { return false }
         do {
             _ = try await service.start(context)
+            return true
         } catch {
             Self.logger.error("startIrohIfNeeded failed: \(error.localizedDescription, privacy: .public)")
             SentryCapture.capture(error)
             eventHandler(.statusChanged(.unavailable(error.localizedDescription)))
+            return false
         }
     }
 

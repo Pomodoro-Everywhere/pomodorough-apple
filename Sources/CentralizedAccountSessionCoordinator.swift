@@ -248,12 +248,18 @@ extension CentralizedAccountSessionCoordinator {
         state: PersistedTimerState,
         authenticatedUser: User?
     ) -> PersistedTimerState? {
+        // R50-AP01: pure proposal. Presentation clears only after the
+        // durable commit. Early clearing removed the mutation fence.
         guard let updated = lifecycle.confirmAccountSwitch(
             state: state,
             authenticatedUser: authenticatedUser
         )?.state else { return nil }
-        clearBootstrapPresentation()
         return updated
+    }
+
+    func finishConfirmedAccountSwitch() -> PublicationSnapshot {
+        clearBootstrapPresentation()
+        return publication
     }
 
     func signedOutStorageTransition(

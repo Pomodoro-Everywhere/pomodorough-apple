@@ -47,6 +47,7 @@ enum RoomReplicationOperation: Equatable, Sendable {
 enum RoomReplicationForegroundAction: Equatable, Sendable {
     case none
     case synchronize
+    case irohRefreshed(roomID: String, modeGeneration: Int)
 }
 
 enum RoomReplicationTransition: Equatable, Sendable {
@@ -67,8 +68,16 @@ protocol RoomReplicationServing: Sendable {
     func stop() async
     func currentEndpointTicket() async throws -> String
     func syncNow() async
+    func foregroundSync() async -> Bool
     func markConflict(roomID: String?) async
     func join(invite: IrohRoomInvite) async throws
+}
+
+extension RoomReplicationServing {
+    func foregroundSync() async -> Bool {
+        await syncNow()
+        return true
+    }
 }
 
 extension IrohReplicationService: RoomReplicationServing {}

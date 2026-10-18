@@ -159,6 +159,11 @@ actor IrohReplicationService {
         _ = await syncKnownPeers(context: context, generation: generation)
     }
 
+    func foregroundSync() async -> Bool {
+        guard let context else { return false }
+        return await syncKnownPeers(context: context, generation: generation)
+    }
+
     func markConflict(roomID: String?) async {
         guard let roomID, context?.roomID == roomID else { return }
         await stopForConflict(generation: generation)
