@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """R49-AP07 permanent adversarial ownership gate for the interface scanner.
 
-Owns exemption-ownership coverage: exactly two log-only direct members stay
+Owns exemption-ownership coverage: exactly seven log-only direct members stay
 exempt, while nested actors, qualified extensions, same-named unrelated
 owners, and user-visible missing keys fail closed. Real Watch keys and pseudo
 values stay synchronized. Isolated catalog deletions stay baseline-red and
@@ -25,6 +25,11 @@ SPEC.loader.exec_module(checker)
 EXPECTED_TUPLES = (
     ("Sources/AppModel.swift", "SyncFailureDiagnostics", "errorDescription"),
     ("Sources/WorkspaceIntentModels.swift", "SuppressedSelectionDiagnostics", "publicMessage"),
+    ("Sources/AppModel.swift", "AccountSwitchConfirmDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "BootstrapInstallDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "IrohForegroundRefreshDiagnostics", "errorDescription"),
+    ("Sources/AccountLifecycleController.swift", "BootstrapBatchPlanDiagnostics", "errorDescription"),
+    ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"),
 )
 WATCH_KEYS = (
     "Watch Start not applied.",
@@ -54,13 +59,16 @@ def coverage_failures(source: str, path: str, catalog: dict | None = None) -> li
 
 
 class R49AP07ExactExemptionGateTests(unittest.TestCase):
-    def test_exact_two_log_only_tuples(self) -> None:
+    def test_exact_seven_log_only_tuples(self) -> None:
         self.assertEqual(set(checker.LOG_ONLY_COMPUTED_MEMBERS), set(EXPECTED_TUPLES))
-        self.assertEqual(len(checker.LOG_ONLY_COMPUTED_MEMBERS), 2)
+        self.assertEqual(len(checker.LOG_ONLY_COMPUTED_MEMBERS), 7)
         app_explanation = checker.LOG_ONLY_COMPUTED_MEMBERS[EXPECTED_TUPLES[0]]
         selection_explanation = checker.LOG_ONLY_COMPUTED_MEMBERS[EXPECTED_TUPLES[1]]
         self.assertIn("reportSyncBoundaryFailure", app_explanation)
         self.assertIn("reportSuppressedSelection", selection_explanation)
+        for key, explanation in checker.LOG_ONLY_COMPUTED_MEMBERS.items():
+            with self.subTest(key=key):
+                self.assertTrue(explanation.strip())
 
     def test_exact_direct_members_stay_exempt(self) -> None:
         for path, owner, member in EXPECTED_TUPLES:
@@ -84,11 +92,17 @@ class R49AP07ExactExemptionGateTests(unittest.TestCase):
                 self.assertEqual(checker.find_uncatalogued_computed_literals(source, path), [])
                 self.assertEqual(coverage_failures(source, path), [])
 
-    def test_real_production_files_have_one_classified_each(self) -> None:
-        for path in ("Sources/AppModel.swift", "Sources/WorkspaceIntentModels.swift"):
+    def test_real_production_files_have_expected_classified_each(self) -> None:
+        expected_counts = {
+            "Sources/AppModel.swift": 4,
+            "Sources/WorkspaceIntentModels.swift": 1,
+            "Sources/AccountLifecycleController.swift": 1,
+            "Sources/RoomReplicationController.swift": 1,
+        }
+        for path, count in expected_counts.items():
             source = (checker.ROOT / path).read_text(encoding="utf-8")
             with self.subTest(path=path):
-                self.assertEqual(len(checker.log_only_computed_declarations(source, path)), 1)
+                self.assertEqual(len(checker.log_only_computed_declarations(source, path)), count)
                 self.assertEqual(checker.find_uncatalogued_computed_literals(source, path), [])
 
 
@@ -208,8 +222,10 @@ class R49AP07RealKeySynchronizationTests(unittest.TestCase):
 
     def test_real_diagnostic_literals_return_without_classification(self) -> None:
         sources = {
-            "Sources/AppModel.swift": 4,
+            "Sources/AppModel.swift": 9,
             "Sources/WorkspaceIntentModels.swift": 2,
+            "Sources/AccountLifecycleController.swift": 2,
+            "Sources/RoomReplicationController.swift": 1,
         }
         for path, count in sources.items():
             source = (checker.ROOT / path).read_text(encoding="utf-8")

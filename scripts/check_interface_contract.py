@@ -68,6 +68,16 @@ LOG_ONLY_COMPUTED_MEMBERS = {
         "reportSyncBoundaryFailure sends this to OSLog/Sentry and rethrows the original error.",
     ("Sources/WorkspaceIntentModels.swift", "SuppressedSelectionDiagnostics", "publicMessage"):
         "TimerSessionController.reportSuppressedSelection sends this only to OSLog.notice.",
+    ("Sources/AppModel.swift", "AccountSwitchConfirmDiagnostics", "errorDescription"):
+        "reportAccountSwitchPersistFailure sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/AppModel.swift", "BootstrapInstallDiagnostics", "errorDescription"):
+        "reportBootstrapInstallPersistFailure sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/AppModel.swift", "IrohForegroundRefreshDiagnostics", "errorDescription"):
+        "reportIrohForegroundRefresh sends this to Logger.info and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/AccountLifecycleController.swift", "BootstrapBatchPlanDiagnostics", "errorDescription"):
+        "invalidBatchPlanTransition sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"):
+        "reportForegroundSyncFailure sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
 }
 
 

@@ -15,6 +15,11 @@ SPEC.loader.exec_module(checker)
 CLASSIFIED_MEMBERS = (
     ("Sources/AppModel.swift", "SyncFailureDiagnostics", "errorDescription"),
     ("Sources/WorkspaceIntentModels.swift", "SuppressedSelectionDiagnostics", "publicMessage"),
+    ("Sources/AppModel.swift", "AccountSwitchConfirmDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "BootstrapInstallDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "IrohForegroundRefreshDiagnostics", "errorDescription"),
+    ("Sources/AccountLifecycleController.swift", "BootstrapBatchPlanDiagnostics", "errorDescription"),
+    ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"),
 )
 
 
