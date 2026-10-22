@@ -612,6 +612,16 @@
         }
       }
     },
+    "Account switch cancellation paused because local data could not be saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account switch cancellation paused because local data could not be saved."
+          }
+        }
+      }
+    },
     "Account switch paused because local data could not be saved." : {
       "localizations" : {
         "en" : {
@@ -3080,6 +3090,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sign-out paused because its recovery state could not be saved."
+          }
+        }
+      }
+    },
+    "Sign-out paused because local data could not be saved." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign-out paused because local data could not be saved."
           }
         }
       }

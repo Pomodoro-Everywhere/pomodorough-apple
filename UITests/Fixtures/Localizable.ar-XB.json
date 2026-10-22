@@ -646,6 +646,12 @@
         "value": "‏⟦Account deletion was rejected, but its recovery state could not be cleared.⟧"
       }
     },
+    "Account switch cancellation paused because local data could not be saved.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account switch cancellation paused because local data could not be saved.⟧"
+      }
+    },
     "Account switch paused because local data could not be saved.": {
       "stringUnit": {
         "state": "translated",
@@ -2012,6 +2018,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Sign-out paused because its recovery state could not be saved.⟧"
+      }
+    },
+    "Sign-out paused because local data could not be saved.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sign-out paused because local data could not be saved.⟧"
       }
     },
     "Signs in to sync your timer across devices": {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """R49-AP07 permanent adversarial ownership gate for the interface scanner.
 
-Owns exemption-ownership coverage: exactly seven log-only direct members stay
+Owns exemption-ownership coverage: exactly ten log-only direct members stay
 exempt, while nested actors, qualified extensions, same-named unrelated
 owners, and user-visible missing keys fail closed. Real Watch keys and pseudo
 values stay synchronized. Isolated catalog deletions stay baseline-red and
@@ -30,6 +30,9 @@ EXPECTED_TUPLES = (
     ("Sources/AppModel.swift", "IrohForegroundRefreshDiagnostics", "errorDescription"),
     ("Sources/AccountLifecycleController.swift", "BootstrapBatchPlanDiagnostics", "errorDescription"),
     ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "AccountSwitchCancelDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "SignOutDiagnostics", "errorDescription"),
+    ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"),
 )
 WATCH_KEYS = (
     "Watch Start not applied.",
@@ -59,9 +62,9 @@ def coverage_failures(source: str, path: str, catalog: dict | None = None) -> li
 
 
 class R49AP07ExactExemptionGateTests(unittest.TestCase):
-    def test_exact_seven_log_only_tuples(self) -> None:
+    def test_exact_ten_log_only_tuples(self) -> None:
         self.assertEqual(set(checker.LOG_ONLY_COMPUTED_MEMBERS), set(EXPECTED_TUPLES))
-        self.assertEqual(len(checker.LOG_ONLY_COMPUTED_MEMBERS), 7)
+        self.assertEqual(len(checker.LOG_ONLY_COMPUTED_MEMBERS), 10)
         app_explanation = checker.LOG_ONLY_COMPUTED_MEMBERS[EXPECTED_TUPLES[0]]
         selection_explanation = checker.LOG_ONLY_COMPUTED_MEMBERS[EXPECTED_TUPLES[1]]
         self.assertIn("reportSyncBoundaryFailure", app_explanation)
@@ -94,10 +97,11 @@ class R49AP07ExactExemptionGateTests(unittest.TestCase):
 
     def test_real_production_files_have_expected_classified_each(self) -> None:
         expected_counts = {
-            "Sources/AppModel.swift": 4,
+            "Sources/AppModel.swift": 6,
             "Sources/WorkspaceIntentModels.swift": 1,
             "Sources/AccountLifecycleController.swift": 1,
             "Sources/RoomReplicationController.swift": 1,
+            "Sources/WatchSyncPayload.swift": 1,
         }
         for path, count in expected_counts.items():
             source = (checker.ROOT / path).read_text(encoding="utf-8")
@@ -222,10 +226,11 @@ class R49AP07RealKeySynchronizationTests(unittest.TestCase):
 
     def test_real_diagnostic_literals_return_without_classification(self) -> None:
         sources = {
-            "Sources/AppModel.swift": 9,
+            "Sources/AppModel.swift": 13,
             "Sources/WorkspaceIntentModels.swift": 2,
             "Sources/AccountLifecycleController.swift": 2,
             "Sources/RoomReplicationController.swift": 1,
+            "Sources/WatchSyncPayload.swift": 1,
         }
         for path, count in sources.items():
             source = (checker.ROOT / path).read_text(encoding="utf-8")

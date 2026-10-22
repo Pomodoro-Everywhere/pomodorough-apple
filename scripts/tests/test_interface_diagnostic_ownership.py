@@ -20,6 +20,9 @@ CLASSIFIED_MEMBERS = (
     ("Sources/AppModel.swift", "IrohForegroundRefreshDiagnostics", "errorDescription"),
     ("Sources/AccountLifecycleController.swift", "BootstrapBatchPlanDiagnostics", "errorDescription"),
     ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "AccountSwitchCancelDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "SignOutDiagnostics", "errorDescription"),
+    ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"),
 )
 
 

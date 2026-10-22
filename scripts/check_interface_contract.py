@@ -78,6 +78,12 @@ LOG_ONLY_COMPUTED_MEMBERS = {
         "invalidBatchPlanTransition sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
     ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"):
         "reportForegroundSyncFailure sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/AppModel.swift", "AccountSwitchCancelDiagnostics", "errorDescription"):
+        "reportAccountSwitchCancelFailure sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/AppModel.swift", "SignOutDiagnostics", "errorDescription"):
+        "reportSignOutFailure sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"):
+        "reportWatchUnknownCommand sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
 }
 
 
