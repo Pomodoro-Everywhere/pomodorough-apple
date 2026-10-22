@@ -41,7 +41,7 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
     }
 
     private func makeApplication() -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = silentTestApplication()
         app.launchArguments = [
             "-permission-introduction-completed-v1", "YES",
             "-AppleLanguages", "(en)",

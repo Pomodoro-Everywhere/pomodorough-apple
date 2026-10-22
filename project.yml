@@ -24,6 +24,8 @@ schemes:
       targets:
         Pomodorough-iOS: all
     test:
+      environmentVariables:
+        POMODOROUGH_SILENCE_AUDIO: "1"
       targets:
         - PomodoroughTests
         - PomodoroughUITests
@@ -32,6 +34,8 @@ schemes:
       targets:
         Pomodorough-macOS: all
     test:
+      environmentVariables:
+        POMODOROUGH_SILENCE_AUDIO: "1"
       targets:
         - PomodoroughMacTests
   Pomodorough-watchOS:
@@ -43,6 +47,8 @@ schemes:
       targets:
         Pomodorough-iOS: all
     test:
+      environmentVariables:
+        POMODOROUGH_SILENCE_AUDIO: "1"
       targets:
         - PersistedStateCompatibilityTests
   PersistedStateCompatibility-macOS:
@@ -50,6 +56,8 @@ schemes:
       targets:
         Pomodorough-macOS: all
     test:
+      environmentVariables:
+        POMODOROUGH_SILENCE_AUDIO: "1"
       targets:
         - PersistedStateCompatibilityMacTests
 settings:

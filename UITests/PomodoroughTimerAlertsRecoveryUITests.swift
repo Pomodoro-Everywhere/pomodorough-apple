@@ -4,7 +4,7 @@ import XCTest
 final class PomodoroughTimerAlertsRecoveryUITests: XCTestCase {
     func testSkippingOnboardingStillExposesTimerAlertsRecoveryInAccount() {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = silentTestApplication()
         // No permission-introduction-completed flag: the intro must appear.
         app.launchArguments = [
             "-AppleLanguages", "(en)",

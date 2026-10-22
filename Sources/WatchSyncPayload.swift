@@ -173,13 +173,24 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
 struct WatchSnapshotUnavailableError: Error, Sendable {}
 
 /// Unknown command name only: never timer ids, revisions, or snapshots.
+/// Fixed taxonomy: unknown input maps to `unknown_command` with a capped
+/// UTF-16 length so Sentry groups one issue and no companion content leaks.
 struct WatchUnknownCommandError: Error, Sendable {
-    let name: String
+    static let maxNameLength = 8_192
+    let nameLength: Int
+
+    init(name: String) {
+        self.nameLength = min(name.count, Self.maxNameLength)
+    }
+
+    init(nameLength: Int) {
+        self.nameLength = min(max(0, nameLength), Self.maxNameLength)
+    }
 }
 
 extension WatchUnknownCommandError: LocalizedError {
-    // Bare name: Sentry groups one issue per unknown command vocabulary word.
-    var errorDescription: String? { name }
+    // Fixed reason plus capped length: no raw unknown string retained.
+    var errorDescription: String? { "unknown_command len=\(nameLength)" }
 }
 
 /// Pause refused after current-target validation: bare name only, never

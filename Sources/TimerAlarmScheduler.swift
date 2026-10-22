@@ -70,6 +70,7 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
     }
 
     func requestAuthorization() async throws -> Bool {
+        guard !TestAudioSuppression.isEnabled else { return true }
 #if os(iOS) || os(macOS)
 #if os(macOS)
         _ = MacTimerNotificationCoordinator.shared
@@ -83,6 +84,7 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
     }
 
     func canSchedule() async -> Bool {
+        guard !TestAudioSuppression.isEnabled else { return true }
 #if os(iOS) || os(macOS)
         let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         if status == .authorized || status == .provisional { return true }
@@ -97,6 +99,7 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
     }
 
     func schedule(identifier: String, phase: TimerPhase, duration: TimeInterval) async throws {
+        guard !TestAudioSuppression.isEnabled else { return }
 #if os(iOS) || os(macOS)
         let content = UNMutableNotificationContent()
         content.title = TimerAlarmScheduler.title(for: phase)
@@ -127,6 +130,7 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
     }
 
     func remove(identifier: String) {
+        guard !TestAudioSuppression.isEnabled else { return }
 #if os(iOS) || os(macOS)
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
@@ -138,11 +142,16 @@ struct SystemTimerNotificationBackend: TimerNotificationBackend {
     }
 
 #if os(iOS) || os(macOS)
-    nonisolated static func notificationSound() -> UNNotificationSound {
+    nonisolated static func notificationSound() -> UNNotificationSound? {
+        guard !TestAudioSuppression.isEnabled else { return nil }
         if Bundle.main.url(forResource: "CompletionChime", withExtension: "wav") != nil {
             return UNNotificationSound(named: UNNotificationSoundName("CompletionChime.wav"))
         }
         return .default
+    }
+
+    nonisolated static var foregroundPresentationOptions: UNNotificationPresentationOptions {
+        TestAudioSuppression.isEnabled ? [.banner, .list] : [.banner, .list, .sound]
     }
 #endif
 }
@@ -183,6 +192,7 @@ private final class MacTimerNotificationCoordinator: NSObject, UNUserNotificatio
     }
 
     func arm(identifier: String, duration: TimeInterval) {
+        guard !TestAudioSuppression.isEnabled else { return }
         alarmTasks[identifier]?.cancel()
         alarmTasks[identifier] = Task { @MainActor [weak self] in
             do {
@@ -221,6 +231,7 @@ private final class MacTimerNotificationCoordinator: NSObject, UNUserNotificatio
     }
 
     private func playSound(identifier: String) {
+        guard !TestAudioSuppression.isEnabled else { return }
         stopSound()
         let bundledChime = Bundle.main.url(forResource: "CompletionChime", withExtension: "wav")
             .flatMap { NSSound(contentsOf: $0, byReference: true) }
@@ -262,13 +273,14 @@ final class IOSTimerNotificationCoordinator: NSObject, UNUserNotificationCenterD
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        SystemTimerNotificationBackend.foregroundPresentationOptions
     }
 }
 #endif
 
 struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     var authorizationState: TimerSystemAlarmAuthorizationState {
+        guard !TestAudioSuppression.isEnabled else { return .unsupported }
 #if os(iOS)
         if #available(iOS 26.0, *) {
             return switch AlarmManager.shared.authorizationState {
@@ -283,6 +295,7 @@ struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     }
 
     func requestAuthorization() async throws -> Bool {
+        guard !TestAudioSuppression.isEnabled else { return false }
 #if os(iOS)
         if #available(iOS 26.0, *) {
             return try await AlarmManager.shared.requestAuthorization() == .authorized
@@ -292,6 +305,7 @@ struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     }
 
     func schedule(id: UUID, timerID: String, phase: TimerPhase, duration: TimeInterval) async throws {
+        guard !TestAudioSuppression.isEnabled else { return }
 #if os(iOS)
         if #available(iOS 26.0, *) {
             let attributes = AlarmAttributes(
@@ -312,6 +326,7 @@ struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     }
 
     func pause(id: UUID) throws {
+        guard !TestAudioSuppression.isEnabled else { return }
 #if os(iOS)
         if #available(iOS 26.0, *) {
             let manager = AlarmManager.shared
@@ -322,6 +337,7 @@ struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     }
 
     func resume(id: UUID) throws -> Bool {
+        guard !TestAudioSuppression.isEnabled else { return false }
 #if os(iOS)
         if #available(iOS 26.0, *) {
             let manager = AlarmManager.shared
@@ -334,6 +350,7 @@ struct SystemTimerAlarmBackend: TimerSystemAlarmBackend {
     }
 
     func cancel(id: UUID) throws {
+        guard !TestAudioSuppression.isEnabled else { return }
 #if os(iOS)
         if #available(iOS 26.0, *) {
             let manager = AlarmManager.shared

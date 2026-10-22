@@ -290,7 +290,35 @@ private struct TimerMachineIOSPortraitCard: View {
         }
     }
 
+    @ViewBuilder
     private var bookAsideContent: some View {
+        #if os(iOS) && compiler(>=6.4)
+        if #available(iOS 27.1, *) {
+            // System split uses measured usable panels so picker,
+            // Start, and Skip stay outside active division + margins.
+            // Order, labels, accessibility, behavior unchanged.
+            ArrangementView {
+                TimerMachineDialSection(model: model, layout: layout)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } secondary: {
+                VStack(spacing: 14) {
+                    TimerTaskPicker(model: model, layout: layout)
+                    TimerControls(model: model, layout: layout, compact: usesCompactDial, hinge: hinge)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .arrangementViewStyle(.split.axes(.horizontal))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(16)
+        } else {
+            fallbackAsideContent
+        }
+        #else
+        fallbackAsideContent
+        #endif
+    }
+
+    private var fallbackAsideContent: some View {
         HStack(spacing: 14) {
             TimerMachineDialSection(model: model, layout: layout)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

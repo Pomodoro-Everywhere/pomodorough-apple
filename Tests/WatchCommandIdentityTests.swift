@@ -270,7 +270,7 @@ struct WatchCommandIdentityTests {
         var unknown = WatchTimerCommand.start()
         unknown.name = "rewind"
         #expect(model.applyWatchCommand(unknown) == false)
-        #expect(recorded.value == ["rewind"])
+        #expect(recorded.value == ["unknown_command len=6"])
     }
 
     @Test @MainActor

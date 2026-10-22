@@ -4,7 +4,7 @@ import XCTest
 final class PomodoroughHistoryRefreshUITests: XCTestCase {
     func testEmptyHistoryExposesRefreshableScrollAndSurvivesPull() {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = silentTestApplication()
         app.launchArguments = [
             "-permission-introduction-completed-v1", "YES",
             "-AppleLanguages", "(en)",

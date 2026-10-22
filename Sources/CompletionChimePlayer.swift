@@ -134,20 +134,21 @@ final class CompletionChimeController {
             SentryCapture.captureOnce(key: "completion-chime-\(failure.rawValue)", error: failure)
         }
 #if os(iOS)
-        return CompletionChimeController(
-            resourceURL: resourceURL,
-            makeSession: { AVChimeSession() },
-            makePlayer: { url in try AVChimeSound(contentsOf: url) },
-            report: report
-        )
-#else
+        if !TestAudioSuppression.isEnabled {
+            return CompletionChimeController(
+                resourceURL: resourceURL,
+                makeSession: { AVChimeSession() },
+                makePlayer: { url in try AVChimeSound(contentsOf: url) },
+                report: report
+            )
+        }
+#endif
         return CompletionChimeController(
             resourceURL: resourceURL,
             makeSession: { NoopChimeSession() },
             makePlayer: { _ in NoopChimeSound() },
             report: report
         )
-#endif
     }
 }
 
@@ -233,6 +234,7 @@ final class CompletionChimePlayer: NSObject {
     }
 
     func play() {
+        guard !TestAudioSuppression.isEnabled else { return }
 #if os(iOS)
         controller.play()
 #else

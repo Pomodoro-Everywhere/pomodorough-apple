@@ -110,6 +110,42 @@ struct AccountSwitchConfirmDiagnostics: Error, LocalizedError, Sendable {
     }
 }
 
+// R51-AP02: bounded account-switch cancel stage/outcome. Fixed stage
+// and outcome with quarantine and pending counts only. No titles,
+// account IDs, credentials, file payloads, or transport text.
+struct AccountSwitchCancelDiagnostics: Error, LocalizedError, Sendable {
+    enum Stage: String, Sendable { case credentials, persist }
+    enum Outcome: String, Sendable { case failed, uncertain }
+    let stage: Stage
+    let outcome: Outcome
+    let quarantined: Bool
+    let pendingOperations: Int
+
+    var key: String { "account-switch-cancel-\(stage.rawValue)-\(outcome.rawValue)" }
+    var errorDescription: String? {
+        "account-switch stage=cancel phase=\(stage.rawValue) outcome=\(outcome.rawValue) "
+            + "quarantined=\(quarantined) pending=\(pendingOperations)"
+    }
+}
+
+// R51-AP01: bounded sign-out stage/outcome. Fixed stage and outcome
+// with quarantine and pending counts only. No titles, account IDs,
+// credentials, file payloads, or transport text.
+struct SignOutDiagnostics: Error, LocalizedError, Sendable {
+    enum Stage: String, Sendable { case snapshot, credentials, publish }
+    enum Outcome: String, Sendable { case failed, uncertain }
+    let stage: Stage
+    let outcome: Outcome
+    let quarantined: Bool
+    let pendingOperations: Int
+
+    var key: String { "sign-out-\(stage.rawValue)-\(outcome.rawValue)" }
+    var errorDescription: String? {
+        "sign-out stage=\(stage.rawValue) outcome=\(outcome.rawValue) "
+            + "quarantined=\(quarantined) pending=\(pendingOperations)"
+    }
+}
+
 // R50-AP02: bounded bootstrap install outcome. Counts only, no timer
 // IDs, titles, account IDs, or response bodies.
 struct BootstrapInstallDiagnostics: Error, LocalizedError, Sendable {
@@ -857,10 +893,17 @@ final class AppModel {
                   let minutes = command.minutes else { return false }
             return setDurationMinutes(minutes, for: phase)
         default:
-            Self.logger.error("unknown watch command: \(command.name, privacy: .public)")
-            SentryCapture.captureOnce(key: "watch-command-unknown", error: WatchUnknownCommandError(name: command.name))
+            reportWatchUnknownCommand(nameCount: command.name.count)
             return false
         }
+    }
+
+    private func reportWatchUnknownCommand(nameCount: Int) {
+        let diagnostic = WatchUnknownCommandError(nameLength: nameCount)
+        if WatchSyncLogDedupe.shouldLog(key: "watch-command-unknown") {
+            Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        }
+        SentryCapture.captureOnce(key: "watch-command-unknown", error: diagnostic)
     }
 
     /// Revision comparison also rejects replays after a successful mutation,
@@ -1141,16 +1184,44 @@ final class AppModel {
         guard timerState.pendingAccountSwitchUser != nil, !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
+        errorMessage = nil
         if let failure = await accountSessionCoordinator.logout() {
             errorMessage = failure
+            reportAccountSwitchCancelFailure(stage: .credentials)
+            return
+        }
+        var proposed = timerState
+        proposed.pendingAccountSwitchUser = nil
+        let previous = timerState
+        let saved = accountSessionCoordinator.persistAtomically(
+            previous: previous,
+            proposed: proposed,
+            to: persistenceDestination(for: proposed),
+            rebuildsOnRollback: true
+        )
+        guard applyPersistenceTransition(saved) else {
+            reportAccountSwitchCancelFailure(stage: .persist)
+            errorMessage = String(localized: "Account switch cancellation paused because local data could not be saved.")
             return
         }
         guard let transition = accountSessionCoordinator.beginAccountSwitchCancellation(
             hasPendingAccountSwitch: true, isWorking: false
         ) else { return }
         applyAccountReset(transition)
-        timerState.pendingAccountSwitchUser = nil
-        persist()
+        errorMessage = nil
+    }
+
+    private func reportAccountSwitchCancelFailure(stage: AccountSwitchCancelDiagnostics.Stage) {
+        let quarantined = snapshotLoadFailure != nil
+        let outcome: AccountSwitchCancelDiagnostics.Outcome = quarantined ? .uncertain : .failed
+        let diagnostic = AccountSwitchCancelDiagnostics(
+            stage: stage,
+            outcome: outcome,
+            quarantined: quarantined,
+            pendingOperations: pendingChangeCount
+        )
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
     func signOut() {
@@ -1168,24 +1239,116 @@ final class AppModel {
         preservesBootstrapResolution: Bool
     ) async {
         defer { isWorking = false }
-        // The return workspace must be safe on disk before credentials are detached.
+        errorMessage = nil
         guard prepareSignedOutReturnState(preservesBootstrapResolution: preservesBootstrapResolution) else {
             return
         }
+        await quiesceCentralizedSyncForSignOut()
+        let previous = timerState
+        let proposal = signedOutProposal(preservesBootstrapResolution: preservesBootstrapResolution)
+        guard precommitSignedOutSnapshot(previous: previous, proposed: proposal.state) else {
+            return
+        }
         if let failure = await accountSessionCoordinator.logout() {
+            restoreAccountSnapshotAfterDetachFailure()
+            reportSignOutFailure(stage: .credentials)
             errorMessage = failure
             return
         }
+        finishSignedOutPublication(
+            preservesBootstrapResolution: preservesBootstrapResolution,
+            proposal: proposal,
+            previousTimerID: canonicalTimer?.id
+        )
+    }
+
+    private func signedOutProposal(
+        preservesBootstrapResolution: Bool
+    ) -> AccountLifecycleController.SignedOutStorageTransition {
+        accountSessionCoordinator.signedOutStorageTransition(
+            state: timerState,
+            replicationMode: replicationMode,
+            preservesBootstrapResolution: preservesBootstrapResolution,
+            activeReturnState: roomStore.activeReturnState
+        )
+    }
+
+    private func precommitSignedOutSnapshot(
+        previous: PersistedTimerState,
+        proposed: PersistedTimerState
+    ) -> Bool {
+        let precommit = accountSessionCoordinator.persistAtomically(
+            previous: previous,
+            proposed: proposed,
+            to: persistenceDestination(for: proposed),
+            rebuildsOnRollback: true
+        )
+        guard precommit.action.succeeded else {
+            _ = applyPersistenceTransition(precommit)
+            reportSignOutFailure(stage: .snapshot)
+            errorMessage = String(localized: "Sign-out paused because local data could not be saved.")
+            return false
+        }
+        return true
+    }
+
+    private func restoreAccountSnapshotAfterDetachFailure() {
+        guard persist() else {
+            reportSignOutFailure(stage: .snapshot)
+            return
+        }
+    }
+
+    private func reportSignOutFailure(stage: SignOutDiagnostics.Stage) {
+        let quarantined = snapshotLoadFailure != nil
+        let outcome: SignOutDiagnostics.Outcome = quarantined ? .uncertain : .failed
+        let diagnostic = SignOutDiagnostics(
+            stage: stage,
+            outcome: outcome,
+            quarantined: quarantined,
+            pendingOperations: pendingChangeCount
+        )
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+    }
+
+    private func quiesceCentralizedSyncForSignOut() async {
+        roomReplicationController.cancelCentralizedStreams()
+        applyCoordinatorPublication(accountSessionCoordinator.quiesce())
+        let task = centralizedSyncTask
+        task?.cancel()
+        _ = await task?.value
+    }
+
+    private func finishSignedOutPublication(
+        preservesBootstrapResolution: Bool,
+        proposal: AccountLifecycleController.SignedOutStorageTransition,
+        previousTimerID: String?
+    ) {
         guard let transition = accountSessionCoordinator.beginSignOut(
             isWorking: false,
             preservesBootstrapResolution: preservesBootstrapResolution,
             pendingStrategy: timerState.pendingBootstrapResolution?.strategy
-        ) else { return }
-        if !preservesBootstrapResolution, let timer = canonicalTimer {
-            cancelAlarm(timerID: timer.id)
+        ) else {
+            reportSignOutFailure(stage: .publish)
+            errorMessage = String(localized: "Sign-out paused because local data could not be saved.")
+            watchSync.push()
+            return
         }
         applyAccountReset(transition)
-        clearSignedOutState(preservesBootstrapResolution: preservesBootstrapResolution)
+        timerState = proposal.state
+        if proposal.rebuildsProjection { rebuildOptimisticState() }
+        if !preservesBootstrapResolution, let timerID = previousTimerID {
+            cancelAlarm(timerID: timerID)
+        }
+        guard persist() else {
+            reportSignOutFailure(stage: .publish)
+            errorMessage = String(localized: "Sign-out paused because local data could not be saved.")
+            watchSync.push()
+            return
+        }
+        errorMessage = nil
+        watchSync.push()
     }
 
     private func applyAccountReset(
@@ -1216,19 +1379,6 @@ final class AppModel {
             }
         }
         return true
-    }
-
-    private func clearSignedOutState(preservesBootstrapResolution: Bool) {
-        let transition = accountSessionCoordinator.signedOutStorageTransition(
-            state: timerState,
-            replicationMode: replicationMode,
-            preservesBootstrapResolution: preservesBootstrapResolution,
-            activeReturnState: roomStore.activeReturnState
-        )
-        timerState = transition.state
-        if transition.rebuildsProjection { rebuildOptimisticState() }
-        persist()
-        watchSync.push()
     }
 
     func deleteAccount(confirmation: String) async {

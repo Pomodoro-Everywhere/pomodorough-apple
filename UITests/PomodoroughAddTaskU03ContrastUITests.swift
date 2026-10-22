@@ -63,7 +63,7 @@ final class PomodoroughAddTaskU03ContrastUITests: XCTestCase {
     }
 
     private func makeU03App(contentSize: String?) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = silentTestApplication()
         app.launchArguments = [
             "-permission-introduction-completed-v1", "YES",
             "-AppleLanguages", "(en)",
