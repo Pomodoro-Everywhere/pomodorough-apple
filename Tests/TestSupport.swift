@@ -1638,6 +1638,14 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             || scenario.hasPrefix("apple-api-coverage-model-sign-in"):
             statusCode = 204
             body = Data()
+        case let (scenario, "/api/v1/auth/logout") where scenario.hasPrefix("apple-api-coverage-model-cancel"):
+            // Account-switch cancellation detaches a logout-revocation
+            // obligation as a side effect; without a stubbed revocation the
+            // retry loop outlives session invalidation and aborts the host
+            // (task created on an invalidated session). Cancel tests never
+            // assert revocation behavior, so report success and drain.
+            statusCode = 204
+            body = Data()
         case ("apple-api-coverage-exchange-save-me", "/api/v1/auth/google/exchange"),
              ("apple-api-coverage-exchange-save-failure", "/api/v1/auth/google/exchange"):
             statusCode = 200
