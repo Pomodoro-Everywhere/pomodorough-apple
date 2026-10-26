@@ -132,7 +132,7 @@ struct AccountSwitchCancelDiagnostics: Error, LocalizedError, Sendable {
 // with quarantine and pending counts only. No titles, account IDs,
 // credentials, file payloads, or transport text.
 struct SignOutDiagnostics: Error, LocalizedError, Sendable {
-    enum Stage: String, Sendable { case snapshot, credentials, publish }
+    enum Stage: String, Sendable { case snapshot, localSnapshot, roomSnapshot, credentials, publish }
     enum Outcome: String, Sendable { case failed, uncertain }
     let stage: Stage
     let outcome: Outcome
@@ -143,6 +143,17 @@ struct SignOutDiagnostics: Error, LocalizedError, Sendable {
     var errorDescription: String? {
         "sign-out stage=\(stage.rawValue) outcome=\(outcome.rawValue) "
             + "quarantined=\(quarantined) pending=\(pendingOperations)"
+    }
+}
+
+// R52-AP02: bounded sign-out mutation-refusal outcome. Pending count
+// only; no titles, account IDs, credentials, or transport text.
+struct SignOutMutationRefusedDiagnostics: Error, LocalizedError, Sendable {
+    let pendingOperations: Int
+
+    var key: String { "sign-out-mutation-refused" }
+    var errorDescription: String? {
+        "sign-out stage=mutation outcome=refused pending=\(pendingOperations)"
     }
 }
 
@@ -233,6 +244,11 @@ final class AppModel {
     private(set) var history: [HistoryItem] = []
     private(set) var tasks: [FocusTask] = []
     private(set) var isWorking = false
+    // R52-AP02: sign-out transition fence. Set synchronously in signOut()
+    // before the async transition starts; cleared when persistLogoutThenReset
+    // returns on every path, so it covers precommit, credential detachment,
+    // failure recovery, and final publication.
+    private var isSignOutTransitionActive = false
     private(set) var isSyncing = false
     private(set) var isOffline = false
     private(set) var conflictMessage: String?
@@ -760,6 +776,7 @@ final class AppModel {
             || accountDeletionPurgeState != nil
             || isHistoryResolutionBlocking
             || pendingAccountSwitchUser != nil
+            || isSignOutTransitionActive
     }
     var hasPendingAccountDeletionRecovery: Bool { accountDeletionPurgeState != nil }
     /// Offline escape from failed history preflight (R43-AP05). Allowed only
@@ -818,6 +835,22 @@ final class AppModel {
 
     func durationMinutes(for phase: TimerPhase) -> Int { timerState.settings.minutes(for: phase) }
 
+    // R52-AP03: current workspace epoch for deferred Watch settings. Created
+    // once and persisted, so a restart keeps the epoch and same-workspace
+    // retries stay accepted; rotated at ownership changes, so deferred
+    // settings from a previous workspace are rejected as stale.
+    private var watchWorkspaceGeneration: UUID {
+        if let raw = defaults.string(forKey: Self.watchWorkspaceGenerationKey),
+           let existing = UUID(uuidString: raw) { return existing }
+        let created = UUID()
+        defaults.set(created.uuidString, forKey: Self.watchWorkspaceGenerationKey)
+        return created
+    }
+
+    private func rotateWatchWorkspaceGeneration() {
+        defaults.set(UUID().uuidString, forKey: Self.watchWorkspaceGenerationKey)
+    }
+
     func makeWatchSnapshot() -> WatchTimerSnapshot {
         let settings = timerState.settings
         let nowDate = now()
@@ -832,6 +865,7 @@ final class AppModel {
                 phase: timer.phase.rawValue,
                 status: status,
                 timerId: timer.id,
+                workspaceGeneration: watchWorkspaceGeneration,
                 timerRevision: WatchTimerRevision(
                     timerId: timer.id,
                     intentId: timer.lastIntent?.commandId,
@@ -856,6 +890,7 @@ final class AppModel {
         return WatchTimerSnapshot(
             phase: selected.rawValue,
             status: "idle",
+            workspaceGeneration: watchWorkspaceGeneration,
             plannedDurationMs: planned,
             elapsedAtAnchorMs: 0,
             anchorAt: nowDate,
@@ -886,9 +921,11 @@ final class AppModel {
         case "finish":
             return applyWatchFinishCommand(command)
         case "selectPhase":
+            guard isWatchSettingsWorkspaceCurrent(command, isDeferred: isDeferred) else { return false }
             guard let raw = command.phase, let phase = TimerPhase(rawValue: raw) else { return false }
             return selectPhase(phase)
         case "setDuration":
+            guard isWatchSettingsWorkspaceCurrent(command, isDeferred: isDeferred) else { return false }
             guard let raw = command.phase, let phase = TimerPhase(rawValue: raw),
                   let minutes = command.minutes else { return false }
             return setDurationMinutes(minutes, for: phase)
@@ -913,6 +950,39 @@ final class AppModel {
               let expected = command.expectedTimerRevision,
               activeTimer?.id == target else { return false }
         return makeWatchSnapshot().timerRevision == expected
+    }
+
+    // R52-AP03: deferred settings must prove their workspace epoch. A queued
+    // setting from a previous workspace (or a legacy command with no epoch)
+    // is rejected with a corrective push instead of mutating the new
+    // workspace. Live legacy commands stay accepted so older watch apps keep
+    // working while connected; a live command carrying a mismatched epoch is
+    // still stale and rejected. Never uses sentAt, the Watch clock, or the
+    // timer revision to identify an idle workspace.
+    private func isWatchSettingsWorkspaceCurrent(
+        _ command: WatchTimerCommand,
+        isDeferred: Bool
+    ) -> Bool {
+        if let offered = command.workspaceGeneration {
+            guard offered == watchWorkspaceGeneration else {
+                reportWatchStaleWorkspace()
+                return false
+            }
+            return true
+        }
+        guard !isDeferred else {
+            reportWatchStaleWorkspace()
+            return false
+        }
+        return true
+    }
+
+    private func reportWatchStaleWorkspace() {
+        let diagnostic = WatchStaleWorkspaceError()
+        if WatchSyncLogDedupe.shouldLog(key: "watch-command-stale-workspace") {
+            Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        }
+        SentryCapture.captureOnce(key: "watch-command-stale-workspace", error: diagnostic)
     }
 
     private func reportWatchPauseRefusal() {
@@ -985,7 +1055,10 @@ final class AppModel {
 
     @discardableResult
     func addTask(_ title: String) async -> Bool {
-        guard !isWorkspaceMutationBlocked else { return false }
+        guard !isWorkspaceMutationBlocked else {
+            refuseWorkspaceMutationDuringSignOut()
+            return false
+        }
         let task: FocusTask
         do {
             let core = try taskIdentityCore ?? taskIdentityCoreProvider()
@@ -1009,7 +1082,10 @@ final class AppModel {
     }
 
     func deleteTask(id: UUID) {
-        guard !isWorkspaceMutationBlocked else { return }
+        guard !isWorkspaceMutationBlocked else {
+            refuseWorkspaceMutationDuringSignOut()
+            return
+        }
         guard let task = tasks.first(where: { $0.id == id }) else { return }
         _ = enqueueTaskOperation(.delete, task: task)
     }
@@ -1159,6 +1235,9 @@ final class AppModel {
         }
         applyCoordinatorPublication(accountSessionCoordinator.finishConfirmedAccountSwitch())
         rebuildOptimisticState()
+        // R52-AP03: confirmed switch starts a new workspace epoch so deferred
+        // Watch settings from the previous account are rejected as stale.
+        rotateWatchWorkspaceGeneration()
         reconcileAlarm(
             from: previousTimer,
             to: activeTimer,
@@ -1228,6 +1307,7 @@ final class AppModel {
         guard snapshotLoadFailure == nil, !isWorking else { return }
         let preservesBootstrapResolution = timerState.cachedUser == nil && timerState.bootstrapUser != nil
         isWorking = true
+        isSignOutTransitionActive = true
         Task {
             await persistLogoutThenReset(
                 preservesBootstrapResolution: preservesBootstrapResolution
@@ -1238,7 +1318,10 @@ final class AppModel {
     private func persistLogoutThenReset(
         preservesBootstrapResolution: Bool
     ) async {
-        defer { isWorking = false }
+        defer {
+            isSignOutTransitionActive = false
+            isWorking = false
+        }
         errorMessage = nil
         guard prepareSignedOutReturnState(preservesBootstrapResolution: preservesBootstrapResolution) else {
             return
@@ -1285,7 +1368,7 @@ final class AppModel {
         )
         guard precommit.action.succeeded else {
             _ = applyPersistenceTransition(precommit)
-            reportSignOutFailure(stage: .snapshot)
+            reportSignOutFailure(stage: replicationMode == .iroh ? .roomSnapshot : .snapshot)
             errorMessage = String(localized: "Sign-out paused because local data could not be saved.")
             return false
         }
@@ -1310,6 +1393,18 @@ final class AppModel {
         )
         Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+    }
+
+    // R52-AP02: reports a domain mutation refused while the sign-out
+    // transition owns the workspace. Bounded pending count only.
+    private func refuseWorkspaceMutationDuringSignOut() {
+        guard isSignOutTransitionActive else { return }
+        let diagnostic = SignOutMutationRefusedDiagnostics(pendingOperations: pendingChangeCount)
+        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        if errorMessage == nil {
+            errorMessage = String(localized: "Sign-out is in progress. Changes are paused until it finishes.")
+        }
     }
 
     private func quiesceCentralizedSyncForSignOut() async {
@@ -1347,6 +1442,9 @@ final class AppModel {
             watchSync.push()
             return
         }
+        // R52-AP03: signed-out workspace starts a new epoch so deferred Watch
+        // settings queued before sign-out are rejected instead of mutating it.
+        rotateWatchWorkspaceGeneration()
         errorMessage = nil
         watchSync.push()
     }
@@ -1369,14 +1467,33 @@ final class AppModel {
             activeReturnState: roomStore.activeReturnState
         )
         if let returnState = transition.irohReturnState {
+            guard precommitSignedOutLocalFallback(returnState) else { return false }
             do {
                 try roomStore.replaceActiveReturnState(returnState)
             } catch {
+                reportSignOutFailure(stage: .roomSnapshot)
                 Self.logger.error("prepareSignedOutReturnState return-state failed: \(error.localizedDescription, privacy: .public)")
                 SentryCapture.captureOnce(key: "sign-out-return-state", error: error)
                 errorMessage = String(localized: "Sign-out paused because its recovery state could not be saved.")
                 return false
             }
+        }
+        return true
+    }
+
+    private func precommitSignedOutLocalFallback(_ state: PersistedTimerState) -> Bool {
+        // The local snapshot remains reachable when room secrets are unavailable.
+        // Commit the safe return workspace without installing it over the shared room.
+        let saved = persistence.persist(state, to: .local)
+        guard saved.succeeded else {
+            snapshotLoadFailure = persistence.snapshotLoadFailure
+            if snapshotLoadFailure != nil {
+                roomReplicationController.cancelRetry()
+                roomReplicationController.cancelCentralizedStreams()
+            }
+            reportSignOutFailure(stage: .localSnapshot)
+            errorMessage = String(localized: "Sign-out paused because local data could not be saved.")
+            return false
         }
         return true
     }
@@ -1552,6 +1669,8 @@ final class AppModel {
         history = []
         tasks = []
         completionAlertTimerID = nil
+        // R52-AP03: deleted account's workspace epoch ends here.
+        rotateWatchWorkspaceGeneration()
         watchSync.push()
     }
 
@@ -2564,7 +2683,10 @@ final class AppModel {
         replicationMode = target
         defaults.set(target.rawValue, forKey: Self.replicationModeKey)
         adoptRoomWorkspace(state)
-        persist()
+        guard persist() else {
+            errorMessage = conflictMessage
+            return
+        }
         if target == .centralized, let user {
             await completeAuthenticatedSession(
                 user: user,
@@ -2687,7 +2809,10 @@ final class AppModel {
         defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
         roomInvite = nil
         adoptRoomWorkspace(state)
-        persist()
+        guard persist() else {
+            errorMessage = conflictMessage
+            return
+        }
     }
 
     func syncIrohNow() async {
@@ -2779,7 +2904,10 @@ final class AppModel {
             guard let transition = try workspaceMutationController.plan(
                 intent,
                 from: mutationSnapshot()
-            ) else { return false }
+            ) else {
+                refuseWorkspaceMutationDuringSignOut()
+                return false
+            }
             let applied = applyWorkspaceMutation(transition)
             if applied { watchSync.push() }
             return applied
@@ -3002,6 +3130,9 @@ final class AppModel {
         let previousTimer = canonicalTimer
         timerState = state
         rebuildOptimisticState()
+        // R52-AP03: room ownership changed, so deferred Watch settings from
+        // the previous workspace are rejected as stale from here on.
+        rotateWatchWorkspaceGeneration()
         reconcileAlarm(
             from: previousTimer,
             to: canonicalTimer,
@@ -3714,6 +3845,10 @@ final class AppModel {
     private static let accountDeletionRoomIDsKey = "account-deletion-room-ids-v1"
     private static let permissionIntroductionKey = "permission-introduction-completed-v1"
     private static let replicationModeKey = "replication-mode-v1"
+    // R52-AP03: phone-owned workspace epoch binding deferred Watch settings
+    // to the workspace that was current when the watch built them. Rotated
+    // at account and room ownership changes; persisted across restarts.
+    private static let watchWorkspaceGenerationKey = "watch-workspace-generation-v1"
 
     private static var platform: String {
 #if os(iOS)

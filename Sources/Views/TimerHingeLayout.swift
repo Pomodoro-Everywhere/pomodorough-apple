@@ -107,4 +107,21 @@ struct TimerHingeLayout: Equatable {
     ) -> Bool {
         verticalDivisionThroughContainer(containerSize: containerSize, divisions: divisions)
     }
+
+    /// R52-U02 aside secondary spacing: the production VStack spacing inside
+    /// the Book scroll recovery. Shared with the card so tests pin the value
+    /// the repaired stacking is measured against.
+    static let bookAsideLandscapeSpacing: CGFloat = 12
+    static let bookAsidePortraitSpacing: CGFloat = 14
+
+    /// R52-U02 repaired Start frame: keeps its measured size and sits at
+    /// title.maxY plus the aside spacing, inside the same usable panel.
+    static func stackedStartFrame(title: CGRect, start: CGRect, spacing: CGFloat) -> CGRect {
+        CGRect(x: start.minX, y: title.maxY + spacing, width: start.width, height: start.height)
+    }
+
+    /// True when Start clears the title with exactly the aside spacing.
+    static func startStackedBelowTitle(title: CGRect, start: CGRect, spacing: CGFloat) -> Bool {
+        !title.intersects(start) && abs(start.minY - (title.maxY + spacing)) < 0.01
+    }
 }

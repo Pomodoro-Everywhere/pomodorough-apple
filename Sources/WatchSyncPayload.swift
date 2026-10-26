@@ -39,6 +39,11 @@ struct WatchTimerSnapshot: Codable, Equatable, Sendable {
     /// phone reject delayed watch commands aimed at a previous timer.
     /// Defaults nil so snapshots from older iOS apps still decode.
     var timerId: String? = nil
+    /// Phone-owned workspace epoch binding deferred settings to the
+    /// workspace that was current when the watch built the command
+    /// (R52-AP03). Nil for snapshots from older iOS apps; defaults nil so
+    /// they still decode.
+    var workspaceGeneration: UUID? = nil
     var timerRevision: WatchTimerRevision? = nil
     var plannedDurationMs: Int64
     var elapsedAtAnchorMs: Int64
@@ -85,6 +90,7 @@ extension WatchTimerSnapshot {
         status = try container.decode(String.self, forKey: .status)
         sequence = try container.decodeIfPresent(UInt64.self, forKey: .sequence) ?? 0
         timerId = try container.decodeIfPresent(String.self, forKey: .timerId)
+        workspaceGeneration = try container.decodeIfPresent(UUID.self, forKey: .workspaceGeneration)
         timerRevision = try container.decodeIfPresent(WatchTimerRevision.self, forKey: .timerRevision)
         plannedDurationMs = try container.decode(Int64.self, forKey: .plannedDurationMs)
         elapsedAtAnchorMs = try container.decode(Int64.self, forKey: .elapsedAtAnchorMs)
@@ -104,6 +110,10 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
     /// Target canonical timer id for pause/resume/finish; nil for start,
     /// selectPhase, setDuration and for payloads from older watch apps.
     var timerId: String? = nil
+    /// Phone-owned workspace epoch copied from the last snapshot the watch
+    /// had adopted when it built the command (R52-AP03). Nil for commands
+    /// from older watch apps; defaults nil so they still decode.
+    var workspaceGeneration: UUID? = nil
     /// Compare-and-set precondition from the phone's last snapshot.
     var expectedTimerRevision: WatchTimerRevision? = nil
     /// "start" | "pause" | "resume" | "finish" | "selectPhase" | "setDuration".
@@ -123,6 +133,7 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
         id: UUID = UUID(),
         timerId: String? = nil,
         expectedTimerRevision: WatchTimerRevision? = nil,
+        workspaceGeneration: UUID? = nil,
         name: String,
         phase: String? = nil,
         minutes: Int? = nil,
@@ -131,6 +142,7 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
         self.id = id
         self.timerId = timerId
         self.expectedTimerRevision = expectedTimerRevision
+        self.workspaceGeneration = workspaceGeneration
         self.name = name
         self.phase = phase
         self.minutes = minutes
@@ -143,6 +155,7 @@ struct WatchTimerCommand: Codable, Equatable, Sendable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         timerId = try container.decodeIfPresent(String.self, forKey: .timerId)
         expectedTimerRevision = try container.decodeIfPresent(WatchTimerRevision.self, forKey: .expectedTimerRevision)
+        workspaceGeneration = try container.decodeIfPresent(UUID.self, forKey: .workspaceGeneration)
         name = try container.decode(String.self, forKey: .name)
         phase = try container.decodeIfPresent(String.self, forKey: .phase)
         minutes = try container.decodeIfPresent(Int.self, forKey: .minutes)
@@ -226,6 +239,16 @@ extension WatchFinishRefusedError: LocalizedError {
     var errorDescription: String? { "finish" }
 }
 
+/// Deferred settings refused at a changed workspace epoch: fixed reason
+/// only, never generations, timer ids, revisions, or settings content.
+/// Distinct from unknown-command so transport receipt separates a stale
+/// workspace from unknown vocabulary.
+struct WatchStaleWorkspaceError: Error, Sendable {}
+
+extension WatchStaleWorkspaceError: LocalizedError {
+    var errorDescription: String? { "stale_workspace" }
+}
+
 /// Watch ingest ordering: a delayed refresh reply must not overwrite a
 /// newer application-context snapshot adopted earlier. A changed install
 /// seed (high 32 bits) always adopts, so a reinstall — or an epoch
@@ -284,6 +307,23 @@ func nextWatchSnapshotSequence(
     return ((UInt64(seed + 1) << 32) | 1, seed + 1, 1)
 }
 
+/// Attaches the phone-owned workspace epoch to settings commands so the
+/// phone can reject deferred settings aimed at a previous workspace
+/// (R52-AP03). Timer controls keep their revision guard and are untouched.
+/// A nil snapshot (or a legacy snapshot without an epoch) leaves a legacy
+/// command: live delivery stays accepted, deferred delivery is rejected
+/// as stale by the phone. Pure so the macOS/iOS unit-test bundle covers
+/// the watch decision without a host.
+func stampWatchSettingsCommand(
+    _ command: WatchTimerCommand,
+    snapshot: WatchTimerSnapshot?
+) -> WatchTimerCommand {
+    guard ["selectPhase", "setDuration"].contains(command.name) else { return command }
+    var stamped = command
+    stamped.workspaceGeneration = snapshot?.workspaceGeneration
+    return stamped
+}
+
 /// Attaches the snapshot's compare-and-set revision to timer controls.
 /// Returns nil when no snapshot can ground the control. Pure so the
 /// macOS/iOS unit-test bundle covers the watch decision without a host.
@@ -328,8 +368,9 @@ func planWatchCommandSend(
     guard let stamped = stampWatchTimerControl(command, snapshot: snapshot) else {
         return .fail(.ungrounded)
     }
-    if isReachable { return .live(stamped) }
-    return .queued(stamped)
+    let bound = stampWatchSettingsCommand(stamped, snapshot: snapshot)
+    if isReachable { return .live(bound) }
+    return .queued(bound)
 }
 
 /// Live-send failure decision: Start never queues, others fall back ordered.

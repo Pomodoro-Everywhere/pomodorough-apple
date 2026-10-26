@@ -470,8 +470,11 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                 do {
                     try alarms.cancel(id: alarmID)
                 } catch {
-                    notifications.remove(identifier: notificationID)
-                    throw error
+                    // R52-AP04: the notification fallback is confirmed scheduled.
+                    // Keep it so the timer still alerts; a stale alarm may
+                    // duplicate once and is retried on the next alarm operation.
+                    Self.logger.error("alarm cleanup failed, keeping notification fallback: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.captureOnce(key: "timer-alarm-cleanup-fallback", error: error)
                 }
             }
         }
@@ -515,8 +518,9 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                 do {
                     try alarms.cancel(id: alarmID)
                 } catch {
-                    notifications.remove(identifier: notificationID)
-                    throw error
+                    // R52-AP04: same keep-fallback policy as schedule.
+                    Self.logger.error("alarm cleanup failed, keeping notification fallback: \(error.localizedDescription, privacy: .public)")
+                    SentryCapture.captureOnce(key: "timer-alarm-cleanup-fallback", error: error)
                 }
             }
         }

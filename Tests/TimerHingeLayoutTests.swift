@@ -181,4 +181,70 @@ struct TimerHingeLayoutTests {
         #expect(picker.minY < primary.minY)
         #expect(primary.minY < secondary.minY)
     }
+
+    // R52-U02: Book at XXXL routes portrait (accessible layout), so the
+    // selected title and Start live in the portrait aside secondary.
+    // Pins routing into the scroll-recovery path; a landscape reroute
+    // would silently leave the fixed unit.
+    @Test func bookXXXLRoutesIntoPortraitAside() {
+        #if os(macOS)
+        // macOS TimerLayout is always landscape; the Book portrait
+        // aside path is iOS-only. Pin that contract so this shared
+        // target stays green on macOS 13/14.
+        #expect(TimerLayout(size: Self.bookContainer, usesAccessibleLayout: true) == .landscape)
+        #else
+        #expect(TimerLayout(size: Self.bookContainer, usesAccessibleLayout: true) == .portrait)
+        #endif
+        #expect(TimerHingeLayout.shouldPlaceDialAsideControls(
+            containerSize: Self.bookContainer, divisions: Self.bookDivisions))
+    }
+
+    // R52-U02: the settled audit pair intersects by ~14.3pt (title
+    // bottom 371.3 vs Start top 357). The repaired unit keeps the
+    // title at its measured intrinsic height and stacks Start below
+    // it with the production portrait aside spacing, inside the
+    // right usable panel without crossing the division. The repaired
+    // frame comes from production stacking, so removing the repair
+    // (returning Start unchanged) reintroduces the intersect and fails.
+    @Test func bookSelectedTitleStacksAboveStartWithoutOverlap() {
+        let panels = TimerHingeLayout.usablePanels(
+            containerSize: Self.bookContainer, divisions: Self.bookDivisions)
+        #expect(panels.count == 2)
+        // Measured pre-fix frames from the settled Book XXXL
+        // hierarchy (review R52-U02): the baseline must intersect.
+        let observedTitle = CGRect(x: 509.5, y: 184, width: 172, height: 187.3)
+        let observedStart = CGRect(x: 495.7, y: 357, width: 339.3, height: 93.3)
+        #expect(observedTitle.intersects(observedStart))
+        let spacing = TimerHingeLayout.bookAsidePortraitSpacing
+        #expect(spacing == 14)
+        let title = observedTitle
+        let start = TimerHingeLayout.stackedStartFrame(
+            title: title, start: observedStart, spacing: spacing)
+        // The pre-fix absolute Start position violates the stacking.
+        #expect(observedStart.minY < title.maxY + spacing)
+        #expect(TimerHingeLayout.startStackedBelowTitle(
+            title: title, start: start, spacing: spacing))
+        #expect(!TimerHingeLayout.startStackedBelowTitle(
+            title: title, start: observedStart, spacing: spacing))
+        for frame in [title, start] {
+            #expect(panels[1].contains(frame))
+            #expect(!TimerHingeLayout.controlRowSpansFold(
+                controlFrame: frame, divisions: Self.bookDivisions))
+        }
+    }
+
+    // R52-U02 scroll recovery pin: both Book aside secondaries (landscape
+    // and portrait) keep the ScrollView. Reverting either to a fixed stack
+    // reintroduces the XXXL overlap; this ungated source assertion fails
+    // without the simulator pose driver the gated UI test needs.
+    @Test func bookAsideSecondariesKeepScrollRecovery() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Sources/Views/TimerMachineCard.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.components(separatedBy: "ScrollView {").count - 1 == 2)
+        #expect(source.contains("bookAsideLandscapeSpacing"))
+        #expect(source.contains("bookAsidePortraitSpacing"))
+    }
 }

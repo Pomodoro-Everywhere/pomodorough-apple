@@ -296,6 +296,7 @@ final class AccountLifecycleController {
         if replicationMode == .iroh {
             var signedOut = state
             signedOut.cachedUser = nil
+            signedOut.pendingAccountSwitchUser = nil
             signedOut.bootstrapUser = nil
             signedOut.pendingBootstrapResolution = nil
             var returnState = activeReturnState ?? .fresh()

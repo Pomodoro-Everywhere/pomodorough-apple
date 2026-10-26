@@ -228,11 +228,18 @@ private struct TimerMachineIOSLandscapeCard: View {
                 TimerMachineDialSection(model: model, layout: .landscape)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } secondary: {
-                VStack(spacing: 12) {
-                    TimerTaskPicker(model: model, layout: layout)
-                    TimerControls(model: model, layout: layout, hinge: hinge)
+                // R52-U02 scroll recovery: the intrinsic multiline title
+                // plus controls exceed the Book panel at XXXL, and a fixed
+                // stack overlaps Start. The scroll sizes content to its
+                // intrinsic height and scrolls only when needed.
+                ScrollView {
+                    VStack(spacing: TimerHingeLayout.bookAsideLandscapeSpacing) {
+                        TimerTaskPicker(model: model, layout: layout)
+                        TimerControls(model: model, layout: layout, hinge: hinge)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .arrangementViewStyle(.split.axes(.horizontal))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -301,11 +308,17 @@ private struct TimerMachineIOSPortraitCard: View {
                 TimerMachineDialSection(model: model, layout: layout)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } secondary: {
-                VStack(spacing: 14) {
-                    TimerTaskPicker(model: model, layout: layout)
-                    TimerControls(model: model, layout: layout, compact: usesCompactDial, hinge: hinge)
+                // R52-U02 scroll recovery: same overflow as landscape.
+                // The outer card scroll grows with content when unbounded;
+                // the inner scroll takes over when the panel is bounded.
+                ScrollView {
+                    VStack(spacing: TimerHingeLayout.bookAsidePortraitSpacing) {
+                        TimerTaskPicker(model: model, layout: layout)
+                        TimerControls(model: model, layout: layout, compact: usesCompactDial, hinge: hinge)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .arrangementViewStyle(.split.axes(.horizontal))
             .frame(maxWidth: .infinity, maxHeight: .infinity)

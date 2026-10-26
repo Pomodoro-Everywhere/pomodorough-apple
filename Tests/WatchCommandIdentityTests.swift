@@ -610,7 +610,17 @@ struct R49AP05WatchSettingsCommitTests {
         let command = fixture.command(name)
         #expect(command.timerId == nil)
         #expect(command.expectedTimerRevision == nil)
-        let accepted = fixture.model.applyWatchCommand(command, isDeferred: true)
+        // R52-AP03: deferred settings carry the workspace epoch stamped by
+        // the production send planner; same-workspace delivery stays accepted.
+        let snapshot = fixture.model.makeWatchSnapshot()
+        let planned = planWatchCommandSend(
+            command, snapshot: snapshot, isActivated: true, isReachable: false)
+        guard case .queued(let queued) = planned else {
+            Issue.record("settings plan queues while unreachable")
+            return
+        }
+        #expect(queued.workspaceGeneration == snapshot.workspaceGeneration)
+        let accepted = fixture.model.applyWatchCommand(queued, isDeferred: true)
         #expect(accepted)
         try fixture.expectCommitted(name, previous: before, active: false)
     }

@@ -1251,6 +1251,45 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         print("AP09_OBSERVED unassigned=\(unassignedHeight) short=\(shortHeight) long=\(longHeight)")
     }
 
+    /// R52-U02: Duo Book at XXXL must keep the selected task title out
+    /// of Start. The settled audit pair intersected by ~14.3pt with
+    /// `Write release notes`. The aside secondary now sizes the picker
+    /// to its intrinsic height and scrolls the combined unit when the
+    /// panel is bounded. Requires the external Duo Book pose driver,
+    /// same gate as the Duo navigation test.
+    func testDuoBookSelectedTitleAvoidsStartAtXXXL() throws {
+        let env = ProcessInfo.processInfo.environment
+        let pose = env["TEST_RUNNER_POMODOROUGH_DUO_POSE"] ?? env["POMODOROUGH_DUO_POSE"]
+        try XCTSkipUnless(pose == "Book", "Requires external Duo Book pose driver")
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        defer { app.terminate() }
+        launchAndWaitForTimer(app)
+        try assertPickerAvoidsStart(app, state: "U02-Unassigned", title: "Unassigned")
+        let title = "Write release notes"
+        createTaskForDeletionTest(named: title, in: app)
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
+        selectPickerTask(named: title, in: app)
+        try assertPickerAvoidsStart(app, state: "U02-selected", title: title)
+    }
+
+    private func assertPickerAvoidsStart(_ app: XCUIApplication, state: String, title: String) throws {
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "Missing picker Focus task")
+        XCTAssertTrue(picker.label.contains(title), "picker must show \(title), got \(picker.label)")
+        let start = app.buttons["Start focus"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10), "Missing Start focus")
+        print("U02_OBSERVED \(state) picker=\(picker.frame) start=\(start.frame)")
+        attachNavigationEvidence("U02-Book-XXXL-\(state)", in: app)
+        XCTAssertFalse(picker.frame.intersects(start.frame),
+                       "title overlaps Start: picker=\(picker.frame) start=\(start.frame)")
+        XCTAssertLessThanOrEqual(picker.frame.maxY, start.frame.minY,
+                                "title must stack above Start: picker=\(picker.frame) start=\(start.frame)")
+        XCTAssertTrue(start.isHittable, "Start not hittable at Book XXXL")
+    }
+
     private func pickerGlyphHeight(shot: String, in app: XCUIApplication) -> CGFloat {
         let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "Missing picker Focus task")

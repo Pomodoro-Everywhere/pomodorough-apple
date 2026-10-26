@@ -92,14 +92,23 @@ struct HistoryScreen: View {
         .accessibilityHint("Shows completed focus time by task")
     }
 
+    /// R52-U01 style chain pin: the breakdown label foreground. Tests resolve
+    /// this exact Color in both appearances and walk the label for it, so a
+    /// revert to hierarchical `.secondary` breaks them.
+    static var completedFocusBreakdownForeground: Color { PomodoroughTheme.signalText }
+
     private var completedRunCount: Int {
         model.history.count { $0.phase == .focus && $0.status == "completed" }
     }
 
-    private var completedFocusBreakdownLabel: some View {
+    var completedFocusBreakdownLabel: some View {
         Text("Completed focus: \(completedRunCount)")
             .font(.caption.weight(.medium).monospacedDigit())
-            .foregroundStyle(.secondary)
+            // R52-U01: opaque fill-derived foreground. `.secondary` is
+            // hierarchical and renders the inherited signal tint at
+            // secondary opacity (~1.76:1 on white); signalText keeps
+            // darkened signal in light and vivid signal in dark.
+            .foregroundStyle(Self.completedFocusBreakdownForeground)
             .padding(.horizontal, 8)
             .contentTransition(.numericText())
     }

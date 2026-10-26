@@ -13,8 +13,12 @@ dist/
 *.xcuserstate
 xcuserdata/
 .env
+.env.*
 *.p12
 *.p8
+*.key
+*.pem
+*.log
 GoogleService-Info.plist
 Supporting/SentryDSN.local
 *.mobileprovision
