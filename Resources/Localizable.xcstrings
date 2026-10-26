@@ -4000,6 +4000,9 @@
           }
         }
       }
+    },
+    "Sign-out is in progress. Changes are paused until it finishes." : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign-out is in progress. Changes are paused until it finishes." } } }
     }
   },
   "version" : "1.0"

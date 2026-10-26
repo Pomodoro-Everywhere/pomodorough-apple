@@ -2831,7 +2831,8 @@
     "pending=%arg/%arg/%arg/": { "stringUnit": { "state": "translated", "value": "‏⟦pending=%arg/%arg/%arg/⟧" } },
     "%arg/%arg queued=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦%arg/%arg queued=%arg ⟧" } },
     "applied=%arg ignoredRetarget=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦applied=%arg ignoredRetarget=%arg ⟧" } },
-    "core=%arg": { "stringUnit": { "state": "translated", "value": "‏⟦core=%arg⟧" } }
+    "core=%arg": { "stringUnit": { "state": "translated", "value": "‏⟦core=%arg⟧" } },
+    "Sign-out is in progress. Changes are paused until it finishes.": { "stringUnit": { "state": "translated", "value": "‏⟦Sign-out is in progress. Changes are paused until it finishes.⟧" } }
   },
   "version": 1
 }

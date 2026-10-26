@@ -22,6 +22,7 @@ CLASSIFIED_MEMBERS = (
     ("Sources/RoomReplicationController.swift", "IrohForegroundSyncDiagnostics", "errorDescription"),
     ("Sources/AppModel.swift", "AccountSwitchCancelDiagnostics", "errorDescription"),
     ("Sources/AppModel.swift", "SignOutDiagnostics", "errorDescription"),
+    ("Sources/AppModel.swift", "SignOutMutationRefusedDiagnostics", "errorDescription"),
     ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"),
 )
 
