@@ -201,11 +201,9 @@ struct WatchUnknownCommandError: Error, Sendable {
     }
 }
 
-extension WatchUnknownCommandError: LocalizedError, FixedTaxonomyDiagnostic {
+extension WatchUnknownCommandError: LocalizedError {
     // Fixed reason plus capped length: no raw unknown string retained.
     var errorDescription: String? { "unknown_command len=\(nameLength)" }
-    var diagnosticIdentity: String { "WatchCommand.unknown" }
-    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 /// Pause refused after current-target validation: bare name only, never
@@ -213,40 +211,32 @@ extension WatchUnknownCommandError: LocalizedError, FixedTaxonomyDiagnostic {
 /// so transport receipt separates vocabulary from application failure.
 struct WatchPauseRefusedError: Error, Sendable {}
 
-extension WatchPauseRefusedError: LocalizedError, FixedTaxonomyDiagnostic {
+extension WatchPauseRefusedError: LocalizedError {
     var errorDescription: String? { "pause" }
-    var diagnosticIdentity: String { "WatchRefusal.pause" }
-    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 /// Start refused after commit attempt: bare name only, never timer ids,
 /// revisions, or snapshots. Mirrors Pause refusal separation.
 struct WatchStartRefusedError: Error, Sendable {}
 
-extension WatchStartRefusedError: LocalizedError, FixedTaxonomyDiagnostic {
+extension WatchStartRefusedError: LocalizedError {
     var errorDescription: String? { "start" }
-    var diagnosticIdentity: String { "WatchRefusal.start" }
-    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 /// Resume refused after current-target validation: bare name only, never
 /// timer ids, revisions, or snapshots. Mirrors Pause refusal separation.
 struct WatchResumeRefusedError: Error, Sendable {}
 
-extension WatchResumeRefusedError: LocalizedError, FixedTaxonomyDiagnostic {
+extension WatchResumeRefusedError: LocalizedError {
     var errorDescription: String? { "resume" }
-    var diagnosticIdentity: String { "WatchRefusal.resume" }
-    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 /// Finish refused after current-target validation: bare name only, never
 /// timer ids, revisions, or snapshots. Mirrors Pause refusal separation.
 struct WatchFinishRefusedError: Error, Sendable {}
 
-extension WatchFinishRefusedError: LocalizedError, FixedTaxonomyDiagnostic {
+extension WatchFinishRefusedError: LocalizedError {
     var errorDescription: String? { "finish" }
-    var diagnosticIdentity: String { "WatchRefusal.finish" }
-    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 /// Deferred settings refused at a changed workspace epoch: fixed reason
@@ -255,10 +245,8 @@ extension WatchFinishRefusedError: LocalizedError, FixedTaxonomyDiagnostic {
 /// workspace from unknown vocabulary.
 struct WatchStaleWorkspaceError: Error, Sendable {}
 
-extension WatchStaleWorkspaceError: LocalizedError, FixedTaxonomyDiagnostic {
+extension WatchStaleWorkspaceError: LocalizedError {
     var errorDescription: String? { "stale_workspace" }
-    var diagnosticIdentity: String { "WatchCommand.staleWorkspace" }
-    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 /// Watch ingest ordering: a delayed refresh reply must not overwrite a

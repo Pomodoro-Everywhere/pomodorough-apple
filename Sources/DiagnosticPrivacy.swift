@@ -127,3 +127,36 @@ enum DiagnosticPrivacy {
         _ = try JSONSerialization.data(withJSONObject: event.serialize())
     }
 }
+
+// WatchSyncPayload.swift compiles standalone inside the R49-AP06 probe,
+// so the watch fixed-taxonomy conformances live here rather than beside
+// their types. Reasons stay bare literals: never ids or user content.
+extension WatchUnknownCommandError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { "WatchCommand.unknown" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
+
+extension WatchPauseRefusedError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { "WatchRefusal.pause" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
+
+extension WatchStartRefusedError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { "WatchRefusal.start" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
+
+extension WatchResumeRefusedError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { "WatchRefusal.resume" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
+
+extension WatchFinishRefusedError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { "WatchRefusal.finish" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
+
+extension WatchStaleWorkspaceError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { "WatchCommand.staleWorkspace" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
