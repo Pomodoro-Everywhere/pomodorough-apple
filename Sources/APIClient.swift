@@ -191,7 +191,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
         do {
             try keychain.delete()
         } catch {
-            Self.logger.error("detachLogoutObligation keychain delete failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("detachLogoutObligation keychain delete failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
         }
         return obligation
@@ -204,7 +204,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             try keychain.delete()
             return true
         } catch {
-            Self.logger.error("deleteDetachedCredential failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("deleteDetachedCredential failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return false
         }
@@ -218,7 +218,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             } catch AppError.unauthorized {
                 return .refreshUnauthorized
             } catch {
-                Self.logger.error("revoke refresh failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("revoke refresh failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 return .retry
             }
@@ -246,7 +246,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             }
             return accountDeletionOutcome(data: result.data, response: result.response)
         } catch {
-            Self.logger.error("deleteAccount failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("deleteAccount failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return .unknown(error.localizedDescription)
         }
@@ -347,7 +347,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
         } catch AppError.unauthorized {
             return .accessUnauthorized
         } catch {
-            Self.logger.error("submitRevocation failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("submitRevocation failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return .retry
         }

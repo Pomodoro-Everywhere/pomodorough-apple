@@ -22,49 +22,54 @@ struct TasksScreen: View {
 
     // size-exception: single declarative ScrollView composes hero, composer, board card, and day-refresh task/onReceive chain; splitting would duplicate summaries/delete wiring and hide toolbar/navigation/modifier ordering.
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 18) {
-                TaskBoardHero(
-                    finishedPomodoros: dayTotals.finishedPomodoros,
-                    timeSpentMs: dayTotals.timeSpentMs,
-                    date: today
-                )
-                TaskComposer(
-                    title: taskTitle,
-                    focused: $taskFieldFocused,
-                    canAdd: canAddTask,
-                    add: addTask
-                )
-                VStack(spacing: 0) {
-                    TaskBoardHeader()
-                    if summaries.isEmpty {
-                        TaskBoardEmptyState()
-                    } else {
-                        ForEach(summaries) { summary in
-                            Divider().overlay(PomodoroughTheme.steel.opacity(0.45))
-                            TaskSummaryRow(summary: summary) {
-                                pendingDeleteTaskID = summary.id
-                            }
-                            .contextMenu {
-                                Button("Delete task", systemImage: "trash", role: .destructive) {
+        GeometryReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 18) {
+                    TaskBoardHero(
+                        finishedPomodoros: dayTotals.finishedPomodoros,
+                        timeSpentMs: dayTotals.timeSpentMs,
+                        date: today
+                    )
+                    TaskComposer(
+                        title: taskTitle,
+                        focused: $taskFieldFocused,
+                        canAdd: canAddTask,
+                        add: addTask
+                    )
+                    VStack(spacing: 0) {
+                        TaskBoardHeader()
+                        if summaries.isEmpty {
+                            TaskBoardEmptyState()
+                        } else {
+                            ForEach(summaries) { summary in
+                                Divider().overlay(PomodoroughTheme.steel.opacity(0.45))
+                                TaskSummaryRow(summary: summary) {
                                     pendingDeleteTaskID = summary.id
+                                }
+                                .contextMenu {
+                                    Button("Delete task", systemImage: "trash", role: .destructive) {
+                                        pendingDeleteTaskID = summary.id
+                                    }
                                 }
                             }
                         }
                     }
+                    .background(.background, in: .rect(cornerRadius: 20))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20)
+                            .stroke(PomodoroughTheme.steel, lineWidth: 2)
+                    }
+                    .clipShape(.rect(cornerRadius: 20))
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: summaries.map(\.id))
                 }
-                .background(.background, in: .rect(cornerRadius: 20))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(PomodoroughTheme.steel, lineWidth: 2)
-                }
-                .clipShape(.rect(cornerRadius: 20))
-                .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: summaries.map(\.id))
+                .padding()
+                .padding(.bottom, TabBarScrollInset.bottom(
+                    safeBottom: proxy.safeAreaInsets.bottom,
+                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                ))
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
             }
-            .padding()
-            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 80 : 0)
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity)
         }
         .background(TimerBackdrop())
         .navigationTitle("Tasks")

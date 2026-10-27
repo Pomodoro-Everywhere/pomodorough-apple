@@ -420,7 +420,7 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
         do {
             notificationsAllowed = try await notifications.requestAuthorization()
         } catch {
-            Self.logger.error("notification authorization failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("notification authorization failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "timer-alarm-authorization", error: error)
             notificationsAllowed = false
         }
@@ -430,7 +430,7 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
             do {
                 alarmsAllowed = try await alarms.requestAuthorization()
             } catch {
-                Self.logger.error("alarm authorization failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("alarm authorization failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.captureOnce(key: "timer-alarm-authorization", error: error)
                 alarmsAllowed = false
             }
@@ -458,7 +458,7 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                 } catch {
                     // AlarmKit can fail at fire time (e.g. quota, transient store error).
                     // Fall through to the notification path so the timer still alerts.
-                    Self.logger.error("alarm schedule failed, falling back to notification: \(error.localizedDescription, privacy: .public)")
+                    Self.logger.error("alarm schedule failed, falling back to notification: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                     SentryCapture.captureOnce(key: "timer-alarm-schedule-fallback", error: error)
                     try? alarms.cancel(id: alarmID)
                 }
@@ -473,7 +473,7 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                     // R52-AP04: the notification fallback is confirmed scheduled.
                     // Keep it so the timer still alerts; a stale alarm may
                     // duplicate once and is retried on the next alarm operation.
-                    Self.logger.error("alarm cleanup failed, keeping notification fallback: \(error.localizedDescription, privacy: .public)")
+                    Self.logger.error("alarm cleanup failed, keeping notification fallback: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                     SentryCapture.captureOnce(key: "timer-alarm-cleanup-fallback", error: error)
                 }
             }
@@ -506,7 +506,7 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                     notifications.remove(identifier: Self.notificationID(for: timerID))
                     return
                 } catch {
-                    Self.logger.error("alarm resume failed, falling back to notification: \(error.localizedDescription, privacy: .public)")
+                    Self.logger.error("alarm resume failed, falling back to notification: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                     SentryCapture.captureOnce(key: "timer-alarm-schedule-fallback", error: error)
                     try? alarms.cancel(id: alarmID)
                 }
@@ -519,7 +519,7 @@ final class TimerAlarmScheduler: TimerAlarmScheduling {
                     try alarms.cancel(id: alarmID)
                 } catch {
                     // R52-AP04: same keep-fallback policy as schedule.
-                    Self.logger.error("alarm cleanup failed, keeping notification fallback: \(error.localizedDescription, privacy: .public)")
+                    Self.logger.error("alarm cleanup failed, keeping notification fallback: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                     SentryCapture.captureOnce(key: "timer-alarm-cleanup-fallback", error: error)
                 }
             }

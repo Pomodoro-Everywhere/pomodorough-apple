@@ -171,7 +171,7 @@ final class AccountLifecycleController {
             return .authenticated(response.user)
         } catch {
             guard owns(operation) else { return .stale }
-            Self.logger.error("authenticate failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("authenticate failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return .failed(error.localizedDescription)
         }
@@ -192,7 +192,7 @@ final class AccountLifecycleController {
                 do {
                     try await api.clearTokens()
                 } catch {
-                    Self.logger.error("restore clearTokens failed: \(error.localizedDescription, privacy: .public)")
+                    Self.logger.error("restore clearTokens failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                     SentryCapture.capture(error)
                 }
                 return .localOnly(invalidatesSynchronization: true)
@@ -201,7 +201,7 @@ final class AccountLifecycleController {
         } catch AppError.unauthorized {
             return owns(operation) ? .unauthorized : .stale
         } catch {
-            Self.logger.error("restore failed, staying local-only: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("restore failed, staying local-only: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return owns(operation)
                 ? .localOnly(invalidatesSynchronization: false)
@@ -213,7 +213,7 @@ final class AccountLifecycleController {
         do {
             return try await api.restoreTokens(excluding: revocationStore)
         } catch {
-            Self.logger.error("restoreAccountDeletionCredentials failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("restoreAccountDeletionCredentials failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "account-deletion-restore-credentials", error: error)
             return false
         }
@@ -243,7 +243,7 @@ final class AccountLifecycleController {
             return owns(operation) ? .unauthorized : .ignored
         } catch {
             guard owns(operation), verificationOwner == owner else { return .ignored }
-            Self.logger.error("verifyRestoredSession failed, retrying: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("verifyRestoredSession failed, retrying: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return .retry
         }
@@ -345,7 +345,7 @@ final class AccountLifecycleController {
             try await revocations.signOut()
             return nil
         } catch {
-            Self.logger.error("logout failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("logout failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return error.localizedDescription
         }
@@ -356,7 +356,7 @@ final class AccountLifecycleController {
             try await api.clearTokens()
             return true
         } catch {
-            Self.logger.error("clearTokens failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("clearTokens failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return false
         }
@@ -396,7 +396,7 @@ final class AccountLifecycleController {
             )
         case AppError.invalidResponse, is SharedCoreError:
             // AP86: core/invalidResponse keeps retryable shape, logs + captures.
-            Self.logger.error("bootstrap failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("bootstrap failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "bootstrap-invalid-response", error: error)
             return BootstrapFailureTransition(
                 historyResolutionState: .retryable(strategy),
@@ -434,7 +434,7 @@ final class AccountLifecycleController {
         case .submission: diagnosticStage = .submission
         }
         let diagnostic = BootstrapBatchPlanDiagnostics(stage: diagnosticStage)
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
         return BootstrapFailureTransition(
             historyResolutionState: .retryable(strategy),

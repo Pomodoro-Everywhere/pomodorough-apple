@@ -152,7 +152,7 @@ struct PersistedStateLoader {
                 )
                 progress.migrations.insert(.autoStartBreaks)
             } catch {
-                Self.logger.error("migrateLegacyAutoStartBreaks failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("migrateLegacyAutoStartBreaks failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 progress.failed = true
             }
@@ -176,7 +176,7 @@ struct PersistedStateLoader {
         do {
             legacyState = try JSONDecoder.api.decode(LocalTaskState.self, from: data)
         } catch {
-            Self.logger.error("migrateLegacyTasks decode failed, keeping blob: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("migrateLegacyTasks decode failed, keeping blob: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "legacy-task-decode", error: error)
             return progress
         }
@@ -197,7 +197,7 @@ struct PersistedStateLoader {
             progress.migrations.insert(.tasks)
             progress.removesLegacyTasksAfterProjection = true
         } catch {
-            Self.logger.error("migrateLegacyTasks failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("migrateLegacyTasks failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             progress.failed = true
         }
@@ -233,7 +233,7 @@ struct PersistedStateLoader {
                 progress.migrations.insert(.selectedTask)
             }
         } catch {
-            Self.logger.error("migrateLegacySelectedTask failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("migrateLegacySelectedTask failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             progress.failed = true
         }

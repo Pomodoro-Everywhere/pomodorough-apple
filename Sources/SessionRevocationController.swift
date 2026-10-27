@@ -354,7 +354,7 @@ actor SessionRevocationController {
             } catch is CancellationError {
                 return
             } catch {
-                Self.logger.error("logout revocation retry sleep failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("logout revocation retry sleep failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 return
             }
@@ -399,7 +399,7 @@ actor SessionRevocationController {
         }
         if consecutiveStorageReadFailures == storageDiagnosticThreshold {
             Self.logger.error(
-                "Pending logout credentials remain unreadable: \(diagnostic.message, privacy: .public)"
+                "Pending logout credentials remain unreadable: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)"
             )
             guard (error as? KeychainError)?.isBenignUnavailable != true else { return diagnostic }
             SentryCapture.captureOnce(key: "logout-revocation-storage-read", error: error)

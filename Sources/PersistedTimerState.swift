@@ -276,7 +276,7 @@ extension PersistedTimerState {
         do {
             ticked = try tick(input).validated(for: input)
         } catch {
-            Logger(subsystem: "me.egigoka.pomodorough", category: "Clock").error("advanceClock tick failed: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "me.egigoka.pomodorough", category: "Clock").error("advanceClock tick failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "hlc-tick-core", error: error)
             throw AppError.invalidLocalClock
         }
@@ -343,7 +343,7 @@ extension PersistedTimerState {
         do {
             merged = try head(input).validatedHead(for: input)
         } catch {
-            Logger(subsystem: "me.egigoka.pomodorough", category: "Clock").error("mergeClock head failed: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "me.egigoka.pomodorough", category: "Clock").error("mergeClock head failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "hlc-head-core", error: error)
             throw AppError.invalidResponse
         }

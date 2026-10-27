@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct HistoryScreen: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let model: AppModel
     private let showCompletedFocusBreakdown: (() -> Void)?
 
@@ -16,7 +18,13 @@ struct HistoryScreen: View {
         Group {
             if model.history.isEmpty {
                 GeometryReader { proxy in
-                    emptyHistory(topPadding: Self.emptyTopPadding(forHeight: proxy.size.height))
+                    emptyHistory(
+                        topPadding: Self.emptyTopPadding(forHeight: proxy.size.height),
+                        bottomInset: Self.emptyBottomInset(
+                            safeBottom: proxy.safeAreaInsets.bottom,
+                            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                        )
+                    )
                 }
                 .accessibilityIdentifier("history.empty-scroll")
             } else {
@@ -53,7 +61,11 @@ struct HistoryScreen: View {
         return min(max(height * 0.12, 24), 120)
     }
 
-    private func emptyHistory(topPadding: CGFloat) -> some View {
+    static func emptyBottomInset(safeBottom: CGFloat, isAccessibilitySize: Bool) -> CGFloat {
+        TabBarScrollInset.bottom(safeBottom: safeBottom, isAccessibilitySize: isAccessibilitySize)
+    }
+
+    private func emptyHistory(topPadding: CGFloat, bottomInset: CGFloat) -> some View {
         ScrollView {
             ContentUnavailableView(
                 "No arrivals yet",
@@ -62,6 +74,7 @@ struct HistoryScreen: View {
             )
             .frame(maxWidth: .infinity)
             .padding(.top, topPadding)
+            .padding(.bottom, bottomInset)
             .accessibilityRepresentation {
                 Text("No arrivals yet")
                     .accessibilityValue("Your first run appears here.")

@@ -52,7 +52,7 @@ final class TimerLiveActivityCoordinator {
                     trackedTimerID = desired.id
                 } catch {
                     // A denied Live Activity must never prevent timer or alarm operation.
-                    logger.error("Could not start timer Live Activity: \(error.localizedDescription, privacy: .public)")
+                    logger.error("Could not start timer Live Activity: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                     Self.startFailed(error)
                 }
             }

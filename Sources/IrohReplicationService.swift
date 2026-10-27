@@ -495,7 +495,7 @@ actor IrohReplicationService {
     // drives the same log + capture logic. Error-only (Iroh close error,
     // never tickets, IDs, or secrets); outcome at call sites is unchanged.
     nonisolated static func endpointCloseFailed(_ error: Error) {
-        logger.error("endpoint close failed: \(error.localizedDescription, privacy: .public)")
+        logger.error("endpoint close failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.capture(error)
     }
 
@@ -503,7 +503,7 @@ actor IrohReplicationService {
     // drives the same deduped log + capture logic. Error-only (sync error,
     // never tickets, IDs, or secrets); the peer loop still continues.
     nonisolated static func peerSyncFailed(_ error: Error) {
-        logger.error("peer sync failed: \(error.localizedDescription, privacy: .public)")
+        logger.error("peer sync failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.captureOnce(key: "iroh-peer-sync", error: error)
     }
 
@@ -531,7 +531,7 @@ actor IrohReplicationService {
         do {
             peers = try store.peers(roomID: context.roomID)
         } catch {
-            Self.logger.error("syncKnownPeers peers failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("syncKnownPeers peers failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             await statusHandler(.unavailable(error.localizedDescription))
             return false

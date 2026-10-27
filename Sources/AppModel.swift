@@ -386,7 +386,7 @@ final class AppModel {
             do {
                 journalLoad = try journal.load()
             } catch {
-                logger.error("loadAccountDeletionRecovery journal load failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("loadAccountDeletionRecovery journal load failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 journalLoad = .corrupt
             }
@@ -403,7 +403,7 @@ final class AppModel {
             do {
                 topology = try roomStore.accountDeletionTopology()
             } catch {
-                logger.error("loadAccountDeletionRecovery topology failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("loadAccountDeletionRecovery topology failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 topology = nil
             }
@@ -436,7 +436,7 @@ final class AppModel {
             } catch {
                 // DEBUG UI-test reset only: outcome kept (reset continues),
                 // Error-only capture (file error, never workspace content).
-                logger.error("resetDefaultDurableStorage \(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("resetDefaultDurableStorage \(name, privacy: .public) failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
             }
         }
@@ -938,7 +938,7 @@ final class AppModel {
     private func reportWatchUnknownCommand(nameCount: Int) {
         let diagnostic = WatchUnknownCommandError(nameLength: nameCount)
         if WatchSyncLogDedupe.shouldLog(key: "watch-command-unknown") {
-            Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+            Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         }
         SentryCapture.captureOnce(key: "watch-command-unknown", error: diagnostic)
     }
@@ -980,7 +980,7 @@ final class AppModel {
     private func reportWatchStaleWorkspace() {
         let diagnostic = WatchStaleWorkspaceError()
         if WatchSyncLogDedupe.shouldLog(key: "watch-command-stale-workspace") {
-            Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+            Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         }
         SentryCapture.captureOnce(key: "watch-command-stale-workspace", error: diagnostic)
     }
@@ -1072,7 +1072,7 @@ final class AppModel {
                 throw SharedCoreError.invalidResponse("task identity is inconsistent")
             }
         } catch {
-            Self.logger.error("addTask failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("addTask failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             errorMessage = error.localizedDescription
             return false
@@ -1166,7 +1166,7 @@ final class AppModel {
         do {
             try await alarmScheduler.requestAuthorization()
         } catch {
-            Self.logger.error("allowTimerAlerts failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("allowTimerAlerts failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
         }
         completePermissionIntroduction()
@@ -1255,7 +1255,7 @@ final class AppModel {
             quarantined: quarantined,
             pendingOperations: pendingChangeCount
         )
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
@@ -1299,7 +1299,7 @@ final class AppModel {
             quarantined: quarantined,
             pendingOperations: pendingChangeCount
         )
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
@@ -1391,7 +1391,7 @@ final class AppModel {
             quarantined: quarantined,
             pendingOperations: pendingChangeCount
         )
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
@@ -1400,7 +1400,7 @@ final class AppModel {
     private func refuseWorkspaceMutationDuringSignOut() {
         guard isSignOutTransitionActive else { return }
         let diagnostic = SignOutMutationRefusedDiagnostics(pendingOperations: pendingChangeCount)
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
         if errorMessage == nil {
             errorMessage = String(localized: "Sign-out is in progress. Changes are paused until it finishes.")
@@ -1472,7 +1472,7 @@ final class AppModel {
                 try roomStore.replaceActiveReturnState(returnState)
             } catch {
                 reportSignOutFailure(stage: .roomSnapshot)
-                Self.logger.error("prepareSignedOutReturnState return-state failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("prepareSignedOutReturnState return-state failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.captureOnce(key: "sign-out-return-state", error: error)
                 errorMessage = String(localized: "Sign-out paused because its recovery state could not be saved.")
                 return false
@@ -1507,7 +1507,7 @@ final class AppModel {
         do {
             topology = try roomStore.accountDeletionTopology()
         } catch {
-            Self.logger.error("deleteAccount topology failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("deleteAccount topology failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             topology = nil
         }
@@ -1554,7 +1554,7 @@ final class AppModel {
             do {
                 discovered = try roomStore.accountDeletionTopology()
             } catch {
-                Self.logger.error("resumeAccountDeletion topology failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("resumeAccountDeletion topology failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
                 return
@@ -1614,7 +1614,7 @@ final class AppModel {
                 roomSecretAccounts: retainedAccounts
             )
         } catch {
-            Self.logger.error("purgeAccountData failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("purgeAccountData failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             quarantineAccountDeletion()
             errorMessage = String(localized: "Account deletion was confirmed; use Retry account deletion to continue room cleanup.")
@@ -1722,7 +1722,7 @@ final class AppModel {
         do {
             prior = try journal.load()
         } catch {
-            Self.logger.error("reconcileJournalSave load failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("reconcileJournalSave load failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return (.unknown, false)
         }
@@ -1736,7 +1736,7 @@ final class AppModel {
             try journal.save(record)
             completedWithoutError = true
         } catch {
-            Self.logger.error("reconcileJournalSave failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("reconcileJournalSave failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             completedWithoutError = false
         }
@@ -1744,7 +1744,7 @@ final class AppModel {
         do {
             current = try journal.load()
         } catch {
-            Self.logger.error("reconcileJournalSave verify-load failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("reconcileJournalSave verify-load failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return (.unknown, completedWithoutError)
         }
@@ -1793,7 +1793,7 @@ final class AppModel {
                 accountDeletionPurgeState = nil
                 return true
             } catch {
-                Self.logger.error("clearAccountDeletionState failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("clearAccountDeletionState failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 return false
             }
@@ -1809,7 +1809,7 @@ final class AppModel {
         do {
             data = try JSONEncoder().encode(roomIDs.sorted())
         } catch {
-            Self.logger.error("persistAccountDeletionRoomIDs encode failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("persistAccountDeletionRoomIDs encode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return false
         }
@@ -1823,7 +1823,7 @@ final class AppModel {
         do {
             return try JSONDecoder().decode([String].self, from: data)
         } catch {
-            Self.logger.error("accountDeletionRoomIDs decode failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("accountDeletionRoomIDs decode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return nil
         }
@@ -2117,7 +2117,7 @@ final class AppModel {
                 )
             }
         } catch {
-            Self.logger.error("completeIrohTimerIfNeeded failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("completeIrohTimerIfNeeded failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             errorMessage = error.localizedDescription
             retryAutomaticCompletion(timer: timer, at: date)
@@ -2494,7 +2494,7 @@ final class AppModel {
     ) {
         let diagnostic = SyncFailureDiagnostics(error: error, stage: stage, rollback: rollback, state: timerState)
         guard syncFailureDiagnosticBudget.record(diagnostic) else { return }
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         guard diagnostic.warrantsCapture else { return }
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
@@ -2630,7 +2630,7 @@ final class AppModel {
 
     private func reportIrohForegroundRefresh(outcome: IrohForegroundRefreshDiagnostics.Outcome) {
         let diagnostic = IrohForegroundRefreshDiagnostics(outcome: outcome)
-        Self.logger.info("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.info("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         guard outcome == .retained else { return }
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
@@ -2848,7 +2848,7 @@ final class AppModel {
                 core: core
             )
         } catch {
-            Self.logger.error("nextBreakPhase fallback: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("nextBreakPhase fallback: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return timerState.settings.selectedPhase
         }
@@ -2918,7 +2918,7 @@ final class AppModel {
             reportAdmissionFailure(admission)
             return false
         } catch {
-            Self.logger.error("performWorkspaceMutation failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("performWorkspaceMutation failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             errorMessage = error.localizedDescription
             return false
@@ -3252,7 +3252,7 @@ final class AppModel {
             } catch {
                 // Alarm failures stay silent: the timer continues in
                 // Pomodorough. Sentry still captures the failure.
-                Self.logger.error("alarmOperation failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("alarmOperation failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
             }
         }
@@ -3265,7 +3265,7 @@ final class AppModel {
             installProjection(output)
             return true
         } catch {
-            Self.logger.error("rebuildOptimisticState failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("rebuildOptimisticState failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             installUnreducedBaseSnapshot()
             errorMessage = error.localizedDescription
@@ -3631,7 +3631,7 @@ final class AppModel {
             quarantined: quarantined,
             pendingOperations: pendingChangeCount
         )
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
@@ -3798,7 +3798,7 @@ final class AppModel {
         if error as? AppError == .invalidLocalClock {
             reportInvalidLocalClock()
         } else {
-            Self.logger.error("finish failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("finish failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "timer-finish-plan", error: error)
             errorMessage = error.localizedDescription
         }
@@ -3808,7 +3808,7 @@ final class AppModel {
         if error as? AppError == .invalidLocalClock {
             reportInvalidLocalClock()
         } else {
-            Self.logger.error("centralized break failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("centralized break failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "timer-finish-centralized-break", error: error)
             errorMessage = error.localizedDescription
         }
@@ -3818,7 +3818,7 @@ final class AppModel {
         if error as? AppError == .invalidLocalClock {
             reportInvalidLocalClock()
         } else {
-            Self.logger.error("iroh break failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("iroh break failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "timer-finish-iroh-break", error: error)
             errorMessage = error.localizedDescription
         }
@@ -3828,7 +3828,7 @@ final class AppModel {
         if error as? AppError == .invalidLocalClock {
             reportInvalidLocalClock()
         } else {
-            Self.logger.error("completion deadline failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("completion deadline failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "timer-completion-deadline", error: error)
             errorMessage = error.localizedDescription
         }

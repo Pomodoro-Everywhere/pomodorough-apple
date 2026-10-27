@@ -76,7 +76,7 @@ final class CompletionChimeController {
         do {
             sound = try makePlayer(url)
         } catch {
-            Self.logger.error("completion chime decode failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("completion chime decode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             report(.playerCreationFailed)
             releaseResources()
             return
@@ -87,7 +87,7 @@ final class CompletionChimeController {
         do {
             try session.activate()
         } catch {
-            Self.logger.error("completion chime session failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("completion chime session failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             report(.sessionActivationFailed)
             releaseResources()
             return

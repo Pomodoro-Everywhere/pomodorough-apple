@@ -685,7 +685,7 @@ extension CentralizedAccountSessionCoordinator {
             )
         }
         if error is SharedCoreError || error as? AppError == .invalidResponse {
-            Self.logger.error("sync failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("sync failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "centralized-sync-invalid-response", error: error)
             publication.isOffline = false
             let message = String(localized: "Sync paused because the server response did not match queued changes. \(pendingChangeCount) queued changes remain on this device.")
@@ -903,7 +903,7 @@ extension CentralizedAccountSessionCoordinator {
                     return false
                 }
             } catch {
-                Self.logger.error("containsCommittedLegacyRecords failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("containsCommittedLegacyRecords failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 return false
             }
@@ -927,7 +927,7 @@ extension CentralizedAccountSessionCoordinator {
                 return committed == [record]
             }
         } catch {
-            Self.logger.error("containsCommittedLegacyRecords failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("containsCommittedLegacyRecords failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return false
         }

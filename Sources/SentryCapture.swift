@@ -2,9 +2,8 @@ import Foundation
 import Sentry
 
 // Central Sentry entry point for user-visible failure boundaries.
-// No PII: callers pass only the caught Error, never tokens, titles,
-// URLs, or snapshot payloads. Session replay masking and no-setUser
-// policy live in SentrySetup and are preserved here by not touching scope.
+// Errors may contain private payloads. DiagnosticPrivacy bounds identity before
+// capture; final SDK hooks also cover automatic events and discard scope data.
 enum SentryCapture {
     private final class State: @unchecked Sendable {
         let lock = NSLock()
@@ -58,18 +57,19 @@ enum SentryCapture {
 #endif
     }
 
-    static func capture(_ error: Error) {
+    static func capture(_ error: Error, file: StaticString = #fileID) {
         guard !shouldDrop(error) else { return }
+        let diagnostic = DiagnosticPrivacy.diagnostic(error, file: file)
         let backend: (@Sendable (Error) -> Void)? = state.lock.withLock { state.backend }
         guard let backend else {
             guard !shouldSuppressForEnvironment(isSimulator: isSimulatorBuild, isTestProcess: isTestProcess) else { return }
-            SentrySDK.capture(error: error)
+            SentrySDK.capture(error: diagnostic)
             return
         }
-        backend(error)
+        backend(diagnostic)
     }
 
-    static func captureOnce(key: String, error: Error) {
+    static func captureOnce(key: String, error: Error, file: StaticString = #fileID) {
         guard !shouldDrop(error) else { return }
         let shouldCapture = state.lock.withLock {
             guard !state.seenOnceKeys.contains(key) else { return false }
@@ -77,7 +77,7 @@ enum SentryCapture {
             return true
         }
         guard shouldCapture else { return }
-        capture(error)
+        capture(error, file: file)
     }
 
     /// Capped counting for recurring errors (AP123): captureOnce collapses
@@ -86,7 +86,7 @@ enum SentryCapture {
     /// snapshots). captureRecurring keeps the first `limit` occurrences per
     /// key per launch, then stays silent. The counter saturates at the limit
     /// so a never-quiet loop cannot grow state.
-    static func captureRecurring(key: String, limit: Int = 5, error: Error) {
+    static func captureRecurring(key: String, limit: Int = 5, error: Error, file: StaticString = #fileID) {
         precondition(limit > 0, "captureRecurring limit must be positive")
         guard !shouldDrop(error) else { return }
         let shouldCapture = state.lock.withLock {
@@ -96,7 +96,7 @@ enum SentryCapture {
             return true
         }
         guard shouldCapture else { return }
-        capture(error)
+        capture(error, file: file)
     }
 
     static func setTestBackend(_ backend: (@Sendable (Error) -> Void)?) {

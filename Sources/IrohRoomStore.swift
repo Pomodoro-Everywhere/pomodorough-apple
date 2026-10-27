@@ -71,7 +71,7 @@ final class IrohRoomStore: @unchecked Sendable {
                 state = .empty
             }
         } catch {
-            Self.logger.error("IrohRoomStore load failed, starting empty: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("IrohRoomStore load failed, starting empty: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             state = .empty
             loadError = Self.loadFailureMessage(error)

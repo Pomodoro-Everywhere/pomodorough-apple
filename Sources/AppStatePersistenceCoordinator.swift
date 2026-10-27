@@ -292,7 +292,7 @@ final class AppStatePersistenceCoordinator {
             snapshotLoadFailure = nil
             snapshotRecoveryState = nil
         } catch {
-            Self.logger.error("loadSnapshot failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("loadSnapshot failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             let failure = error as? SnapshotLoadFailure ?? (snapshotRecoveryState == nil
                 ? .unreadable(error.localizedDescription) : .durabilityUncertain(error.localizedDescription))
@@ -423,7 +423,7 @@ final class AppStatePersistenceCoordinator {
             } catch let failure as AtomicDurableFileStore.ReplacementFailure {
                 return reconcileReplacementFailure(failure, proposed: state)
             } catch {
-                Self.logger.error("persistLocal failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("persistLocal failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 return .failed
             }
@@ -440,7 +440,7 @@ final class AppStatePersistenceCoordinator {
         proposed: PersistedTimerState
     ) -> PersistenceTransition {
         snapshotRecoveryState = proposed
-        Self.logger.error("persistLocal replacement failed: \(failure.localizedDescription, privacy: .public)")
+        Self.logger.error("persistLocal replacement failed: \(DiagnosticPrivacy.publicSummary(failure), privacy: .public)")
         SentryCapture.capture(failure)
         var reason = failure.reason
         do {

@@ -24,6 +24,14 @@ Supporting/SentryDSN.local
 *.mobileprovision
 .cache_ggshield
 .ruff_cache/
+.complexipy_cache/
+/.release-gates/
+/.coverage
+/.coverage.*
+/coverage.json
+/coverage.lcov
+/coverage.xml
+/htmlcov/
 .pytest_cache/
 /.audit/
 /scratch/

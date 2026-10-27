@@ -16,25 +16,30 @@ struct ServicePatternScreen: View {
     }
 
     private var content: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                ServicePatternCard(model: model)
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: 12) {
+                    ServicePatternCard(model: model)
 #if os(macOS)
-                VStack(alignment: .leading, spacing: 8) {
-                    MenuBarTimerPicker()
-                    Text("Total includes today’s completed Pomodoros and the current focus session.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(18)
-                .background(.background, in: .rect(cornerRadius: 22))
+                    VStack(alignment: .leading, spacing: 8) {
+                        MenuBarTimerPicker()
+                        Text("Total includes today’s completed Pomodoros and the current focus session.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(18)
+                    .background(.background, in: .rect(cornerRadius: 22))
 #endif
-                AppVersionFooter()
-            }
+                    AppVersionFooter()
+                }
                 .padding()
-                .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 80 : 0)
+                .padding(.bottom, TabBarScrollInset.bottom(
+                    safeBottom: proxy.safeAreaInsets.bottom,
+                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                ))
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
+            }
         }
         .background(TimerBackdrop())
         .inlineNavigationTitleIfSupported()

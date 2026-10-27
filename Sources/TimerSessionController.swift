@@ -522,7 +522,7 @@ extension TimerSessionController {
                 core: core
             )
         } catch {
-            Logger(subsystem: "me.egigoka.pomodorough", category: "TimerSession").error("derivedNextPhase failed: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "me.egigoka.pomodorough", category: "TimerSession").error("derivedNextPhase failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "derived-phase-core", error: error)
             return nil
         }

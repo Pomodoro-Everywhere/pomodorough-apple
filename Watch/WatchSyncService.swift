@@ -228,7 +228,7 @@ extension WatchSyncService: WCSessionDelegate {
     private nonisolated static func logOnce(key: String, error: Error) {
         guard WatchSyncLogDedupe.shouldLog(key: key) else { return }
         Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync")
-            .error("\(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            .error("\(key, privacy: .public): operation failed")
     }
 
     private nonisolated static func logOnce(key: String) {

@@ -91,7 +91,7 @@ struct PomodoroughApp: App {
     // captures Error-only (Keychain/file error, never tokens or room data).
     static func uiTestResetFailed(_ error: Error, step: String) {
         Logger(subsystem: "me.egigoka.pomodorough", category: "PomodoroughApp")
-            .error("ui-test reset \(step, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            .error("ui-test reset \(step, privacy: .public) failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.capture(error)
     }
 }

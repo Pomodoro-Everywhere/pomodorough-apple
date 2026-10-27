@@ -7,6 +7,7 @@ import dis
 import errno
 import gc
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -943,6 +944,18 @@ def assert_rollback_substitution_rejected(
             test.assertEqual(target.read_bytes(), b"replacement")
 
 
+# Cover three cold interpreter starts under load, but expire before the injected 30s hang.
+BOUNDED_ATOMIC_TEST_SECONDS = 15.0
+# Injected hang duration in the child fixture below. Post-deadline slack must stay
+# far below this so a return still proves the hang was killed, not awaited.
+BOUNDED_ATOMIC_HANG_SECONDS = 30.0
+# Loaded-host scheduling/KILL/reap grace after the absolute deadline. Justified by
+# the 30s hang: deadline+5s still returns ~10s before a hang could finish naturally.
+BOUNDED_ATOMIC_POST_DEADLINE_SLACK = 5.0
+# Minimum lead of stage entry before deadline; rejects missed/last-instant injection.
+BOUNDED_ATOMIC_STAGE_LEAD = 0.5
+
+
 def directory_sync_control_environment(
     root: Path, actions: tuple[str, ...]
 ) -> dict[str, str]:
@@ -952,6 +965,7 @@ def directory_sync_control_environment(
         textwrap.dedent(
             """
             import errno
+            import json
             import os
             from pathlib import Path
             import sys
@@ -965,6 +979,9 @@ def directory_sync_control_environment(
                     control.write_text(str(count + 1))
                     actions = os.environ["POMODOROUGH_SYNC_ACTIONS"].split(",")
                     action = actions[count] if count < len(actions) else "ok"
+                    with control.with_suffix(".stages").open("a") as stages:
+                        stages.write(json.dumps({"action": action, "pid": os.getpid(),
+                                                 "ready": time.monotonic()}) + "\\n")
                     if action == "error":
                         raise OSError(errno.EIO, "forced directory sync failure")
                     if action == "hang":
@@ -986,10 +1003,67 @@ def directory_sync_control_environment(
     }
 
 
-def assert_hung_sync_reaped(test: unittest.TestCase, root: Path) -> None:
-    process_id = int((root / "directory-sync-hung-pid").read_text())
+def assert_sync_pid_reaped(
+    test: unittest.TestCase,
+    process_id: int,
+    timeout: float = BOUNDED_ATOMIC_POST_DEADLINE_SLACK,
+) -> None:
+    # Production kill+wait is 0.05s-bounded; zombies stay signalable until
+    # reaped, so poll briefly for kill delivery/reaping lag under load.
+    # Cap stays 5x below the 25s hang-kill margin, so a true kill failure
+    # (30s hang) still fails.
+    reap_deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            pass
+        if time.monotonic() >= reap_deadline:
+            break
+        time.sleep(0.05)
     with test.assertRaises(ProcessLookupError):
         os.kill(process_id, 0)
+
+
+def assert_hung_sync_reaped(test: unittest.TestCase, root: Path) -> None:
+    process_id = int((root / "directory-sync-hung-pid").read_text())
+    assert_sync_pid_reaped(test, process_id)
+
+
+def assert_directory_sync_stages(
+    test: unittest.TestCase,
+    root: Path,
+    actions: tuple[str, ...],
+    deadline: float,
+    finished: float,
+) -> None:
+    stages = [
+        json.loads(line)
+        for line in (root / "directory-sync-control.stages").read_text().splitlines()
+    ]
+    test.assertEqual([stage["action"] for stage in stages], list(actions))
+    for stage in stages:
+        test.assertGreaterEqual(stage["ready"], deadline - BOUNDED_ATOMIC_TEST_SECONDS)
+        # Require time inside the injected stage, not merely arrival at timeout.
+        test.assertLess(stage["ready"], deadline - BOUNDED_ATOMIC_STAGE_LEAD)
+        assert_sync_pid_reaped(test, stage["pid"])
+    if "hang" in actions:
+        test.assertGreaterEqual(
+            finished, deadline - run_xcode_tests.EVIDENCE_WRITER_CLEANUP_SECONDS - 0.1
+        )
+        # Bounded return: scheduler-tolerant slack, still far below awaiting the hang.
+        test.assertLess(finished, deadline + BOUNDED_ATOMIC_POST_DEADLINE_SLACK)
+        hang_ready = max(
+            stage["ready"] for stage in stages if stage["action"] == "hang"
+        )
+        test.assertLess(
+            finished,
+            hang_ready + BOUNDED_ATOMIC_HANG_SECONDS - BOUNDED_ATOMIC_POST_DEADLINE_SLACK,
+        )
+    else:
+        test.assertLess(finished, deadline)
 
 
 HOSTED_ATTEMPT_WALL_TIMEOUT = (
@@ -7916,17 +7990,20 @@ class XcodeTestRunnerTests(unittest.TestCase):
             target = root / "acknowledgement.json"
             target.write_bytes(b"original")
             environment = directory_sync_control_environment(root, ("ok", "ok"))
+            deadline = time.monotonic() + BOUNDED_ATOMIC_TEST_SECONDS
             with mock.patch.dict(os.environ, environment):
                 run_xcode_tests.write_bytes_bounded(
                     target,
                     b"replacement",
-                    time.monotonic() + 1,
+                    deadline,
                     run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
                     "containment acknowledgement",
                 )
+            finished = time.monotonic()
             self.assertEqual(target.read_bytes(), b"replacement")
             self.assertEqual((root / "directory-sync-control").read_text(), "2")
             self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
+            assert_directory_sync_stages(self, root, ("ok", "ok"), deadline, finished)
 
     def test_bounded_atomic_commit_sync_hang_obeys_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7934,7 +8011,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             target = root / "acknowledgement.json"
             target.write_bytes(b"original")
             environment = directory_sync_control_environment(root, ("hang",))
-            deadline = time.monotonic() + 0.75
+            deadline = time.monotonic() + BOUNDED_ATOMIC_TEST_SECONDS
             with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(
                 OSError, "directory synchronization write deadline expired"
             ):
@@ -7945,10 +8022,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
                     "containment acknowledgement",
                 )
-            self.assertLess(time.monotonic(), deadline + 0.25)
+            finished = time.monotonic()
             self.assertEqual(target.read_bytes(), b"original")
             self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
             assert_hung_sync_reaped(self, root)
+            assert_directory_sync_stages(self, root, ("hang",), deadline, finished)
 
     def test_bounded_atomic_cleanup_sync_hang_rejects_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7956,7 +8034,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             target = root / "acknowledgement.json"
             target.write_bytes(b"original")
             environment = directory_sync_control_environment(root, ("ok", "hang"))
-            deadline = time.monotonic() + 0.75
+            deadline = time.monotonic() + BOUNDED_ATOMIC_TEST_SECONDS
             with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(
                 OSError, "cleanup write deadline expired"
             ):
@@ -7967,10 +8045,11 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
                     "containment acknowledgement",
                 )
-            self.assertLess(time.monotonic(), deadline + 0.25)
+            finished = time.monotonic()
             self.assertEqual(target.read_bytes(), b"replacement")
             self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
             assert_hung_sync_reaped(self, root)
+            assert_directory_sync_stages(self, root, ("ok", "hang"), deadline, finished)
 
     def test_bounded_atomic_rollback_sync_hang_preserves_primary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7978,7 +8057,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             target = root / "acknowledgement.json"
             target.write_bytes(b"original")
             environment = directory_sync_control_environment(root, ("error", "hang"))
-            deadline = time.monotonic() + 0.75
+            deadline = time.monotonic() + BOUNDED_ATOMIC_TEST_SECONDS
             with mock.patch.dict(os.environ, environment), self.assertRaises(
                 OSError
             ) as raised:
@@ -7989,7 +8068,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     run_xcode_tests.ATOMIC_WRITER_ARGUMENT,
                     "containment acknowledgement",
                 )
-            self.assertLess(time.monotonic(), deadline + 0.25)
+            finished = time.monotonic()
             self.assertIn("forced directory sync failure", str(raised.exception))
             evidence = exception_evidence(raised.exception)
             self.assertIn("rollback failed", evidence)
@@ -7997,6 +8076,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"original")
             self.assertEqual(list(root.glob("acknowledgement.*.tmp")), [])
             assert_hung_sync_reaped(self, root)
+            assert_directory_sync_stages(self, root, ("error", "hang"), deadline, finished)
 
     def test_job_root_signal_uses_persisted_audit_identity(self) -> None:
         token = (0, 0, 0, 0, 0, 2222, 0, 41)

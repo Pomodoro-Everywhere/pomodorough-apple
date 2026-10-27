@@ -199,7 +199,7 @@ struct TimerSettings: Codable, Equatable, Sendable {
             }
             return defaultValue
         } catch {
-            Logger(subsystem: "me.egigoka.pomodorough", category: "TimerSettings").error("decodedDuration failed, using default: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "me.egigoka.pomodorough", category: "TimerSettings").error("decodedDuration failed, using default: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.captureOnce(key: "timer-settings-duration-decode", error: error)
             return defaultValue
         }

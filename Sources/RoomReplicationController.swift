@@ -161,7 +161,7 @@ final class RoomReplicationController {
     // Fail-closed .none behavior unchanged; bounded by captureRecurring.
     private static func reportForegroundSyncFailure() {
         let diagnostic = IrohForegroundSyncDiagnostics()
-        Self.logger.error("\(diagnostic.localizedDescription, privacy: .public)")
+        Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
     }
 
@@ -199,7 +199,7 @@ final class RoomReplicationController {
                     from: dependencies.workspaceSnapshot().state
                 )
             } catch {
-                Self.logger.error("prepareState captureAndSuspend failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("prepareState captureAndSuspend failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 await startIrohIfNeeded(environment: environment)
                 if resumesCentralized { resumeCentralized() }
@@ -229,7 +229,7 @@ final class RoomReplicationController {
                 returnState: state
             ))
         } catch {
-            Self.logger.error("activateExistingRoom failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("activateExistingRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             if resumesCentralized { resumeCentralized() }
             return .failed(error.localizedDescription)
@@ -257,7 +257,7 @@ final class RoomReplicationController {
                 environment: environment
             )
         } catch {
-            Self.logger.error("createRoom failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("createRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             await service.stop()
             if resumesCentralized { resumeCentralized() }
@@ -306,7 +306,7 @@ final class RoomReplicationController {
             let invite = try dependencies.encodeInvite(room.roomID, room.roomName, ticket, secret)
             return .inviteRefreshed(invite)
         } catch {
-            Self.logger.error("refreshInvite failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("refreshInvite failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             return .failed(error.localizedDescription)
         }
@@ -381,7 +381,7 @@ final class RoomReplicationController {
             do {
                 try dependencies.roomStore.rollbackJoinedRoom(preparation)
             } catch {
-                Self.logger.error("recoverFailedJoin rollback failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("recoverFailedJoin rollback failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 let rollbackDetail = String(localized: "Room join rollback failed: \(error.localizedDescription)")
                 let joinSentence = message.hasSuffix(".") ? message : message + "."
@@ -403,7 +403,7 @@ final class RoomReplicationController {
         if case IrohProtocolError.invalidInvite = error { return }
         if case IrohProtocolError.invalidMessage(let reason) = error,
            reason.contains("Leave the current room") { return }
-        Self.logger.error("joinRoom failed: \(error.localizedDescription, privacy: .public)")
+        Self.logger.error("joinRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.capture(error)
     }
 
@@ -419,7 +419,7 @@ final class RoomReplicationController {
             mode = .offline
             return .roomLeft(returned)
         } catch {
-            Self.logger.error("leaveRoom captureAndSuspend failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("leaveRoom captureAndSuspend failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             await startIrohIfNeeded(environment: environment)
             return .failed(error.localizedDescription)
@@ -439,7 +439,7 @@ final class RoomReplicationController {
             Task { [service] in await service.syncNow() }
             return .captured(captured)
         } catch {
-            Self.logger.error("captureLocalState captureLocalOperations failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("captureLocalState captureLocalOperations failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             let quarantined = Self.isImmutableConflict(error)
             if quarantined {
@@ -476,7 +476,7 @@ final class RoomReplicationController {
             do {
                 updated = try dependencies.roomStore.captureLocalOperations(from: updated)
             } catch {
-                Self.logger.error("projectionTransition captureLocalOperations failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("projectionTransition captureLocalOperations failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 errorMessage = error.localizedDescription
             }
@@ -500,7 +500,7 @@ final class RoomReplicationController {
             do {
                 _ = try roomStore.captureLocalOperations(from: roomState)
             } catch {
-                Self.logger.error("bootstrapRoomState captureLocalOperations failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("bootstrapRoomState captureLocalOperations failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 return (.iroh, roomState, error.localizedDescription)
             }
@@ -529,7 +529,7 @@ final class RoomReplicationController {
             _ = try await service.start(context)
             return true
         } catch {
-            Self.logger.error("startIrohIfNeeded failed: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("startIrohIfNeeded failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             eventHandler(.statusChanged(.unavailable(error.localizedDescription)))
             return false
@@ -547,7 +547,7 @@ final class RoomReplicationController {
                 guard !Task.isCancelled,
                       self.mode == .iroh,
                       self.dependencies.roomStore.activeRoomID == context.roomID else { return }
-                Self.logger.error("scheduleIrohStartup failed: \(error.localizedDescription, privacy: .public)")
+                Self.logger.error("scheduleIrohStartup failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
                 self.eventHandler(.statusChanged(.unavailable(error.localizedDescription)))
             }
@@ -748,7 +748,7 @@ final class RoomReplicationController {
             return await handleUnauthorizedRevisionStream(owner: owner, streamID: streamID)
         } catch {
             guard ownsCurrent(owner, streamID: streamID), !Task.isCancelled else { return .stop }
-            Self.logger.error("revision stream failed, reconnecting: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("revision stream failed, reconnecting: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             // AP123: this loop recurs, so capped counting keeps distinct
             // recurrences visible instead of collapsing to the first.
             SentryCapture.captureRecurring(key: "revision-stream", error: error)

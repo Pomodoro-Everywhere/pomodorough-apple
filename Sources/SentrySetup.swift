@@ -18,6 +18,7 @@ enum SentrySetup {
         SentrySDK.start { options in
             options.dsn = dsn
             options.environment = sentryEnvironment()
+            DiagnosticPrivacy.install(on: options)
             #if os(iOS) || os(tvOS)
                 applySessionReplay(options)
             #endif

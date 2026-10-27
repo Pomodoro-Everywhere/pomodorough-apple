@@ -238,22 +238,22 @@ extension WatchSyncService {
     }
 
     nonisolated static func snapshotEncodeFailed(_ error: Error) {
-        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot encode failed: \(error.localizedDescription, privacy: .public)")
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot encode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.captureOnce(key: "watch-snapshot-encode", error: error)
     }
 
     nonisolated static func contextUpdateFailed(_ error: Error) {
-        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("context update failed: \(error.localizedDescription, privacy: .public)")
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("context update failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.captureOnce(key: "watch-context-update", error: error)
     }
 
     nonisolated static func reportSendFailed(_ error: Error) {
-        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("report send failed: \(error.localizedDescription, privacy: .public)")
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("report send failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.captureOnce(key: "watch-report-send", error: error)
     }
 
     nonisolated static func commandDecodeFailed(_ error: Error) {
-        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(error.localizedDescription, privacy: .public)")
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("command decode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.captureOnce(key: "watch-command-decode", error: error)
     }
 
@@ -264,7 +264,7 @@ extension WatchSyncService {
 
     nonisolated static func snapshotUnavailable() {
         let error = WatchSnapshotUnavailableError()
-        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot unavailable: \(error.localizedDescription, privacy: .public)")
+        Logger(subsystem: "me.egigoka.pomodorough", category: "WatchSync").error("snapshot unavailable: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
         SentryCapture.captureOnce(key: "watch-snapshot-unavailable", error: error)
     }
 }
