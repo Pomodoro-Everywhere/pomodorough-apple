@@ -24,6 +24,7 @@ CLASSIFIED_MEMBERS = (
     ("Sources/AppModel.swift", "SignOutDiagnostics", "errorDescription"),
     ("Sources/AppModel.swift", "SignOutMutationRefusedDiagnostics", "errorDescription"),
     ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"),
+    ("Sources/TimerLiveActivityCoordinator.swift", "WidgetDecodeCountDiagnostics", "errorDescription"),
 )
 
 

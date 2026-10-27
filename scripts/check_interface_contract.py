@@ -86,6 +86,8 @@ LOG_ONLY_COMPUTED_MEMBERS = {
         "refuseWorkspaceMutationDuringSignOut sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
     ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"):
         "reportWatchUnknownCommand sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
+    ("Sources/TimerLiveActivityCoordinator.swift", "WidgetDecodeCountDiagnostics", "errorDescription"):
+        "reportWidgetDecodeFailures sends this to SentryCapture and never assigns it to user-visible state.",
 }
 
 

@@ -132,8 +132,18 @@ extension TimerLiveActivityCoordinator {
     /// Once per launch; the magnitude of each batch is preserved in `count`.
     nonisolated static func reportWidgetDecodeFailures(_ count: Int) {
         guard count > 0 else { return }
-        SentryCapture.captureOnce(key: "widget-snapshot-decode", error: WidgetSnapshotDecodeError(count: count))
+        SentryCapture.captureOnce(key: "widget-snapshot-decode", error: WidgetDecodeCountDiagnostics(count: count))
     }
+}
+
+// Fixed-taxonomy form of the widget decode count: the Shared payload type
+// cannot see the capture boundary (widget target), so the main-target
+// capture site wraps the bare count here instead.
+struct WidgetDecodeCountDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
+    let count: Int
+    var errorDescription: String? { "widget snapshot decode failures=\(count)" }
+    var diagnosticIdentity: String { "Widget.decodeFailures" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 struct TimerLiveActivityModifier: ViewModifier {

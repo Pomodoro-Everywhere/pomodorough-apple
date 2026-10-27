@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """R49-AP07 permanent adversarial ownership gate for the interface scanner.
 
-Owns exemption-ownership coverage: exactly eleven log-only direct members stay
+Owns exemption-ownership coverage: exactly twelve log-only direct members stay
 exempt, while nested actors, qualified extensions, same-named unrelated
 owners, and user-visible missing keys fail closed. Real Watch keys and pseudo
 values stay synchronized. Isolated catalog deletions stay baseline-red and
@@ -34,6 +34,7 @@ EXPECTED_TUPLES = (
     ("Sources/AppModel.swift", "SignOutDiagnostics", "errorDescription"),
     ("Sources/AppModel.swift", "SignOutMutationRefusedDiagnostics", "errorDescription"),
     ("Sources/WatchSyncPayload.swift", "WatchUnknownCommandError", "errorDescription"),
+    ("Sources/TimerLiveActivityCoordinator.swift", "WidgetDecodeCountDiagnostics", "errorDescription"),
 )
 WATCH_KEYS = (
     "Watch Start not applied.",
@@ -63,9 +64,9 @@ def coverage_failures(source: str, path: str, catalog: dict | None = None) -> li
 
 
 class R49AP07ExactExemptionGateTests(unittest.TestCase):
-    def test_exact_eleven_log_only_tuples(self) -> None:
+    def test_exact_twelve_log_only_tuples(self) -> None:
         self.assertEqual(set(checker.LOG_ONLY_COMPUTED_MEMBERS), set(EXPECTED_TUPLES))
-        self.assertEqual(len(checker.LOG_ONLY_COMPUTED_MEMBERS), 11)
+        self.assertEqual(len(checker.LOG_ONLY_COMPUTED_MEMBERS), 12)
         app_explanation = checker.LOG_ONLY_COMPUTED_MEMBERS[EXPECTED_TUPLES[0]]
         selection_explanation = checker.LOG_ONLY_COMPUTED_MEMBERS[EXPECTED_TUPLES[1]]
         self.assertIn("reportSyncBoundaryFailure", app_explanation)
