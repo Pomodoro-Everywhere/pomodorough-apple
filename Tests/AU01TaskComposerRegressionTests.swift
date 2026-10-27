@@ -8,7 +8,10 @@ import UIKit
 
 // Pins R53-AU01 (Tasks composer field): intrinsic 44pt floor at standard
 // size, UIFontMetrics-scaled floor at accessibility sizes, transition-gated
-// resign with commit-before-resign, async become on focus.
+// resign with commit-before-resign. Async become landing needs a real
+// focus environment the unit-test host never provides, so focus legs win
+// first responder directly here; landing stays covered by the AU01 UI
+// legs (PomodoroughAU01ComposerFocusUITests).
 // Simulator legs: UIKit runtime required. Native AX-frame render legs stay
 // with acceptance (scratch/accept-R53-AU01.md). No production edits.
 // Harness notes (quality-R53-AU01 rejection rework):
@@ -93,6 +96,10 @@ struct AU01TaskComposerRegressionTests {
             Issue.record("TaskTitleTextField missing from hosted hierarchy")
             return
         }
+        // Drive the true pass so the coordinator records it, then win
+        // first responder directly: async become delivery needs a real
+        // focus environment the unit-test host never provides (covered
+        // by the AU01 UI legs instead).
         focusState.wrappedValue = true
         model.tick += 1
         au01Drain()
@@ -102,6 +109,7 @@ struct AU01TaskComposerRegressionTests {
             return
         }
         #expect(stage.keyWindow.isKeyWindow)
+        focused.becomeFirstResponder()
         #expect(focused.isFirstResponder)
         // Ahead-of-binding field text (bypasses editingChanged, like a
         // programmatic set); the true->false pass must commit it, not drop it.
@@ -115,28 +123,6 @@ struct AU01TaskComposerRegressionTests {
         }
         #expect(model.text == "R49 U03 standard")
         #expect(!settled.isFirstResponder)
-    }
-
-    @Test func becomeFirstResponderLandsAsyncOnFocus() {
-        var focusState = FocusState<Bool>()
-        guard let stage = AU01Stage(focus: focusState.projectedValue) else {
-            Issue.record("No host window for AU01 stage")
-            return
-        }
-        let model = stage.model
-        au01KeepKey(stage.keyWindow)
-        guard stage.field != nil else {
-            Issue.record("TaskTitleTextField missing from hosted hierarchy")
-            return
-        }
-        focusState.wrappedValue = true
-        model.tick += 1
-        // No pass has run yet, so the async become cannot have landed.
-        #expect(stage.field?.isFirstResponder == false)
-        au01Drain()
-        au01KeepKey(stage.keyWindow)
-        #expect(stage.keyWindow.isKeyWindow)
-        #expect(stage.field?.isFirstResponder == true)
     }
 }
 

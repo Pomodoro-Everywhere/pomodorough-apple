@@ -19,7 +19,7 @@ enum AccountHistoryResolutionState: Equatable, Sendable {
 // R50-L03: bounded batch-plan bootstrap outcome. Fixed stage and reason
 // with bundled Core provenance. No operation IDs, payloads, account
 // data, or Core response text.
-struct BootstrapBatchPlanDiagnostics: Error, LocalizedError, Sendable {
+struct BootstrapBatchPlanDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Stage: String, Sendable { case preflight, submission }
     let stage: Stage
     var key: String { "bootstrap-batch-invalid-\(stage.rawValue)" }
@@ -27,6 +27,8 @@ struct BootstrapBatchPlanDiagnostics: Error, LocalizedError, Sendable {
         "bootstrap-batch stage=\(stage.rawValue) reason=invalid-plan "
             + "core=\(WorkspaceIntentProvenance.current().prefix(160))"
     }
+    var diagnosticIdentity: String { "Bootstrap.batchPlan" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 @MainActor

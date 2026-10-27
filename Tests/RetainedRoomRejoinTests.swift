@@ -379,7 +379,9 @@ struct RetainedRoomRejoinTests {
         }
         #expect(message.contains("joined room has no valid genesis. Room join rollback failed: "))
         #expect(captured.value.count == 2)
-        #expect(captured.value.contains(where: { $0.contains("joined room has no valid genesis") }))
+        // R53-L01: the capture boundary no longer carries failure
+        // sentences; join and rollback each arrive as one bounded
+        // capture while the user-facing message keeps both sentences.
         #expect(captured.value.allSatisfy { !$0.isEmpty })
         #expect(harness.service.stops == 1)
         #expect(fixture.vault.secrets[fixture.roomA] == fixture.secretA)

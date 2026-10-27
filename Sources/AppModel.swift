@@ -44,7 +44,7 @@ private struct AppModelCoordinators {
     let alarmEffectCoordinator: AlarmEffectCoordinator
 }
 
-struct SyncFailureDiagnostics: Error, LocalizedError, Sendable {
+struct SyncFailureDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Stage: String, Sendable { case preSend, possibleDelivery, reconciliation, commit }
     enum Rollback: String, Sendable { case restored, snapshotChanged, deliveryPossible, notEligible, persistenceFailed }
     enum Reason: String, Sendable { case cancelled, transport, core, invalidResponse, invalidLocalClock, batch, other }
@@ -83,6 +83,8 @@ struct SyncFailureDiagnostics: Error, LocalizedError, Sendable {
             + "pending=\(pending.map(String.init).joined(separator: "/")) claim=\(hasClaim) "
             + "core=\(WorkspaceIntentProvenance.current().prefix(160))"
     }
+    var diagnosticIdentity: String { "Sync.boundary" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 
     struct Budget {
         private var counts: [String: Int] = [:]
@@ -131,7 +133,7 @@ struct AccountSwitchCancelDiagnostics: Error, LocalizedError, Sendable {
 // R51-AP01: bounded sign-out stage/outcome. Fixed stage and outcome
 // with quarantine and pending counts only. No titles, account IDs,
 // credentials, file payloads, or transport text.
-struct SignOutDiagnostics: Error, LocalizedError, Sendable {
+struct SignOutDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Stage: String, Sendable { case snapshot, localSnapshot, roomSnapshot, credentials, publish }
     enum Outcome: String, Sendable { case failed, uncertain }
     let stage: Stage
@@ -144,17 +146,21 @@ struct SignOutDiagnostics: Error, LocalizedError, Sendable {
         "sign-out stage=\(stage.rawValue) outcome=\(outcome.rawValue) "
             + "quarantined=\(quarantined) pending=\(pendingOperations)"
     }
+    var diagnosticIdentity: String { "SignOut.stage" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 // R52-AP02: bounded sign-out mutation-refusal outcome. Pending count
 // only; no titles, account IDs, credentials, or transport text.
-struct SignOutMutationRefusedDiagnostics: Error, LocalizedError, Sendable {
+struct SignOutMutationRefusedDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     let pendingOperations: Int
 
     var key: String { "sign-out-mutation-refused" }
     var errorDescription: String? {
         "sign-out stage=mutation outcome=refused pending=\(pendingOperations)"
     }
+    var diagnosticIdentity: String { "SignOut.mutationRefused" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 // R50-AP02: bounded bootstrap install outcome. Counts only, no timer

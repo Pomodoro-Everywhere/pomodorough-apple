@@ -1782,7 +1782,10 @@ struct SentryCaptureTests {
         }
         #expect(message == SentryRoomServiceError.endpointUnavailable.localizedDescription)
         #expect(recorded.value.count == 1)
-        #expect(recorded.value[0] == SentryRoomServiceError.endpointUnavailable.localizedDescription)
+        // R53-L01: the capture boundary rebuilds diagnostics from an
+        // allowlist, so transport errors arrive collapsed. Exactly one
+        // bounded capture with no room secret is the contract now.
+        #expect(recorded.value[0] == "OtherError (0)")
         #expect(!recorded.value[0].contains(roomID))
         #expect(!message.contains(roomID))
         #expect(await fixture.service.startedContexts.count == 1)
@@ -1980,7 +1983,9 @@ struct SentryCaptureTests {
         }
         #expect(coordinator.snapshotLoadFailure != nil)
         #expect(recorded.value.count == 1)
-        #expect(recorded.value[0] == POSIXError(.EIO).localizedDescription)
+        // R53-L01: replacement wrapper arrives collapsed; the count and
+        // the absence of device and queue content are the contract now.
+        #expect(recorded.value[0] == "OtherError (1)")
         #expect(!recorded.value[0].contains(proposed.deviceId))
         #expect(!recorded.value[0].contains("pendingCommands"))
         let application = coordinator.application(for: result, current: .fresh(), rebuildsOnFailure: true)

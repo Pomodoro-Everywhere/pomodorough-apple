@@ -39,3 +39,9 @@ extension TimerWidgetSnapshot {
 struct WidgetSnapshotDecodeError: Error {
     let count: Int
 }
+
+extension WidgetSnapshotDecodeError: LocalizedError, FixedTaxonomyDiagnostic {
+    var errorDescription: String? { "widget snapshot decode failures=\(count)" }
+    var diagnosticIdentity: String { "Widget.decodeFailures" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}

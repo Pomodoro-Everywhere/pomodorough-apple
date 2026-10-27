@@ -3,6 +3,15 @@ import Sentry
 
 // Rebuild diagnostics from an allowlist. Never carry descriptions, userInfo,
 // requests, stacks, or scope metadata across the monitoring boundary.
+// Fixed-taxonomy diagnostics carry only bounded literal reasons
+// (operation names, capped lengths, enum outcomes, counts) — never ids,
+// revisions, or user content. The capture boundary preserves the reason
+// instead of collapsing it to OtherError.
+protocol FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String { get }
+    var diagnosticDescription: String { get }
+}
+
 enum DiagnosticPrivacy {
     static let domain = "PomodoroughDiagnostic"
     static let operations: Set<String> = [
@@ -13,10 +22,17 @@ enum DiagnosticPrivacy {
         "AppError.configuration", "AppError.missingPresentationAnchor", "AppError.missingIDToken",
         "AppError.unauthorized", "AppError.conflict", "AppError.server",
         "AppError.historyReplacementUnavailable", "AppError.invalidResponse", "AppError.invalidLocalClock",
-        "NSURLErrorDomain", "NSCocoaErrorDomain", "NSPOSIXErrorDomain", "WCErrorDomain", "OtherError"
+        "NSURLErrorDomain", "NSCocoaErrorDomain", "NSPOSIXErrorDomain", "WCErrorDomain", "OtherError",
+        "WatchCommand.unknown", "WatchCommand.staleWorkspace",
+        "WatchRefusal.pause", "WatchRefusal.start", "WatchRefusal.resume", "WatchRefusal.finish",
+        "Iroh.foregroundSync", "SignOut.stage", "SignOut.mutationRefused",
+        "Bootstrap.batchPlan", "Sync.boundary", "Widget.decodeFailures"
     ]
 
     static func identity(_ error: Error) -> String {
+        if let fixed = error as? any FixedTaxonomyDiagnostic {
+            return fixed.diagnosticIdentity
+        }
         if let error = error as? AppError {
             switch error {
             case .configuration: return "AppError.configuration"
@@ -51,6 +67,12 @@ enum DiagnosticPrivacy {
     }
 
     static func diagnostic(_ error: Error, file: StaticString = #fileID) -> NSError {
+        if let fixed = error as? any FixedTaxonomyDiagnostic {
+            return NSError(domain: domain, code: boundedCode((error as NSError).code), userInfo: [
+                "identity": fixed.diagnosticIdentity, "operation": operation(file: file),
+                NSLocalizedDescriptionKey: fixed.diagnosticDescription
+            ])
+        }
         let name = identity(error)
         let code = boundedCode((error as NSError).code)
         return NSError(domain: domain, code: code, userInfo: [

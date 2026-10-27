@@ -3,13 +3,15 @@ import OSLog
 
 // R50-AP04: bounded Iroh foreground-sync false outcome. Backend and
 // outcome only, no room IDs, invites, secrets, or timer IDs.
-struct IrohForegroundSyncDiagnostics: Error, LocalizedError, Sendable {
+struct IrohForegroundSyncDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     let backend = "iroh"
 
     var key: String { "iroh-foreground-sync-false" }
     var errorDescription: String? {
         "foreground backend=\(backend) outcome=sync-false"
     }
+    var diagnosticIdentity: String { "Iroh.foregroundSync" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 @MainActor

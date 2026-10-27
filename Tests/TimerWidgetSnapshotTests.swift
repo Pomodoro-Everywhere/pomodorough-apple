@@ -45,24 +45,14 @@ struct TimerWidgetSnapshotTests {
 
     @Test func decodeFailureReportCarriesOnlyTheCount() {
         let recorded = LockedTestValue<[String]>([])
-        let counts = LockedTestValue<[Int]>([])
-        SentryCapture.setTestBackend { error in
-            var current = recorded.value
-            current.append(String(describing: error))
-            recorded.value = current
-            if let failure = error as? WidgetSnapshotDecodeError {
-                var seen = counts.value
-                seen.append(failure.count)
-                counts.value = seen
-            }
-        }
+        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
         defer { SentryCapture.resetForTesting() }
         TimerLiveActivityCoordinator.reportWidgetDecodeFailures(0)
         #expect(recorded.value.isEmpty)
         TimerLiveActivityCoordinator.reportWidgetDecodeFailures(3)
         TimerLiveActivityCoordinator.reportWidgetDecodeFailures(3)
-        #expect(recorded.value.count == 1)
-        #expect(counts.value == [3])
+        // R53-L01: the count arrives as a fixed literal, reported once.
+        #expect(recorded.value == ["widget snapshot decode failures=3"])
     }
 }
 #endif
