@@ -1,10 +1,12 @@
 import XCTest
 
 // R53-AU01: Tasks composer focus legs in a host with a working focus store
-// (real app UI). The unit-test host FocusState never delivers (see
-// scratch/tests-R53-AU01.md), so T4/T5 observable outcomes pin here:
-// T5 tap focuses and the full string persists; T4 submit commits the full
-// title, clears the composer, and disables Add.
+// (real app UI). The unit-test host FocusState never delivers (a detached
+// FocusState's wrappedValue setter is a no-op: reads back false), so T4/T5
+// observable outcomes pin here: T5 tap focuses and the full string
+// persists; T4 submit commits the full title, clears the composer, and
+// disables Add; T4b navigating away commits ahead-of-binding text so Add
+// still creates the full title without refocusing.
 @MainActor
 final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
     func testAU01TapFocusesAndFullStringPersists() {
@@ -48,6 +50,29 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         } while Date() < deadline
         XCTAssertTrue(cleared == "" || cleared == "Write release notes", "value=\(cleared)")
         XCTAssertFalse(app.buttons["Add task"].isEnabled)
+    }
+
+    func testAU01UnfocusCommitsFullTitleForAdd() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeAU01App()
+        defer { app.terminate() }
+        launchAU01(app)
+        let field = au01Field(in: app)
+        field.tap()
+        field.typeText("AU01 unfocus T4b")
+        // Resign by navigating away: the true->false pass must commit the
+        // ahead-of-binding text instead of dropping it.
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+        app.buttons["Tasks"].tap()
+        let returned = au01FieldValue(in: app)
+        let kept = returned.value as? String ?? ""
+        XCTAssertTrue(kept.contains("AU01 unfocus T4b"), "resign dropped text, value=\(kept)")
+        app.buttons["Add task"].tap()
+        let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU01 unfocus T4b"))
+        XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(matches.count, 1, "Add creates exactly one task")
     }
 
     private func makeAU01App() -> XCUIApplication {

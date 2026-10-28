@@ -162,9 +162,26 @@ struct TasksScreen: View {
             if await model.addTask(taskTitle.wrappedValue) {
                 taskTitle.wrappedValue = ""
                 taskFieldFocused = false
+                // Submit always dismisses the keyboard: the render-pass
+                // resign above stays transition-gated for the tap race,
+                // but an explicit submit carries its own intent.
+                resignComposerKeyboard()
             }
         }
     }
+
+#if os(iOS)
+    private func resignComposerKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
+#else
+    private func resignComposerKeyboard() {}
+#endif
 }
 
 #if DEBUG

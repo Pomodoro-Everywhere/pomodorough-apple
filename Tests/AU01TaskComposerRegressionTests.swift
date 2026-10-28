@@ -7,11 +7,11 @@ import UIKit
 @testable import Pomodorough
 
 // Pins R53-AU01 (Tasks composer field): intrinsic 44pt floor at standard
-// size, UIFontMetrics-scaled floor at accessibility sizes, transition-gated
-// resign with commit-before-resign. Async become landing needs a real
-// focus environment the unit-test host never provides, so focus legs win
-// first responder directly here; landing stays covered by the AU01 UI
-// legs (PomodoroughAU01ComposerFocusUITests).
+// size, UIFontMetrics-scaled floor at accessibility sizes, and the
+// steady-false pass never resigning a tap-won session. Focus delivery
+// needs a real focus environment (a detached FocusState's wrappedValue
+// setter is a no-op), so commit/focus legs live in the AU01 UI tests;
+// nothing here drives the focus binding.
 // Simulator legs: UIKit runtime required. Native AX-frame render legs stay
 // with acceptance (scratch/accept-R53-AU01.md). No production edits.
 // Harness notes (quality-R53-AU01 rejection rework):
@@ -82,47 +82,6 @@ struct AU01TaskComposerRegressionTests {
         #expect(stage.keyWindow.isKeyWindow)
         #expect(live.isFirstResponder)
         #expect(live.text == "R49 U03 standard")
-    }
-
-    @Test func resignCommitsFieldTextBeforeResigning() {
-        var focusState = FocusState<Bool>()
-        guard let stage = AU01Stage(focus: focusState.projectedValue) else {
-            Issue.record("No host window for AU01 stage")
-            return
-        }
-        let model = stage.model
-        au01KeepKey(stage.keyWindow)
-        guard stage.field != nil else {
-            Issue.record("TaskTitleTextField missing from hosted hierarchy")
-            return
-        }
-        // Drive the true pass so the coordinator records it, then win
-        // first responder directly: async become delivery needs a real
-        // focus environment the unit-test host never provides (covered
-        // by the AU01 UI legs instead).
-        focusState.wrappedValue = true
-        model.tick += 1
-        au01Drain()
-        au01KeepKey(stage.keyWindow)
-        guard let focused = stage.field else {
-            Issue.record("TaskTitleTextField lost after focus pass")
-            return
-        }
-        #expect(stage.keyWindow.isKeyWindow)
-        focused.becomeFirstResponder()
-        #expect(focused.isFirstResponder)
-        // Ahead-of-binding field text (bypasses editingChanged, like a
-        // programmatic set); the true->false pass must commit it, not drop it.
-        focused.text = "R49 U03 standard"
-        focusState.wrappedValue = false
-        model.tick += 1
-        au01Drain()
-        guard let settled = stage.field else {
-            Issue.record("TaskTitleTextField lost after unfocus pass")
-            return
-        }
-        #expect(model.text == "R49 U03 standard")
-        #expect(!settled.isFirstResponder)
     }
 }
 
