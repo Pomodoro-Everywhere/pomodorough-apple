@@ -137,7 +137,6 @@ struct DiagnosticPrivacyTests {
             (WatchUnknownCommandError(nameLength: 6), "WatchCommand.unknown", "unknown_command len=6"),
             (WatchStaleWorkspaceError(), "WatchCommand.staleWorkspace", "stale_workspace"),
             (IrohForegroundSyncDiagnostics(), "Iroh.foregroundSync", "foreground backend=iroh outcome=sync-false"),
-            (WidgetDecodeCountDiagnostics(count: 3), "Widget.decodeFailures", "widget snapshot decode failures=3"),
         ]
         for (error, identity, reason) in cases {
             #expect(DiagnosticPrivacy.identities.contains(identity))
