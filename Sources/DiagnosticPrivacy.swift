@@ -104,6 +104,7 @@ enum DiagnosticPrivacy {
     static func scrub(_ event: Event, validate: (Event) throws -> Void = validateEnvelope) -> Event? {
         do {
             let clean = Event(level: event.level)
+            preserveMetadata(from: event, on: clean)
             let error = event.error.map { $0 as NSError }
             let isDiagnostic = error?.domain == domain
             let candidate = isDiagnostic ? error?.userInfo["identity"] as? String : error.map { identity($0) }
@@ -125,6 +126,27 @@ enum DiagnosticPrivacy {
     private static func validateEnvelope(_ event: Event) throws {
         // Validate the actual serialized SDK payload; serialization failure drops it.
         _ = try JSONSerialization.data(withJSONObject: event.serialize())
+    }
+
+    private static func preserveMetadata(from event: Event, on clean: Event) {
+        clean.eventId = event.eventId
+        clean.timestamp = event.timestamp
+        if let environment = event.environment,
+           ["development", "testflight", "production"].contains(environment) {
+            clean.environment = environment
+        }
+        // Historical crashes retain their own numeric version@build, never today's build.
+        // Reject arbitrary scope text; the release suffix owns dist because the SDK
+        // may have filled a missing historical dist with the current bundle's build.
+        if let release = event.releaseName,
+           release.range(of: #"\A[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}@[0-9]{1,10}\z"#,
+               options: .regularExpression) != nil {
+            clean.releaseName = release
+            clean.dist = release.split(separator: "@").last.map(String.init)
+        } else if event.releaseName == nil, let dist = event.dist,
+                  dist.range(of: #"\A[0-9]{1,10}\z"#, options: .regularExpression) != nil {
+            clean.dist = dist
+        }
     }
 }
 

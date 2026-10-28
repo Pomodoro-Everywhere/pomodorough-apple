@@ -61,6 +61,92 @@ struct DiagnosticPrivacyTests {
     }
 
     @Test
+    func finalHookPreservesHistoricalMetadataWithoutPrivatePayload() throws {
+        let options = Options()
+        options.releaseName = "0.53.0@62"
+        options.environment = "production"
+        DiagnosticPrivacy.install(on: options)
+        let event = contaminatedEvent()
+        event.releaseName = "0.47.0@56"
+        event.environment = "testflight"
+        event.dist = "62" // SDK fallback can supply today's build for an old crash.
+        event.timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let originalID = event.eventId.sentryIdString
+        let clean = try #require(options.beforeSend?(event))
+        try assertNoCanaries(clean)
+        let payload = clean.serialize()
+        #expect(payload["event_id"] as? String == originalID)
+        #expect((payload["timestamp"] as? NSNumber)?.doubleValue == 1_700_000_000)
+        #expect(payload["release"] as? String == "0.47.0@56")
+        #expect(payload["environment"] as? String == "testflight")
+        #expect(payload["dist"] as? String == "56")
+        #expect(clean.user == nil)
+        #expect(clean.threads == nil)
+        #expect(clean.stacktrace == nil)
+    }
+
+    @Test
+    func finalHookRejectsUnboundedMetadata() throws {
+        for value in Self.canaries + ["0.47.0@56\n", "0.47.0@56-secret", "0.47.0@12345678901"] {
+            let event = contaminatedEvent()
+            event.releaseName = value
+            event.environment = value
+            event.dist = value
+            let options = Options()
+            DiagnosticPrivacy.install(on: options)
+            let clean = try #require(options.beforeSend?(event))
+            try assertNoCanaries(clean)
+            #expect(clean.releaseName == nil)
+            #expect(clean.environment == nil)
+            #expect(clean.dist == nil)
+        }
+    }
+
+    @Test
+    func finalHookPreservesCurrentMetadataAndNumericDistWithoutRelease() throws {
+        let options = Options()
+        DiagnosticPrivacy.install(on: options)
+        for environment in ["development", "testflight", "production"] {
+            let event = contaminatedEvent()
+            event.releaseName = "0.53.0@62"
+            event.environment = environment
+            event.dist = "62"
+            let clean = try #require(options.beforeSend?(event))
+            try assertNoCanaries(clean)
+            #expect(clean.releaseName == event.releaseName)
+            #expect(clean.environment == environment)
+            #expect(clean.dist == "62")
+        }
+        let event = contaminatedEvent()
+        event.dist = "62"
+        let clean = try #require(options.beforeSend?(event))
+        #expect(clean.releaseName == nil)
+        #expect(clean.dist == "62")
+        try assertNoCanaries(clean)
+    }
+
+    @Test
+    func fixedTaxonomyReasonsSurviveCaptureBoundary() {
+        // R53 regression pin: ca24aad collapsed every fixed literal to
+        // OtherError. Operation names are static taxonomy, not user data.
+        let cases: [(Error, String, String)] = [
+            (WatchPauseRefusedError(), "WatchRefusal.pause", "pause"),
+            (WatchStartRefusedError(), "WatchRefusal.start", "start"),
+            (WatchResumeRefusedError(), "WatchRefusal.resume", "resume"),
+            (WatchFinishRefusedError(), "WatchRefusal.finish", "finish"),
+            (WatchUnknownCommandError(nameLength: 6), "WatchCommand.unknown", "unknown_command len=6"),
+            (WatchStaleWorkspaceError(), "WatchCommand.staleWorkspace", "stale_workspace"),
+            (IrohForegroundSyncDiagnostics(), "Iroh.foregroundSync", "foreground backend=iroh outcome=sync-false"),
+            (WidgetDecodeCountDiagnostics(count: 3), "Widget.decodeFailures", "widget snapshot decode failures=3"),
+        ]
+        for (error, identity, reason) in cases {
+            #expect(DiagnosticPrivacy.identities.contains(identity))
+            #expect(DiagnosticPrivacy.identity(error) == identity)
+            #expect(DiagnosticPrivacy.diagnostic(error).localizedDescription == reason)
+        }
+    }
+
+    @Test
     func unknownDomainsAndOversizedCodesAreBounded() throws {
         let error = NSError(domain: Self.canaries[0], code: Int.max,
             userInfo: [NSLocalizedDescriptionKey: Self.canaries[1]])
