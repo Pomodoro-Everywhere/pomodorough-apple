@@ -35,6 +35,7 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         let field = au01Field(in: app)
         field.tap()
         field.typeText("AU01 resign T4")
+        au01Wait(field, "value == %@", "AU01 resign T4", message: "typed text must reach the field before Add")
         app.buttons["Add task"].tap()
         let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU01 resign T4"))
         XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 10))
@@ -61,6 +62,7 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         let field = au01Field(in: app)
         field.tap()
         field.typeText("AU01 unfocus T4b")
+        au01Wait(field, "value == %@", "AU01 unfocus T4b", message: "typed text must reach the field before leaving Tasks")
         // Resign by navigating away: leaving the Tasks view resigns the
         // field, and the true->false pass must commit the ahead-of-binding
         // text instead of dropping it. Leave through the system URL route
@@ -73,8 +75,8 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 15))
         XCTAssertEqual(app.state, .runningForeground, "system URL must reach the running app")
         XCTAssertTrue(app.buttons["Timer"].isSelected, "system URL must select the Timer route")
-        au01Wait(app.keyboards.firstMatch, "exists == false", "leaving Tasks must end composer editing")
-        au01Wait(app.buttons["Tasks"], "isHittable == true", "Tasks tab must be reachable after leaving Tasks")
+        au01Wait(app.keyboards.firstMatch, "exists == false", message: "leaving Tasks must end composer editing")
+        au01Wait(app.buttons["Tasks"], "isHittable == true", message: "Tasks tab must be reachable after leaving Tasks")
         app.buttons["Tasks"].tap()
         let kept = au01FieldValue(in: app).value as? String ?? ""
         XCTAssertTrue(kept.contains("AU01 unfocus T4b"), "resign dropped text, value=\(kept)")
@@ -85,8 +87,9 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         XCTAssertEqual(matches.count, 1, "Add creates exactly one task")
     }
 
-    private func au01Wait(_ element: XCUIElement, _ format: String, _ message: String) {
-        let condition = XCTNSPredicateExpectation(predicate: NSPredicate(format: format), object: element)
+    private func au01Wait(_ element: XCUIElement, _ format: String, _ args: Any..., message: String) {
+        let predicate = NSPredicate(format: format, argumentArray: args)
+        let condition = XCTNSPredicateExpectation(predicate: predicate, object: element)
         XCTAssertEqual(XCTWaiter().wait(for: [condition], timeout: 15), .completed, message)
     }
 
