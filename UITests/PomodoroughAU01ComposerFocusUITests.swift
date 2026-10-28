@@ -63,30 +63,31 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         field.typeText("AU01 unfocus T4b")
         // Resign by navigating away: leaving the Tasks view resigns the
         // field, and the true->false pass must commit the ahead-of-binding
-        // text instead of dropping it. Cold runners render slowly (the
-        // helper below allows 30s for first frame), so allow the same
-        // here with a second tab tap midway.
-        app.buttons["Timer"].tap()
-        var timerShown = app.buttons["Start focus"].waitForExistence(timeout: 15)
-        if !timerShown {
-            app.buttons["Timer"].tap()
-            timerShown = app.buttons["Start focus"].waitForExistence(timeout: 15)
-        }
-        XCTAssertTrue(timerShown)
+        // text instead of dropping it. Leave through the system URL route
+        // that the Live Activity and StandBy links use. On hosted iPhone 17
+        // runners the Timer tab has no hit point while the composer edits,
+        // the Account sheet hands first responder back when it closes, and
+        // scrolling the board keeps the keyboard. XCUIApplication.open would
+        // relaunch the app and lose the text.
+        XCUIDevice.shared.system.open(URL(string: "pomodorough://timer")!)
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.state, .runningForeground, "system URL must reach the running app")
+        XCTAssertTrue(app.buttons["Timer"].isSelected, "system URL must select the Timer route")
+        au01Wait(app.keyboards.firstMatch, "exists == false", "leaving Tasks must end composer editing")
+        au01Wait(app.buttons["Tasks"], "isHittable == true", "Tasks tab must be reachable after leaving Tasks")
         app.buttons["Tasks"].tap()
-        var tasksBack = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "New task")).firstMatch.waitForExistence(timeout: 15)
-        if !tasksBack {
-            app.buttons["Tasks"].tap()
-            tasksBack = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "New task")).firstMatch.waitForExistence(timeout: 15)
-        }
-        XCTAssertTrue(tasksBack)
-        let returned = au01FieldValue(in: app)
-        let kept = returned.value as? String ?? ""
+        let kept = au01FieldValue(in: app).value as? String ?? ""
         XCTAssertTrue(kept.contains("AU01 unfocus T4b"), "resign dropped text, value=\(kept)")
-        app.buttons["Add task"].tap()
         let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU01 unfocus T4b"))
+        XCTAssertEqual(matches.count, 0, "leaving Tasks must not submit the task")
+        app.buttons["Add task"].tap()
         XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(matches.count, 1, "Add creates exactly one task")
+    }
+
+    private func au01Wait(_ element: XCUIElement, _ format: String, _ message: String) {
+        let condition = XCTNSPredicateExpectation(predicate: NSPredicate(format: format), object: element)
+        XCTAssertEqual(XCTWaiter().wait(for: [condition], timeout: 15), .completed, message)
     }
 
     private func makeAU01App() -> XCUIApplication {
