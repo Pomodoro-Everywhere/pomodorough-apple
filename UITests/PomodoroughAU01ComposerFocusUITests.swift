@@ -73,6 +73,16 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
             timerShown = app.buttons["Start focus"].waitForExistence(timeout: 15)
         }
         XCTAssertTrue(timerShown)
+        app.buttons["Tasks"].tap()
+        var tasksBack = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "New task")).firstMatch.waitForExistence(timeout: 15)
+        if !tasksBack {
+            app.buttons["Tasks"].tap()
+            tasksBack = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "New task")).firstMatch.waitForExistence(timeout: 15)
+        }
+        XCTAssertTrue(tasksBack)
+        let returned = au01FieldValue(in: app)
+        let kept = returned.value as? String ?? ""
+        XCTAssertTrue(kept.contains("AU01 unfocus T4b"), "resign dropped text, value=\(kept)")
         app.buttons["Add task"].tap()
         let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU01 unfocus T4b"))
         XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 10))
