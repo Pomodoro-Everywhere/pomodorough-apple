@@ -62,9 +62,14 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         field.tap()
         field.typeText("AU01 unfocus T4b")
         // Resign by navigating away: the true->false pass must commit the
-        // ahead-of-binding text instead of dropping it.
-        app.buttons["Timer"].tap()
-        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+        // ahead-of-binding text instead of dropping it. Loaded runners can
+        // swallow the first tab tap, so retry until the Timer screen lands.
+        var timerShown = false
+        for _ in 0..<3 where !timerShown {
+            app.buttons["Timer"].tap()
+            timerShown = app.buttons["Start focus"].waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(timerShown)
         app.buttons["Tasks"].tap()
         let returned = au01FieldValue(in: app)
         let kept = returned.value as? String ?? ""
