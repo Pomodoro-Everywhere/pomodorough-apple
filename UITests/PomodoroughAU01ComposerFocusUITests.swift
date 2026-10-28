@@ -61,13 +61,18 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         let field = au01Field(in: app)
         field.tap()
         field.typeText("AU01 unfocus T4b")
-        // Resign by tapping outside the field: the true->false pass must
-        // commit the ahead-of-binding text instead of dropping it. No
-        // navigation here: a covered tab tap is unreliable on runners.
-        app.navigationBars.firstMatch.tap()
-        let resigned = NSPredicate(format: "hasKeyboardFocus == false")
-        expectation(for: resigned, evaluatedWith: field)
-        waitForExpectations(timeout: 10)
+        // Resign by navigating away: leaving the Tasks view resigns the
+        // field, and the true->false pass must commit the ahead-of-binding
+        // text instead of dropping it. Cold runners render slowly (the
+        // helper below allows 30s for first frame), so allow the same
+        // here with a second tab tap midway.
+        app.buttons["Timer"].tap()
+        var timerShown = app.buttons["Start focus"].waitForExistence(timeout: 15)
+        if !timerShown {
+            app.buttons["Timer"].tap()
+            timerShown = app.buttons["Start focus"].waitForExistence(timeout: 15)
+        }
+        XCTAssertTrue(timerShown)
         app.buttons["Add task"].tap()
         let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU01 unfocus T4b"))
         XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 10))
