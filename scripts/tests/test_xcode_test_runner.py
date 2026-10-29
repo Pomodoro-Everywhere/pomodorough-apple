@@ -35,6 +35,11 @@ RUNNER = ROOT / "scripts" / "run_xcode_tests.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 SYSTEM_SOCKET_TYPE = socket.socket
 SYSTEM_OS_CLOSE = os.close
+# The deny-default shape of SwiftPM's manifest profile. Unlike an allow-default
+# profile, it cannot be applied inside another sandbox.
+PACKAGE_MANIFEST_SANDBOX = (
+    '(version 1)(deny default)(import "system.sb")(allow file-read*)(allow process*)'
+)
 FINALIZER_LOCK_CASE_SOURCE = textwrap.dedent(
     """
     import errno
@@ -643,6 +648,233 @@ def launchctl_test_deadline(command_window: float = 1.0) -> float:
         + command_window
         + run_xcode_tests.LAUNCHCTL_PROCESS_CLEANUP_SECONDS
     )
+
+
+# R54-APB01: an orphaned or released direct wrapper must exit well inside
+# this bound; HEAD kept polling until its target finished (here 60 s).
+DIRECT_RELEASE_SECONDS = 5.0
+# A wrapper that stops waiting exits within milliseconds of its error report;
+# the held wrapper waits indefinitely, so this window only bounds detection.
+FAILED_WRAPPER_HOLD_SECONDS = 0.5
+READY_SLEEP_TARGET = [
+    sys.executable,
+    "-c",
+    "import time; print('READY', flush=True); time.sleep(60)",
+]
+# The target starts a sleeper in its own session, outside the target's group.
+DESCENDANT_SLEEP_TARGET = [
+    sys.executable,
+    "-c",
+    textwrap.dedent(
+        """
+        import subprocess, sys, time
+        sleeper = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            start_new_session=True,
+        )
+        print("READY", sleeper.pid, flush=True)
+        time.sleep(60)
+        """
+    ),
+]
+# Runs as the wrapper's parent. It reports the job only once the wrapper has
+# reported the sleeper, then waits to be killed.
+DIRECT_ORPHAN_PARENT_SOURCE = """
+    import json, sys, time
+    sys.path.insert(0, sys.argv[1])
+    from scripts import run_xcode_tests as runner
+    deadline = time.monotonic() + 10
+    job = runner.spawn_direct_job(sys.argv[2:], deadline)
+
+    def reported_sleeper():
+        try:
+            words = job.stdout_path.read_text(encoding="utf-8").split()
+        except FileNotFoundError:
+            return None
+        if len(words) < 2 or words[0] != "READY":
+            return None
+        current = runner.direct_process_identity(int(words[1]))
+        reported = job.channel.descendants
+        if current is None or not any(runner.same_direct_process(current, item) for item in reported):
+            return None
+        return current
+
+    sleeper = None
+    while time.monotonic() < deadline:
+        runner.pump_direct_channel(job.channel, deadline)
+        sleeper = reported_sleeper()
+        if job.channel.target is not None and sleeper is not None:
+            break
+        time.sleep(0.01)
+    launched = {
+        "root": str(job.root),
+        "wrapper": job.process.pid,
+        "target": job.channel.target.pid if job.channel.target is not None else -1,
+        "sleeper": sleeper.pid if sleeper is not None else -1,
+    }
+    print(json.dumps(launched), flush=True)
+    time.sleep(60)
+"""
+
+
+def direct_identity_is_live(identity: run_xcode_tests.ProcessIdentity) -> bool:
+    # Framework Python re-execs at startup and every exec bumps the audit
+    # token, so liveness compares pid and start time like the runner does.
+    current = run_xcode_tests.direct_process_identity(identity.pid)
+    return current is not None and run_xcode_tests.same_direct_process(current, identity)
+
+
+def wait_for_identity_exit(
+    identity: run_xcode_tests.ProcessIdentity, seconds: float
+) -> bool:
+    deadline = time.monotonic() + seconds
+    while direct_identity_is_live(identity):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def kill_live_identity(identity: run_xcode_tests.ProcessIdentity | None) -> None:
+    if identity is not None and direct_identity_is_live(identity):
+        run_xcode_tests.signal_direct_identity(
+            identity, signal.SIGKILL, time.monotonic() + DIRECT_RELEASE_SECONDS
+        )
+
+
+def read_json_line(stream: io.BufferedReader, seconds: float) -> dict[str, object]:
+    ready, _, _ = select.select([stream], [], [], seconds)
+    if not ready:
+        raise AssertionError("helper process printed nothing")
+    line = stream.readline()
+    if not line:
+        raise AssertionError("helper process exited before printing")
+    payload = json.loads(line)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def await_ready_direct_target(
+    job: run_xcode_tests.DirectJob, deadline: float
+) -> run_xcode_tests.ProcessIdentity:
+    # Darwin targets start only after the parent pumps their handshake.
+    while time.monotonic() < deadline:
+        run_xcode_tests.pump_direct_channel(job.channel, deadline)
+        if job.channel.target is not None and "READY" in job_stdout(job):
+            break
+        time.sleep(0.01)
+    if job.channel.target is None or "READY" not in job_stdout(job):
+        raise AssertionError("direct target did not become ready")
+    identity = run_xcode_tests.direct_process_identity(job.channel.target.pid)
+    if identity is None:
+        raise AssertionError("direct target exited before the test released it")
+    return identity
+
+
+def job_stdout(job: run_xcode_tests.DirectJob) -> str:
+    try:
+        return job.stdout_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def reap_direct_job_leftovers(
+    job: run_xcode_tests.DirectJob,
+    target: run_xcode_tests.ProcessIdentity | None,
+) -> None:
+    if job.process.poll() is None:
+        job.process.kill()
+    job.process.wait(timeout=DIRECT_RELEASE_SECONDS)
+    run_xcode_tests.untrack_direct_child(job.process)
+    kill_live_identity(target)
+    run_xcode_tests.close_direct_channel(job.channel)
+    shutil.rmtree(job.root, ignore_errors=True)
+
+
+def reap_tracked_direct_wrappers() -> list[int]:
+    # R54-APB01: a real wrapper that a failed test left tracked is killed and
+    # reaped here instead of outliving the suite. Mocks stand in for Popen in
+    # most tests, so only real processes are touched.
+    with run_xcode_tests._TRACKED_CHILDREN_LOCK:
+        tracked = list(run_xcode_tests._TRACKED_DIRECT_CHILDREN.values())
+    live: list[int] = []
+    for process in tracked:
+        if type(process) is not subprocess.Popen:
+            continue
+        if process.poll() is None:
+            live.append(process.pid)
+            process.kill()
+            process.wait(timeout=DIRECT_RELEASE_SECONDS)
+        run_xcode_tests.untrack_direct_child(process)
+    return live
+
+
+def live_parent_link(test: unittest.TestCase) -> run_xcode_tests.DirectParentLink:
+    runner_end, wrapper_end = socket.socketpair()
+    test.addCleanup(runner_end.close)
+    test.addCleanup(wrapper_end.close)
+    return run_xcode_tests.DirectParentLink(os.getppid(), wrapper_end.fileno())
+
+
+def start_bare_direct_wrapper(
+    root: Path,
+) -> tuple[subprocess.Popen[bytes], dict[str, int]]:
+    event_read, event_write = os.pipe()
+    key_read, key_write = os.pipe()
+    acknowledgement_read, acknowledgement_write = os.pipe()
+    arguments = run_xcode_tests.direct_child_arguments(
+        [sys.executable, "-c", "pass"],
+        event_write,
+        key_read,
+        acknowledgement_read,
+        root / "w.sock",
+        root / "tp.sock",
+        root / "tw.sock",
+    )
+    inherited = (event_write, key_read, acknowledgement_read)
+    try:
+        wrapper = subprocess.Popen(
+            arguments,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            pass_fds=inherited,
+        )
+    finally:
+        for descriptor in inherited:
+            os.close(descriptor)
+    parent_ends = {
+        "event": event_read,
+        "key": key_write,
+        "acknowledgement": acknowledgement_write,
+    }
+    return wrapper, parent_ends
+
+
+def stop_bare_direct_wrapper(
+    wrapper: subprocess.Popen[bytes], parent_ends: dict[str, int]
+) -> None:
+    if wrapper.poll() is None:
+        wrapper.kill()
+    wrapper.wait(timeout=DIRECT_RELEASE_SECONDS)
+    for descriptor in parent_ends.values():
+        os.close(descriptor)
+
+
+def await_pipe_content(descriptor: int, expected: bytes, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    content = b""
+    while expected not in content:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        ready, _, _ = select.select([descriptor], [], [], remaining)
+        if ready:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                return False
+            content += chunk
+    return True
 
 
 def explicit_atomic_temporary(path: Path, token: str = "0123456789abcdef") -> Path:
@@ -1343,6 +1575,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
     def tearDown(self) -> None:
         # Release this test's traceback-held owners now, outside any mock.
         gc.collect()
+        self.assertEqual(reap_tracked_direct_wrappers(), [], "test left a live direct wrapper")
 
     def test_available_simulator_prefers_booted_and_binds_exact_udid(self) -> None:
         inventory = {
@@ -1454,6 +1687,43 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 run_xcode_tests.SimulatorLifecycleError, "no available simulator"
             ):
                 run_xcode_tests.available_simulator(args)
+
+    def test_exact_id_without_os_selects_device_on_older_runtime(self) -> None:
+        # The SE18 CI job names its device only by id. A same-named device on the
+        # newer runtime must not pull an id-bound destination to latest.
+        se_name = "iPhone SE (3rd generation)"
+        inventory = {
+            "devices": {
+                "com.apple.CoreSimulator.SimRuntime.iOS-18-6": [
+                    {"name": se_name, "udid": "SE", "state": "Booted", "isAvailable": True}
+                ],
+                "com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
+                    {"name": "iPhone 17", "udid": "NEW", "state": "Booted", "isAvailable": True},
+                    {"name": se_name, "udid": "SE26", "state": "Shutdown", "isAvailable": True},
+                ],
+            }
+        }
+        result = subprocess.CompletedProcess([], 0, run_xcode_tests.json.dumps(inventory), "")
+        for destination, expected in (
+            ("platform=iOS Simulator,id=SE", ("SE", "Booted")),
+            (f"platform=iOS Simulator,name={se_name},id=SE", ("SE", "Booted")),
+            ("platform=iOS Simulator,id=GONE", None),
+        ):
+            args = argparse.Namespace(
+                simulator_destination=run_xcode_tests.parse_simulator_destination(destination)
+            )
+            with self.subTest(destination=destination), mock.patch.object(
+                run_xcode_tests, "lifecycle_command", return_value=result
+            ):
+                if expected is None:
+                    with self.assertRaisesRegex(
+                        run_xcode_tests.SimulatorLifecycleError, "no available simulator"
+                    ):
+                        run_xcode_tests.available_simulator(args)
+                    continue
+                self.assertEqual(run_xcode_tests.available_simulator(args), expected)
+                command = ["xcodebuild", "-destination", destination]
+                self.assertEqual(run_xcode_tests.bind_simulator_destination(command, "SE"), command)
 
     def test_arch_constraint_is_preserved_when_binding_exact_simulator(self) -> None:
         args = argparse.Namespace(
@@ -2109,16 +2379,16 @@ class XcodeTestRunnerTests(unittest.TestCase):
             "report_direct_event",
             side_effect=lambda _reporter, payload: payloads.append(payload),
         ), mock.patch.object(
-            run_xcode_tests.signal,
-            "pause",
-            side_effect=DirectSpawnCleanupSignal("stop pause"),
-        ) as pause:
+            run_xcode_tests,
+            "await_direct_release",
+            side_effect=DirectSpawnCleanupSignal("stop release wait"),
+        ) as release:
             with self.assertRaises(DirectSpawnCleanupSignal):
                 run_xcode_tests.direct_child(
-                    70, 71, 72, "wrapper", "parent", "target", ["command"]
+                    70, 71, 72, "wrapper", "parent", "target", 4321, ["command"]
                 )
         self.assertEqual(payloads, [{"event": "error", "message": "spawn failed"}])
-        pause.assert_called_once_with()
+        release.assert_called_once_with(run_xcode_tests.DirectParentLink(4321, 90))
         self.assertEqual(
             (primary.string_calls, primary.representation_calls,
              primary.argument_reads, primary.format_calls),
@@ -2616,7 +2886,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "stop monitor"):
                 run_xcode_tests.monitor_direct_command(
-                    process, wrapper, reporter, pre_exec, None, 92
+                    process, wrapper, reporter, pre_exec, None, 92, live_parent_link(self)
                 )
         self.assertEqual(trace, ["target-exec", "continue", "poll", "status"])
         resume.assert_called_once_with(process.pid, 0)
@@ -2655,7 +2925,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "stop monitor"):
                 run_xcode_tests.monitor_direct_command(
-                    process, wrapper, reporter, target, "marker", 92
+                    process, wrapper, reporter, target, "marker", 92, live_parent_link(self)
                 )
         self.assertEqual(trace, ["descendant", "poll", "status"])
         self.assertGreater(inspect.call_args.args[1], 0)
@@ -2701,7 +2971,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "stop monitor"):
                 run_xcode_tests.monitor_direct_command(
-                    process, wrapper, reporter, target, "marker", 92
+                    process, wrapper, reporter, target, "marker", 92, live_parent_link(self)
                 )
         self.assertEqual(trace, ["descendant", "poll", "status"])
         process.poll.assert_called()
@@ -2842,7 +3112,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 "exited direct target identity unavailable",
             ):
                 run_xcode_tests.monitor_direct_command(
-                    process, wrapper, reporter, pre_exec, None, 92
+                    process, wrapper, reporter, pre_exec, None, 92, live_parent_link(self)
                 )
         identity.assert_called_once_with(92, process.pid)
         process.poll.assert_not_called()
@@ -2864,6 +3134,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     darwin_direct_identity(900, 9, 80),
                     None,
                     92,
+                    run_xcode_tests.DirectParentLink(os.getpid(), 93),
                 )
         self.assertIs(raised.exception, primary)
         close.assert_called_once_with(92)
@@ -2882,6 +3153,7 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     darwin_direct_identity(900, 9, 80),
                     None,
                     92,
+                    run_xcode_tests.DirectParentLink(os.getpid(), 93),
                 )
         self.assertIs(raised.exception, primary)
         self.assertEqual(str(primary).splitlines()[0], "monitor interrupted")
@@ -2903,9 +3175,204 @@ class XcodeTestRunnerTests(unittest.TestCase):
                     darwin_direct_identity(900, 9, 80),
                     None,
                     92,
+                    run_xcode_tests.DirectParentLink(os.getpid(), 93),
                 )
         self.assertIs(raised.exception, cleanup)
         close.assert_called_once_with(92)
+
+    def test_gated_direct_target_keeps_sigterm_fatal(self) -> None:
+        parent = run_xcode_tests.DirectParentLink(os.getpid(), 93)
+        with mock.patch.object(run_xcode_tests.signal, "signal") as install, mock.patch.object(
+            run_xcode_tests, "monitor_direct_command"
+        ) as monitor, mock.patch.object(run_xcode_tests.os, "close"):
+            run_xcode_tests.run_gated_direct_target(
+                mock.Mock(spec=subprocess.Popen),
+                darwin_direct_identity(800, 8, 70),
+                run_xcode_tests.DirectReporter(91, b"key"),
+                darwin_direct_identity(900, 9, 80),
+                None,
+                92,
+                parent,
+            )
+        ignored = {call.args[0] for call in install.call_args_list}
+        self.assertIn(signal.SIGINT, ignored)
+        self.assertNotIn(signal.SIGTERM, ignored)
+        self.assertIs(monitor.call_args.args[-1], parent)
+
+    def test_direct_parent_release_tracks_parent_pid_and_control_socket(self) -> None:
+        runner_end, wrapper_end = socket.socketpair()
+        try:
+            link = run_xcode_tests.DirectParentLink(os.getppid(), wrapper_end.fileno())
+            self.assertFalse(run_xcode_tests.direct_parent_released(link))
+            reparented = run_xcode_tests.DirectParentLink(os.getpid(), wrapper_end.fileno())
+            self.assertTrue(run_xcode_tests.direct_parent_released(reparented))
+            unconnected = run_xcode_tests.DirectParentLink(os.getppid(), -1)
+            self.assertTrue(run_xcode_tests.direct_parent_released(unconnected))
+            runner_end.close()
+            self.assertTrue(run_xcode_tests.direct_parent_released(link))
+        finally:
+            runner_end.close()
+            wrapper_end.close()
+
+    def test_released_monitor_kills_target_group_and_observed_descendants(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 70)
+        target = darwin_direct_identity(900, 9, 80)
+        descendant = darwin_direct_identity(901, 10, 81)
+        runner_end, wrapper_end = socket.socketpair()
+        runner_end.close()
+        for returncode, group_kills in ((None, [mock.call(900, signal.SIGKILL)]), (0, [])):
+            with self.subTest(returncode=returncode):
+                process = mock.Mock(spec=subprocess.Popen)
+                process.pid = target.pid
+                process.returncode = returncode
+                process.poll.return_value = None
+                with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+                    run_xcode_tests,
+                    "observe_direct_descendants",
+                    side_effect=lambda observed: observed | {descendant},
+                ), mock.patch.object(
+                    run_xcode_tests, "report_direct_event"
+                ), mock.patch.object(
+                    run_xcode_tests.os, "killpg"
+                ) as killpg, mock.patch.object(
+                    run_xcode_tests, "signal_direct_identity"
+                ) as kill_identity, mock.patch.object(
+                    run_xcode_tests.time, "sleep", side_effect=AssertionError("kept polling")
+                ):
+                    run_xcode_tests.monitor_direct_command(
+                        process,
+                        wrapper,
+                        run_xcode_tests.DirectReporter(91, b"key"),
+                        target,
+                        None,
+                        -1,
+                        run_xcode_tests.DirectParentLink(os.getppid(), wrapper_end.fileno()),
+                    )
+                self.assertEqual(killpg.call_args_list, group_kills)
+                killed = {call.args[:2] for call in kill_identity.call_args_list}
+                self.assertEqual(
+                    killed, {(target, signal.SIGKILL), (descendant, signal.SIGKILL)}
+                )
+        wrapper_end.close()
+
+    def test_released_monitor_stops_target_when_event_pipe_breaks_first(self) -> None:
+        # R54-APB01: a runner killed between polls surfaces as a failed report
+        # write. The recount must also catch the descendant that write dropped.
+        wrapper = darwin_direct_identity(800, 8, 70)
+        target = darwin_direct_identity(900, 9, 80)
+        found = darwin_direct_identity(902, 11, 82)
+        runner_end, wrapper_end = socket.socketpair()
+        self.addCleanup(runner_end.close)
+        self.addCleanup(wrapper_end.close)
+        for released in (False, True):
+            with self.subTest(released=released):
+                if released:
+                    runner_end.close()
+                process = mock.Mock(spec=subprocess.Popen)
+                process.pid = target.pid
+                process.returncode = None
+                process.poll.return_value = None
+                with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+                    run_xcode_tests,
+                    "observe_direct_descendants",
+                    side_effect=lambda observed: observed | {found},
+                ), mock.patch.object(
+                    run_xcode_tests,
+                    "report_direct_event",
+                    side_effect=BrokenPipeError(errno.EPIPE, "Broken pipe"),
+                ), mock.patch.object(
+                    run_xcode_tests.os, "killpg"
+                ) as killpg, mock.patch.object(
+                    run_xcode_tests, "signal_direct_identity"
+                ) as kill_identity, self.assertRaises(BrokenPipeError):
+                    run_xcode_tests.monitor_direct_command(
+                        process,
+                        wrapper,
+                        run_xcode_tests.DirectReporter(91, b"key"),
+                        target,
+                        None,
+                        -1,
+                        run_xcode_tests.DirectParentLink(os.getppid(), wrapper_end.fileno()),
+                    )
+                killed = {call.args[:2] for call in kill_identity.call_args_list}
+                if released:
+                    self.assertEqual(killpg.call_args_list, [mock.call(900, signal.SIGKILL)])
+                    self.assertEqual(
+                        killed, {(target, signal.SIGKILL), (found, signal.SIGKILL)}
+                    )
+                else:
+                    self.assertEqual(killpg.call_args_list, [])
+                    self.assertEqual(killed, set())
+
+    def test_released_stop_kills_known_processes_when_recount_fails(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 70)
+        target = darwin_direct_identity(900, 9, 80)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        process.returncode = None
+        with mock.patch.object(
+            run_xcode_tests,
+            "observe_direct_descendants",
+            side_effect=run_xcode_tests.SimulatorLifecycleError("census failed"),
+        ), mock.patch.object(run_xcode_tests.os, "killpg") as killpg, mock.patch.object(
+            run_xcode_tests, "signal_direct_identity"
+        ) as kill_identity, self.assertRaisesRegex(
+            run_xcode_tests.SimulatorLifecycleError, "census failed"
+        ):
+            run_xcode_tests.stop_released_direct_target(process, wrapper, {wrapper, target})
+        killpg.assert_called_once_with(900, signal.SIGKILL)
+        self.assertEqual(
+            [call.args[:2] for call in kill_identity.call_args_list],
+            [(target, signal.SIGKILL)],
+        )
+
+    def test_released_stop_failure_stays_secondary_to_monitor_error(self) -> None:
+        wrapper = darwin_direct_identity(800, 8, 70)
+        target = darwin_direct_identity(900, 9, 80)
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = target.pid
+        process.returncode = None
+        process.poll.return_value = None
+        released = run_xcode_tests.DirectParentLink(os.getppid(), -1)
+        with mock.patch.object(run_xcode_tests, "LIBPROC", None), mock.patch.object(
+            run_xcode_tests, "observe_direct_descendants", side_effect=lambda observed: observed
+        ), mock.patch.object(
+            run_xcode_tests, "direct_target_returncode", side_effect=OSError("status read")
+        ), mock.patch.object(
+            run_xcode_tests, "stop_released_direct_target", side_effect=OSError("kill failed")
+        ), self.assertRaisesRegex(OSError, "status read") as raised:
+            run_xcode_tests.monitor_direct_command(
+                process,
+                wrapper,
+                run_xcode_tests.DirectReporter(91, b"key"),
+                target,
+                None,
+                -1,
+                released,
+            )
+        self.assertEqual(
+            raised.exception.__notes__,
+            ["released direct target stop failed: kill failed"],
+        )
+
+    def test_tracked_direct_wrapper_reaper_kills_leftover_process(self) -> None:
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        stand_in = mock.Mock(spec=subprocess.Popen)
+        run_xcode_tests.track_direct_child(process)
+        run_xcode_tests.track_direct_child(stand_in)
+        try:
+            self.assertEqual(reap_tracked_direct_wrappers(), [process.pid])
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+            stand_in.poll.assert_not_called()
+        finally:
+            run_xcode_tests.untrack_direct_child(stand_in)
+            process.kill()
+            process.wait()
+        self.assertFalse(run_xcode_tests.tracked_children_live())
 
     def test_authenticated_darwin_status_requires_exec_transition(self) -> None:
         wrapper = darwin_direct_identity(800, 8, 7000000)
@@ -5148,12 +5615,22 @@ class XcodeTestRunnerTests(unittest.TestCase):
         ), mock.patch.object(
             run_xcode_tests, "report_direct_event"
         ) as report, mock.patch.object(
-            run_xcode_tests.signal, "pause", side_effect=RuntimeError("stop child")
-        ), mock.patch.object(run_xcode_tests, "spawn_gated_direct_target") as spawn:
+            run_xcode_tests, "await_direct_release", side_effect=RuntimeError("stop child")
+        ) as release, mock.patch.object(
+            run_xcode_tests, "spawn_gated_direct_target"
+        ) as spawn:
             with self.assertRaisesRegex(RuntimeError, "stop child"):
                 run_xcode_tests.direct_child(
-                    91, 92, 93, "wrapper", "parent-target", "wrapper-target", ["target"]
+                    91,
+                    92,
+                    93,
+                    "wrapper",
+                    "parent-target",
+                    "wrapper-target",
+                    4321,
+                    ["target"],
                 )
+        release.assert_called_once_with(run_xcode_tests.DirectParentLink(4321, 94))
         configure.assert_called_once_with()
         reporter, payload = report.call_args.args
         self.assertEqual((reporter.descriptor, reporter.key), (91, b"k" * 32))
@@ -6252,6 +6729,183 @@ class XcodeTestRunnerTests(unittest.TestCase):
         sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
         "requires Darwin peer audit tokens",
     )
+    def test_darwin_direct_wrapper_exits_when_parent_is_killed(self) -> None:
+        apple_root = Path(run_xcode_tests.__file__).resolve().parents[1]
+        source = textwrap.dedent(DIRECT_ORPHAN_PARENT_SOURCE)
+        identities: list[run_xcode_tests.ProcessIdentity | None] = []
+        launched: dict[str, object] = {}
+        with tempfile.TemporaryFile() as stderr:
+            parent = subprocess.Popen(
+                [sys.executable, "-c", source, str(apple_root), *DESCENDANT_SLEEP_TARGET],
+                stdout=subprocess.PIPE,
+                stderr=stderr,
+            )
+            try:
+                assert parent.stdout is not None
+                try:
+                    launched = read_json_line(parent.stdout, 15)
+                except AssertionError as error:
+                    parent.kill()
+                    parent.wait()
+                    stderr.seek(0)
+                    detail = stderr.read().decode(errors="replace")
+                    raise AssertionError(f"{error}: {detail}") from None
+                for key in ("wrapper", "target", "sleeper"):
+                    pid = int(str(launched[key]))
+                    identities.append(run_xcode_tests.direct_process_identity(pid))
+                self.assertNotIn(None, identities)
+                parent.kill()
+                parent.wait()
+                for identity in identities:
+                    assert identity is not None
+                    self.assertTrue(
+                        wait_for_identity_exit(identity, DIRECT_RELEASE_SECONDS),
+                        f"orphaned direct process {identity.pid} kept running",
+                    )
+            finally:
+                parent.kill()
+                parent.wait()
+                if parent.stdout is not None:
+                    parent.stdout.close()
+                for identity in identities:
+                    kill_live_identity(identity)
+                if "root" in launched:
+                    shutil.rmtree(str(launched["root"]), ignore_errors=True)
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_direct_wrapper_exits_when_control_socket_closes(self) -> None:
+        deadline = time.monotonic() + 10
+        job = run_xcode_tests.spawn_direct_job(READY_SLEEP_TARGET, deadline)
+        target: run_xcode_tests.ProcessIdentity | None = None
+        try:
+            target = await_ready_direct_target(job, deadline)
+            run_xcode_tests.close_direct_channel(job.channel)
+            self.assert_process_exits(job.process, DIRECT_RELEASE_SECONDS)
+            self.assertTrue(wait_for_identity_exit(target, DIRECT_RELEASE_SECONDS))
+        finally:
+            reap_direct_job_leftovers(job, target)
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_direct_wrapper_does_not_ignore_sigterm(self) -> None:
+        deadline = time.monotonic() + 10
+        job = run_xcode_tests.spawn_direct_job(READY_SLEEP_TARGET, deadline)
+        target: run_xcode_tests.ProcessIdentity | None = None
+        try:
+            target = await_ready_direct_target(job, deadline)
+            job.process.send_signal(signal.SIGTERM)
+            self.assert_process_exits(job.process, DIRECT_RELEASE_SECONDS)
+            self.assertEqual(job.process.returncode, -signal.SIGTERM)
+            # The traced target dies with its tracer, so SIGTERM leaks nothing.
+            self.assertTrue(wait_for_identity_exit(target, DIRECT_RELEASE_SECONDS))
+        finally:
+            reap_direct_job_leftovers(job, target)
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_direct_wrapper_without_control_socket_exits(self) -> None:
+        # A parent that dies before its wrapper connects leaves no listener;
+        # HEAD parked such a wrapper in signal.pause() forever.
+        with tempfile.TemporaryDirectory() as directory:
+            wrapper, parent_ends = start_bare_direct_wrapper(Path(directory))
+            try:
+                self.assert_process_exits(wrapper, DIRECT_RELEASE_SECONDS)
+                self.assertEqual(
+                    wrapper.returncode, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE
+                )
+            finally:
+                stop_bare_direct_wrapper(wrapper, parent_ends)
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_failed_direct_wrapper_waits_until_control_socket_closes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(root / "w.sock"))
+            listener.listen(1)
+            wrapper, parent_ends = start_bare_direct_wrapper(root)
+            try:
+                key = b"k" * run_xcode_tests.DIRECT_CHANNEL_KEY_BYTES
+                os.write(parent_ends["key"], key)
+                os.close(parent_ends.pop("acknowledgement"))
+                self.assertTrue(
+                    await_pipe_content(
+                        parent_ends["event"], b'"event":"error"', DIRECT_RELEASE_SECONDS
+                    )
+                )
+                with self.assertRaises(
+                    subprocess.TimeoutExpired, msg="failed wrapper must wait for its parent"
+                ):
+                    wrapper.wait(timeout=FAILED_WRAPPER_HOLD_SECONDS)
+                listener.close()
+                self.assert_process_exits(wrapper, DIRECT_RELEASE_SECONDS)
+                self.assertEqual(
+                    wrapper.returncode, run_xcode_tests.PRETEST_INFRASTRUCTURE_FAILURE
+                )
+            finally:
+                listener.close()
+                stop_bare_direct_wrapper(wrapper, parent_ends)
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
+    def test_darwin_direct_escalation_reaches_sigterm_and_cleans_descendant(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "termination-child.pid"
+            source = """
+                import os, pathlib, signal, subprocess, sys, time
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                def terminate(*_):
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(30)"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+                    os._exit(7)
+                signal.signal(signal.SIGTERM, terminate)
+                print("READY", flush=True)
+                time.sleep(30)
+            """
+            command = [sys.executable, "-c", textwrap.dedent(source), str(pid_path)]
+            deadline = time.monotonic() + 10
+            job = run_xcode_tests.spawn_direct_job(command, deadline)
+            try:
+                await_ready_direct_target(job, deadline)
+                run_xcode_tests.cleanup_direct_job(job, deadline, True)
+                # The forced wrapper exit, not an escalation signal, ended it.
+                self.assertEqual(job.process.returncode, -signal.SIGKILL)
+                child_pid = int(pid_path.read_text(encoding="utf-8"))
+            finally:
+                reap_direct_job_leftovers(job, None)
+        try:
+            self.assertTrue(self.wait_until_process_exits(child_pid))
+        finally:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and run_xcode_tests.LIBPROC is not None,
+        "requires Darwin peer audit tokens",
+    )
     def test_darwin_wrapper_peer_binding_survives_real_exec_stress(self) -> None:
         for iteration in range(40):
             with self.subTest(iteration=iteration):
@@ -7158,6 +7812,58 @@ class XcodeTestRunnerTests(unittest.TestCase):
         finally:
             remove_test_launchd_service(escaped, None)
             remove_test_launchd_service(concurrent, concurrent_identity)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sandbox")
+    def test_target_can_apply_package_manifest_sandbox(self) -> None:
+        source = (
+            "import subprocess,sys; "
+            "result=subprocess.run(['/usr/bin/sandbox-exec','-p',sys.argv[1],"
+            "'/usr/bin/true'],capture_output=True,text=True); "
+            "print(f'NESTED_RC={result.returncode}',flush=True); "
+            "print(result.stderr,flush=True)"
+        )
+        output = self.completed_contained_output(
+            [sys.executable, "-c", source, PACKAGE_MANIFEST_SANDBOX]
+        )
+        self.assertIn("NESTED_RC=0\n", output)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin launchd")
+    def test_nested_sandbox_cannot_submit_launchd_escape(self) -> None:
+        source = (
+            "import subprocess,sys; "
+            "result=subprocess.run(['/usr/bin/sandbox-exec','-p',sys.argv[2],"
+            "'/bin/launchctl','submit','-l',sys.argv[1],'--','/bin/sleep','60'],"
+            "capture_output=True,text=True); "
+            "print(f'SUBMIT_RC={result.returncode}',flush=True); "
+            "print(result.stderr,flush=True)"
+        )
+        for profile in (PACKAGE_MANIFEST_SANDBOX, "(version 1)(allow default)"):
+            escaped = f"com.pomodorough.apb02.escape.{uuid.uuid4().hex}"
+            with self.subTest(profile=profile):
+                try:
+                    output = self.completed_contained_output(
+                        [sys.executable, "-c", source, escaped, profile]
+                    )
+                    self.assertIn("SUBMIT_RC=1\n", output)
+                    self.assertIsNone(launchd_service_pid(escaped))
+                finally:
+                    remove_test_launchd_service(escaped, None)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin launchd")
+    def test_other_system_tools_stay_inside_launchd_guard(self) -> None:
+        escaped = f"com.pomodorough.apb02.escape.{uuid.uuid4().hex}"
+        source = (
+            "import subprocess,sys; "
+            "result=subprocess.run(['/usr/bin/env','/bin/launchctl','submit','-l',"
+            "sys.argv[1],'--','/bin/sleep','60'],capture_output=True,text=True); "
+            "print(f'SUBMIT_RC={result.returncode}',flush=True)"
+        )
+        try:
+            output = self.completed_contained_output([sys.executable, "-c", source, escaped])
+            self.assertIn("SUBMIT_RC=1\n", output)
+            self.assertIsNone(launchd_service_pid(escaped))
+        finally:
+            remove_test_launchd_service(escaped, None)
 
     def test_missing_coalition_sidecar_fails_before_acknowledgement(self) -> None:
         wrapper = run_xcode_tests.ProcessIdentity(2222, (10, 20), None)
@@ -10059,6 +10765,14 @@ class XcodeTestRunnerTests(unittest.TestCase):
                 except run_xcode_tests.SimulatorLifecycleError:
                     pass
             shutil.rmtree(job.root, ignore_errors=True)
+
+    def assert_process_exits(
+        self, process: subprocess.Popen[bytes], seconds: float
+    ) -> None:
+        try:
+            process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            self.fail(f"direct wrapper {process.pid} still running after {seconds} s")
 
     def wait_until_process_exits(self, pid: int) -> bool:
         for _ in range(40):

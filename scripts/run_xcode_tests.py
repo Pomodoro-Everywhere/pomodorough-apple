@@ -61,6 +61,7 @@ EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
 DESCENDANT_POLL_SECONDS = 0.001
 PEER_IDENTITY_COMPLETION_RESERVE_SECONDS = 0.05
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
+DIRECT_PARENT_POLL_SECONDS = 0.05
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 4.0
 # Hosted run 34200493931: 4 consecutive handshake timeouts over ~115s wall
@@ -122,7 +123,15 @@ ATOMIC_WRITER_ARGUMENT = "--atomic-writer"
 DIRECTORY_SYNC_ARGUMENT = "--directory-sync"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
-LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
+# Contained targets must not hand work to launchd, which would run it outside
+# the coalition that cleanup kills. A sandboxed process cannot apply another
+# profile, so /usr/bin/sandbox-exec (SwiftPM manifests and plugins) execs
+# without this one and applies its own. launchd refuses submissions from that
+# sandboxed child unless its own profile grants unsandboxed exec again.
+LAUNCHD_DELEGATION_SANDBOX = (
+    b"(version 1)(allow default)(deny job-creation)"
+    b'(allow process-exec (literal "/usr/bin/sandbox-exec") (with no-sandbox))'
+)
 PROCESS_PATH_BUFFER_BYTES = 4096
 PROCESS_ARGUMENTS_LIMIT_BYTES = 2 * 1024 * 1024
 DIRECT_MARKER_CENSUS_SECONDS = 0.5
@@ -985,6 +994,19 @@ class DirectReporter:
     sequence: int = 0
     status_sent: bool = False
     failure_sent: bool = False
+
+
+@dataclass(frozen=True)
+class DirectParentLink:
+    """The wrapper's tie to the runner that spawned it.
+
+    Only that runner can read status, census descendants, and reap the
+    target. Once it exits (the wrapper is reparented) or closes the control
+    socket, the wrapper is released and must stop instead of polling forever.
+    """
+
+    pid: int
+    control_peer: DirectPeer
 
 
 @dataclass(frozen=True)
@@ -2779,6 +2801,59 @@ def observe_darwin_target_state(
     return identity, False, exec_observed or transitioned
 
 
+def direct_parent_released(parent: DirectParentLink) -> bool:
+    if os.getppid() != parent.pid or direct_descriptor(parent.control_peer) < 0:
+        return True
+    return direct_peer_closed(parent.control_peer)
+
+
+def await_direct_release(parent: DirectParentLink) -> None:
+    # A failed wrapper still waits for its runner to kill it, but only while
+    # that runner can: an orphaned wrapper exits instead of pausing forever.
+    while not direct_parent_released(parent):
+        time.sleep(DIRECT_PARENT_POLL_SECONDS)
+
+
+def stop_released_direct_target(
+    process: subprocess.Popen[bytes],
+    wrapper: ProcessIdentity,
+    observed: set[ProcessIdentity],
+) -> None:
+    # No runner remains to escalate or census. Recount first: a report write
+    # that failed mid-census dropped what it had just found, and descendants
+    # reparent away from the target once it dies. Kill the target's session
+    # group while its unreaped pid still reserves that group id, then every
+    # observed descendant by identity, since those may have left the group.
+    # Identities seen before an exec carry a stale audit token, so the signal
+    # re-reads them.
+    try:
+        observed = observe_direct_descendants(observed)
+    finally:
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + DIRECT_IDENTITY_READ_SECONDS
+        for descendant in observed - {wrapper}:
+            signal_direct_identity(descendant, signal.SIGKILL, deadline)
+
+
+def direct_target_returncode(
+    process: subprocess.Popen[bytes], status_sent: bool, target_exited: bool
+) -> int | None:
+    if status_sent:
+        return None
+    if LIBPROC is None:
+        return process.poll()
+    if not target_exited:
+        return None
+    returncode = process.poll()
+    if returncode is None:
+        raise SimulatorLifecycleError("direct target status unavailable")
+    return returncode
+
+
 def monitor_direct_command(
     process: subprocess.Popen[bytes],
     wrapper: ProcessIdentity,
@@ -2786,8 +2861,37 @@ def monitor_direct_command(
     identity: ProcessIdentity,
     marker: str | None,
     peer_descriptor: int,
+    parent: DirectParentLink,
 ) -> None:
     observed = {wrapper, identity}
+    try:
+        poll_direct_command(
+            process, reporter, identity, marker, peer_descriptor, parent, observed
+        )
+    except BaseException as error:
+        # A runner killed between polls breaks the event pipe first, so the
+        # failed write can be the first sign of release. A live runner still
+        # gets the error and owns cleanup.
+        try:
+            if direct_parent_released(parent):
+                stop_released_direct_target(process, wrapper, observed)
+        except BaseException as stop_error:
+            append_secondary_error(
+                error, "released direct target stop failed", stop_error
+            )
+        raise
+    stop_released_direct_target(process, wrapper, observed)
+
+
+def poll_direct_command(
+    process: subprocess.Popen[bytes],
+    reporter: DirectReporter,
+    identity: ProcessIdentity,
+    marker: str | None,
+    peer_descriptor: int,
+    parent: DirectParentLink,
+    observed: set[ProcessIdentity],
+) -> None:
     target_exec_observed = False
     status_sent = False
     while True:
@@ -2803,26 +2907,19 @@ def monitor_direct_command(
             )
             if identity != previous:
                 observed.add(identity)
-        observed = report_observed_direct_descendants(
+        observed |= report_observed_direct_descendants(
             observed, target_exited, marker, reporter
         )
-        if status_sent:
-            returncode = None
-        elif LIBPROC is None:
-            returncode = process.poll()
-        elif target_exited:
-            returncode = process.poll()
-            if returncode is None:
-                raise SimulatorLifecycleError("direct target status unavailable")
-        else:
-            returncode = None
-        if returncode is not None and not status_sent:
+        returncode = direct_target_returncode(process, status_sent, target_exited)
+        if returncode is not None:
             report_direct_event(
                 reporter, {"event": "status", "returncode": returncode}
             )
             status_sent = True
         if status_sent:
             reap_direct_orphans(process.pid)
+        if direct_parent_released(parent):
+            return
         time.sleep(DESCENDANT_POLL_SECONDS)
 
 
@@ -2874,15 +2971,17 @@ def run_gated_direct_target(
     target: ProcessIdentity,
     marker: str | None,
     peer: DirectPeer,
+    parent: DirectParentLink,
 ) -> None:
     primary_error: BaseException | None = None
     try:
-        for requested in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(requested, signal.SIG_IGN)
+        # Cleanup escalates SIGINFO/SIGINT/SIGTERM to the target only. SIGTERM
+        # stays fatal here so an operator can stop a stray wrapper.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if hasattr(signal, "SIGINFO"):
             signal.signal(signal.SIGINFO, signal.SIG_IGN)
         monitor_direct_command(
-            process, wrapper, reporter, target, marker, direct_descriptor(peer)
+            process, wrapper, reporter, target, marker, direct_descriptor(peer), parent
         )
     except BaseException as error:
         primary_error = error
@@ -2942,13 +3041,16 @@ def direct_child(
     wrapper_socket_path: str,
     parent_target_socket_path: str,
     wrapper_target_socket_path: str,
+    parent_pid: int,
     command: list[str],
 ) -> int:
     key = b""
     reporter: DirectReporter | None = None
-    wrapper_peer = -1
+    parent = DirectParentLink(parent_pid, -1)
     try:
-        wrapper_peer = connect_direct_peer(Path(wrapper_socket_path))
+        parent = DirectParentLink(
+            parent_pid, connect_direct_peer(Path(wrapper_socket_path))
+        )
         key = read_direct_key(key_descriptor)
         reporter = DirectReporter(event_descriptor, key)
         os.close(key_descriptor)
@@ -2963,13 +3065,9 @@ def direct_child(
             marker,
         )
         run_gated_direct_target(
-            process,
-            identity,
-            reporter,
-            target_identity,
-            marker,
-            target_peer,
+            process, identity, reporter, target_identity, marker, target_peer, parent
         )
+        return PRETEST_INFRASTRUCTURE_FAILURE
     except (OSError, SimulatorLifecycleError) as error:
         if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
             try:
@@ -2978,8 +3076,8 @@ def direct_child(
                 )
             except OSError:
                 return PRETEST_INFRASTRUCTURE_FAILURE
-        while True:
-            signal.pause()
+        await_direct_release(parent)
+        return PRETEST_INFRASTRUCTURE_FAILURE
 
 
 def direct_target(
@@ -3499,6 +3597,7 @@ def direct_child_arguments(
         str(wrapper_socket_path),
         str(parent_target_socket_path),
         str(wrapper_target_socket_path),
+        str(os.getpid()),
         "--",
         *command,
     ]
@@ -6106,7 +6205,9 @@ def constrained_candidates(
     candidates: list[SimulatorCandidate], destination: SimulatorDestination
 ) -> list[SimulatorCandidate]:
     expected_os = requested_os_version(destination.os_version)
-    if destination.os_version in (None, "latest") and candidates:
+    # xcodebuild picks the latest OS only for a name; an id already names one device.
+    implicit_latest = destination.os_version is None and destination.udid is None
+    if (implicit_latest or destination.os_version == "latest") and candidates:
         expected_os = max(candidate.runtime for candidate in candidates)
     selected = [
         candidate
@@ -6546,7 +6647,7 @@ def run_contained_child(arguments: list[str]) -> int:
 
 
 def run_direct_child(arguments: list[str]) -> int:
-    if len(arguments) < 9 or arguments[7] != "--":
+    if len(arguments) < 10 or arguments[8] != "--":
         print("invalid direct-child arguments", file=sys.stderr)
         return PRETEST_INFRASTRUCTURE_FAILURE
     return direct_child(
@@ -6556,7 +6657,8 @@ def run_direct_child(arguments: list[str]) -> int:
         arguments[4],
         arguments[5],
         arguments[6],
-        arguments[8:],
+        int(arguments[7]),
+        arguments[9:],
     )
 
 
