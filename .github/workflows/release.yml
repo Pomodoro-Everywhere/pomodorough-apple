@@ -195,7 +195,9 @@ jobs:
   test-ios:
     needs: preflight
     runs-on: macos-26
-    timeout-minutes: 60
+    # The full iOS suite with UX round 2 UI tests ran past 60 minutes on hosted runners with no
+    # failure (0.56.0 release run 43311546375). CI's build-and-test job needs about 130 minutes.
+    timeout-minutes: 150
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
