@@ -2,7 +2,9 @@ import XCTest
 
 // B8: the composer refuses a draft that is empty or only whitespace, the
 // duration stepper stops at the bounds Core accepts (1 to 180 minutes), and
-// a cancelled history row words its minutes as planned, not spent.
+// a new cancelled history row shows the minutes Core recorded, not its plan.
+// Only rows stored before Core 0.55.0 (no elapsedMs) word their minutes as
+// planned; unit tests pin that branch (InputRulesTests, HistoryElapsedTests).
 @MainActor
 final class PomodoroughInputRulesUITests: XCTestCase {
     func testWhitespaceDraftKeepsAddTaskDisabled() {
@@ -41,7 +43,7 @@ final class PomodoroughInputRulesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Increase Short break duration"].isEnabled)
     }
 
-    func testCancelledFocusRowSaysPlanned() {
+    func testCancelledFocusRowSpeaksRecordedMinutes() {
         continueAfterFailure = false
         let app = launchResetTestApplication()
         defer { app.terminate() }
@@ -51,12 +53,17 @@ final class PomodoroughInputRulesUITests: XCTestCase {
         cancel.tap()
         XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
         app.tabBars.buttons["Arrivals"].tap()
-        let planned = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Cancelled", "minutes planned"))
+        // Core fills elapsedMs on every projected row, so the row speaks the
+        // recorded time ("0 minutes" or "1 minute"), never the 25 minute plan.
+        let row = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Focus, ", ", Cancelled, "))
             .firstMatch
-        XCTAssertTrue(planned.waitForExistence(timeout: 10), "a cancelled row words its duration as planned")
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "the cancelled focus run is listed")
+        XCTAssertTrue(row.label.contains(" minute"), "a cancelled row speaks its duration, got \(row.label)")
+        XCTAssertFalse(row.label.contains("planned"), "a recorded cancelled row is not worded as planned, got \(row.label)")
+        XCTAssertFalse(row.label.contains("25 minutes"), "a cancelled row does not speak its plan, got \(row.label)")
         let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        shot.name = "B8-cancelled-row-planned"
+        shot.name = "B8-cancelled-row-recorded"
         shot.lifetime = .keepAlways
         add(shot)
     }

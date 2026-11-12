@@ -88,18 +88,30 @@ final class PomodoroughAddTaskU03ContrastUITests: XCTestCase {
         app.buttons["Tasks"].tap()
         let field = u03Elements(labelled: "New task", in: app).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        for _ in 0..<4 where !field.isHittable { app.swipeUp() }
+        let add = app.buttons["Add task"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
         // The Add button sits below the field; at accessibility sizes the
         // field can be on screen while Add is still under the tab bar. Short
         // drags keep the field below the floating header, where taps reach it.
-        let add = app.buttons["Add task"]
-        for _ in 0..<8 where !add.isHittable { nudgeU03ContentUp(app) }
+        // Swipes fling: on SE at XXXL they carried the field under the header.
+        for _ in 0..<12 where !(field.isHittable && add.isHittable) {
+            let target = field.isHittable ? add : field
+            let frame = target.frame
+            let share: CGFloat = frame.minY >= app.frame.maxY ? -0.4 : (frame.midY < app.frame.midY ? 0.1 : -0.1)
+            dragU03Content(app, by: share, within: app.frame)
+        }
         XCTAssertTrue(field.isHittable)
+        XCTAssertTrue(add.isHittable)
     }
 
-    private func nudgeU03ContentUp(_ app: XCUIApplication) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    /// Drags the content by a share of the visible band without a fling: the
+    /// hold before release stops momentum. A positive share moves it down.
+    /// The drag runs in the side gutter, clear of the field and its keyboard.
+    private func dragU03Content(_ app: XCUIApplication, by share: CGFloat, within band: CGRect) {
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let gutterX = band.minX + band.width * 0.06
+        let start = origin.withOffset(CGVector(dx: gutterX, dy: band.midY - share * band.height / 2))
+        let end = origin.withOffset(CGVector(dx: gutterX, dy: band.midY + share * band.height / 2))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
@@ -117,8 +129,17 @@ final class PomodoroughAddTaskU03ContrastUITests: XCTestCase {
         let add = app.buttons["Add task"]
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         XCTAssertTrue(add.isEnabled)
+        let keyboard = app.keyboards.element
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10))
+        // At XXXL the keyboard can cover Add, which sits below the field.
+        // The content scrolls above the keyboard; the measurement needs Add
+        // on screen, so lift it within the band the keyboard leaves visible.
+        for _ in 0..<8 where !add.isHittable && keyboard.exists {
+            let visible = CGRect(x: app.frame.minX, y: app.frame.minY,
+                width: app.frame.width, height: keyboard.frame.minY - app.frame.minY)
+            dragU03Content(app, by: -0.1, within: visible)
+        }
         XCTAssertTrue(add.isHittable)
-        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10))
     }
 
     @discardableResult

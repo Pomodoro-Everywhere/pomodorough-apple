@@ -3,8 +3,9 @@ import XCTest
 // IOS27-07: in the light appearance the app tint is the darkened signal, so
 // tinted text and glyphs on light surfaces clear 4.5:1. The room-name field
 // shows its typed text in the label colour, not the card's porcelain.
-// Run with the simulator in the light appearance; each test checks that the
-// measured surface is light before it judges the contrast.
+// Each test forces the light appearance (CI runs the SE job in dark) and
+// restores the previous one; it still checks that the measured surface is
+// light before it judges the contrast.
 @MainActor
 final class PomodoroughLightAccentContrastUITests: XCTestCase {
     private static let minimumContrast = 4.5
@@ -12,6 +13,9 @@ final class PomodoroughLightAccentContrastUITests: XCTestCase {
     func testSelectedTabLabelClearsContrastOnTheLightTabBar() throws {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
+        let appearance = XCUIDevice.shared.appearance
+        XCUIDevice.shared.appearance = .light
+        defer { XCUIDevice.shared.appearance = appearance }
         let app = launchResetTestApplication(contentSize: "UICTContentSizeCategoryL")
         defer { app.terminate() }
         let tasks = app.tabBars.buttons["Tasks"]
@@ -23,6 +27,9 @@ final class PomodoroughLightAccentContrastUITests: XCTestCase {
     func testTypedRoomNameClearsContrastOnTheWhiteField() throws {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
+        let appearance = XCUIDevice.shared.appearance
+        XCUIDevice.shared.appearance = .light
+        defer { XCUIDevice.shared.appearance = appearance }
         let app = launchResetTestApplication(contentSize: "UICTContentSizeCategoryL")
         defer { app.terminate() }
         app.buttons["Account"].tap()

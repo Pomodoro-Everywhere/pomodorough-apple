@@ -780,9 +780,14 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
     }
 
     /// A docked control is visible without scrolling and never moves.
+    /// Membership is read from the dock's subtree, not its frame: on a short
+    /// phone a card control scrolled behind the dock also lies inside the
+    /// dock frame, and treating it as docked skipped the scroll it needs.
     private func isDocked(_ control: XCUIElement, in app: XCUIApplication) -> Bool {
-        guard let dock = primaryControlDockFrame(in: app) else { return false }
-        return dock.contains(control.frame)
+        let dock = app.otherElements["timer-primary-control-dock"]
+        guard dock.exists, control.exists else { return false }
+        return dock.descendants(matching: control.elementType)
+            .matching(NSPredicate(format: "label == %@", control.label)).firstMatch.exists
     }
 
     private func revealAccessibleTimerControl(_ label: String, in app: XCUIApplication) {
@@ -798,6 +803,11 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         var moved = false
         var before = button.frame
         let scroll = app.scrollViews.firstMatch
+        // Drags travel a bounded share of the viewport, so a short phone needs
+        // more of them than four. Element swipes are only the fallback for a
+        // drag that did not move the content: on SE iOS 18 they left it still
+        // with Skip behind the dock and a third of the scroll range unused.
+        var dragMoves = true
         for attempt in 0..<8 {
             let frame = button.frame
             let inside = frame.minX >= viewport.minX && frame.maxX <= viewport.maxX
@@ -805,18 +815,19 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
             if button.isHittable && inside { return }
             let below = frame.midY >= viewport.midY
             var method = "drag"
-            if attempt < 4 {
+            if dragMoves || !scroll.exists {
                 let origin = app.coordinate(withNormalizedOffset: .zero)
                 let direction: CGFloat = below ? -1 : 1
                 let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
                 let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
                 start.press(forDuration: 0.01, thenDragTo: end)
-            } else if scroll.exists {
+            } else {
                 method = "element-swipe"
                 if below { scroll.swipeUp() } else { scroll.swipeDown() }
             }
             let after = button.frame
             let didMove = abs(after.minX - before.minX) > 0.5 || abs(after.minY - before.minY) > 0.5
+            if method == "drag" { dragMoves = didMove }
             moved = moved || didMove
             print("AP10_GESTURE label=\(label) attempt=\(attempt) method=\(method) before=\(before) after=\(after) moved=\(didMove) viewport=\(viewport)")
             before = after
