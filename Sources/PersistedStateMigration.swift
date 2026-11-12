@@ -222,7 +222,8 @@ enum PersistedLegacyMigration {
                 status: item.status,
                 plannedDurationMs: item.plannedDurationMs,
                 completedAt: item.completedAt,
-                endedAt: item.endedAt
+                endedAt: item.endedAt,
+                elapsedMs: item.elapsedMs
             )
         }
     }

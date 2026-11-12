@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct StepButton: View {
+    @Environment(\.isEnabled) private var isEnabled
     let title: String
     let symbol: String
     let action: () -> Void
@@ -18,6 +19,9 @@ struct StepButton: View {
         Button(title, systemImage: symbol, action: action)
             .labelStyle(.iconOnly)
             .foregroundStyle(PomodoroughTheme.stepperSymbol)
+            // A disabled step must not look pressable; WCAG exempts
+            // disabled controls from the contrast minimum.
+            .opacity(isEnabled ? 1 : 0.35)
             .frame(width: 44, height: 44)
             .contentShape(.rect)
     }

@@ -132,7 +132,7 @@ struct AppStatePublisher: Sendable {
             let current = totals[uuid] ?? (0, 0)
             totals[uuid] = (
                 current.finished + 1,
-                current.timeMs + item.plannedDurationMs
+                current.timeMs + item.recordedElapsedMs
             )
         }
         return snapshot.tasks.map { task in
@@ -160,7 +160,7 @@ struct AppStatePublisher: Sendable {
                   let completedAt = item.completedAt,
                   calendar.isDate(completedAt, inSameDayAs: date) else { continue }
             finished += 1
-            timeMs += item.plannedDurationMs
+            timeMs += item.recordedElapsedMs
         }
         return (finished, timeMs)
     }

@@ -258,7 +258,10 @@ struct NetworkSectionView: View {
                 text: roomName
             )
             .textFieldStyle(.roundedBorder)
-            .foregroundStyle(.primary)
+            // The system label colour, not `.primary`: inside this card the
+            // hierarchical primary is porcelain, which is invisible on the
+            // white field of the light appearance.
+            .foregroundStyle(Color.primary)
             .accessibilityHint("Optional, up to 64 characters. Room name is display-only.")
             Button {
                 let name = roomName.wrappedValue

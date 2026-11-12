@@ -85,6 +85,226 @@ struct AU01TaskComposerRegressionTests {
     }
 }
 
+// Pins R54-AU02 (Add can save a truncated title while the software keyboard
+// lags): Add stores the title the field shows and clears the binding, and
+// keys the out-of-process keyboard still held at the tap can reach the field
+// before updateUIView pushes that clear. The legs force this order without
+// keyboard timing: the field reports through its real editingChanged
+// target-action while the external write is still pending, and no run-loop
+// turn runs between the write and the reports, so no update pass intervenes.
+// The tests stay in this suite so .serialized keeps the key window theirs.
+extension AU01TaskComposerRegressionTests {
+    @Test func lateReportsAfterClearCannotRestoreTitle() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue),
+            let field = stage.field
+        else {
+            Issue.record("No hosted TaskTitleTextField for AU02 stage")
+            return
+        }
+        let model = stage.model
+        au02Insert("AU02 late p", into: field)
+        au01Drain()
+        let stored = model.text
+        // Add's clear, then the keys still in flight at the tap, delivered
+        // as two reports.
+        model.text = ""
+        au02Insert("ro", into: field)
+        au02Insert("be", into: field)
+        #expect(model.text == "")
+        au01Drain()
+        #expect(stored == "AU02 late p")
+        #expect(model.text == "")
+        #expect(stage.field?.text == "")
+        // The next real keystroke starts a fresh draft.
+        au02Insert("n", into: field)
+        #expect(model.text == "n")
+        au01Drain()
+        #expect(stage.field?.text == "n")
+    }
+
+    @Test func deferredPushWaitsOutMarkedTextThenApplies() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue) else {
+            Issue.record("No host window for AU02 stage")
+            return
+        }
+        let model = stage.model
+        au01KeepKey(stage.keyWindow)
+        guard let field = stage.field else {
+            Issue.record("TaskTitleTextField missing from hosted hierarchy")
+            return
+        }
+        // Marked text needs a live field editor; no focus binding involved.
+        field.delegate = nil
+        field.becomeFirstResponder()
+        #expect(field.isFirstResponder)
+        au02Insert("AU02 ime", into: field)
+        au01Drain()
+        model.text = ""
+        au02Compose("か", in: field)
+        #expect(model.text == "")
+        // This pass skips its push: a composition is active.
+        au01Drain()
+        au02Compose("かな", in: field)
+        #expect(field.markedTextRange != nil)
+        #expect(field.text == "AU02 imeかな")
+        field.unmarkText()
+        field.sendActions(for: .editingChanged)
+        // No pass is coming, so the report itself applies the clear.
+        #expect(field.text == "")
+        #expect(model.text == "")
+        au02NewWriteWaitsForItsPass(stage, field)
+        field.resignFirstResponder()
+    }
+
+    // After a report applies the deferred clear, the field and the binding
+    // agree again, so the next keys are typing and reach the model.
+    @Test func typingAfterDeferredApplyReachesModel() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue) else {
+            Issue.record("No host window for AU02 stage")
+            return
+        }
+        au01KeepKey(stage.keyWindow)
+        guard let field = stage.field else {
+            Issue.record("TaskTitleTextField missing from hosted hierarchy")
+            return
+        }
+        field.delegate = nil
+        field.becomeFirstResponder()
+        au02Insert("AU02 apply", into: field)
+        au01Drain()
+        stage.model.text = ""
+        au02Compose("か", in: field)
+        au01Drain()
+        field.unmarkText()
+        field.sendActions(for: .editingChanged)
+        #expect(field.text == "")
+        au02Insert("z", into: field)
+        #expect(stage.model.text == "z")
+        au02Insert("y", into: field)
+        #expect(stage.model.text == "zy")
+        au01Drain()
+        #expect(stage.model.text == "zy")
+        #expect(stage.field?.text == "zy")
+        field.resignFirstResponder()
+    }
+
+    // A pass that pushes an external write leaves no push deferred, so a
+    // later external write still waits for its own pass.
+    @Test func secondExternalWriteWaitsForItsOwnPass() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue),
+            let field = stage.field
+        else {
+            Issue.record("No hosted TaskTitleTextField for AU02 stage")
+            return
+        }
+        au02Insert("AU02 typed", into: field)
+        au01Drain()
+        stage.model.text = "AU02 first"
+        au01Drain()
+        #expect(stage.field?.text == "AU02 first")
+        au02NewWriteWaitsForItsPass(stage, field)
+    }
+
+    // Runs with no pass in between: a new external write must wait for its
+    // own pass, like Add's clear, whatever push came before it.
+    private func au02NewWriteWaitsForItsPass(_ stage: AU01Stage, _ field: UITextField) {
+        stage.model.text = "AU02 next"
+        au02Insert("x", into: field)
+        au02Insert("y", into: field)
+        #expect(stage.model.text == "AU02 next")
+        au01Drain()
+        #expect(stage.model.text == "AU02 next")
+        #expect(stage.field?.text == "AU02 next")
+    }
+}
+
+// Pins R54-AU03 (keys the keyboard still held at an Add tap were lost): Add
+// resigns the first responder before it submits, and the keyboard delivers
+// the keys it holds while that resign runs. The first leg models the
+// delivery by inserting the held keys when the field ends editing, which
+// happens only inside that resign, so submit sees them only if the resign
+// came first. The Add button's own resign is pinned in the real app by
+// PomodoroughAU01ComposerFocusUITests, and the real keyboard-process
+// delivery by the starved real-app probe (apple/scratch/fix-R54-AU03.md).
+extension AU01TaskComposerRegressionTests {
+    @Test func addCollectsHeldKeysBeforeSubmit() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue) else {
+            Issue.record("No host window for AU03 stage")
+            return
+        }
+        let model = stage.model
+        au01KeepKey(stage.keyWindow)
+        guard let field = stage.field else {
+            Issue.record("TaskTitleTextField missing from hosted hierarchy")
+            return
+        }
+        field.delegate = nil
+        field.becomeFirstResponder()
+        #expect(field.isFirstResponder)
+        au02Insert("AU03 held p", into: field)
+        au01Drain()
+        let held = au03DeliverOnEndEditing("robe", to: field)
+        var submitted: [String] = []
+        TaskTitleField.submitAfterPendingInput {
+            submitted.append(model.text)
+            #expect(!field.isFirstResponder)
+        }
+        field.removeAction(held, for: .editingDidEnd)
+        #expect(submitted == ["AU03 held probe"])
+        field.resignFirstResponder()
+    }
+
+    @Test func addSubmitsWithoutKeyboardSession() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue),
+            let field = stage.field
+        else {
+            Issue.record("No hosted TaskTitleTextField for AU03 stage")
+            return
+        }
+        au02Insert("AU03 idle", into: field)
+        au01Drain()
+        #expect(!field.isFirstResponder)
+        var submitted: [String] = []
+        TaskTitleField.submitAfterPendingInput { submitted.append(stage.model.text) }
+        #expect(submitted == ["AU03 idle"])
+    }
+
+    // An active composition is part of the title Add stores, and Add still
+    // resigns before submit reads it. The unit host has no keyboard session,
+    // so its resign leaves the marked range in place; the keyboard's commit
+    // of that range is pinned by the real-app IME probe.
+    @Test func addResignsBeforeSubmitWhileComposing() {
+        let focusState = FocusState<Bool>()
+        guard let stage = AU01Stage(focus: focusState.projectedValue) else {
+            Issue.record("No host window for AU03 stage")
+            return
+        }
+        au01KeepKey(stage.keyWindow)
+        guard let field = stage.field else {
+            Issue.record("TaskTitleTextField missing from hosted hierarchy")
+            return
+        }
+        field.delegate = nil
+        field.becomeFirstResponder()
+        au02Insert("AU03 ime ", into: field)
+        au02Compose("かな", in: field)
+        var submitted: [String] = []
+        TaskTitleField.submitAfterPendingInput {
+            submitted.append(stage.model.text)
+            #expect(!field.isFirstResponder)
+        }
+        #expect(submitted == ["AU03 ime かな"])
+        #expect(field.text == "AU03 ime かな")
+        field.resignFirstResponder()
+    }
+}
+
 private final class AU01Model: ObservableObject {
     @Published var text = ""
     @Published var tick = 0
@@ -176,5 +396,28 @@ private func au01Field(in view: UIView) -> TaskTitleTextField? {
 
 private func au01Drain(_ seconds: TimeInterval = 0.5) {
     RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
+}
+
+// Stands in for a keyboard insertion at the end of the field: UIKit edits
+// the field text, then sends editingChanged, the only field-to-model path.
+@MainActor private func au02Insert(_ text: String, into field: UITextField) {
+    field.text = (field.text ?? "") + text
+    field.sendActions(for: .editingChanged)
+}
+
+// Stands in for an IME composition update (marked text at the caret).
+@MainActor private func au02Compose(_ marked: String, in field: UITextField) {
+    field.setMarkedText(marked, selectedRange: NSRange(location: (marked as NSString).length, length: 0))
+    field.sendActions(for: .editingChanged)
+    #expect(field.markedTextRange != nil)
+}
+
+// Stands in for the keyboard delivering keys it still holds while the field
+// resigns. Editing ends only inside that resign, so the keys land there as
+// an end-of-field insertion. The caller removes the returned action.
+@MainActor private func au03DeliverOnEndEditing(_ held: String, to field: UITextField) -> UIAction {
+    let action = UIAction { _ in au02Insert(held, into: field) }
+    field.addAction(action, for: .editingDidEnd)
+    return action
 }
 #endif

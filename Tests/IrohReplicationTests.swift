@@ -1148,7 +1148,7 @@ struct IrohReplicationTests {
         returnState.canonicalTimer = localTimer
         returnState.localTimerOwners[localTimer.id] = ownsRestoredTimer
             ? returnState.deviceId : "device-other"
-        let roomTimer = TestFixtures.timer(
+        let roomTimer = TestFixtures.terminalTimer(
             status: roomStatus,
             elapsed: 60_000,
             timerID: "timer-terminal-room"
@@ -1205,11 +1205,8 @@ struct IrohReplicationTests {
         }
     }
 
-    @Test @MainActor
+    @Test(.timeLimit(.minutes(1))) @MainActor
     func failedReturnCleanupAbortsLogoutThenRetryCannotRestoreAccount() async throws {
-        let scenario = "apple-api-coverage-model-local-signout"
-        let session = TestFixtures.session(for: scenario)
-        defer { session.invalidateAndCancel() }
         let suiteName = "PomodoroughTests.ReturnCleanup.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -1233,38 +1230,41 @@ struct IrohReplicationTests {
             accessToken: "return-access", accessTokenExpiresAt: .distantFuture,
             refreshToken: "return-refresh", refreshTokenExpiresAt: .distantFuture
         ))
-        let model = AppModel(
-            api: APIClient(session: session, keychain: tokens), defaults: defaults,
+        let logout = LogoutDrainingSession(scenario: "apple-api-coverage-model-local-signout", obligations: tokens)
+        let model = logout.track(AppModel(
+            api: APIClient(session: logout.session, keychain: tokens), defaults: defaults,
             roomStore: store, alarmScheduler: RecordingAlarmScheduler()
-        )
-        await model.restore()
-        try #require(model.isSignedIn)
-        try FileManager.default.moveItem(at: url, to: backup)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-        model.signOut()
-        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(model.isSignedIn)
-        #expect(model.errorMessage != nil)
-        #expect(tokens.tokens != nil)
-        #expect(store.activeReturnState == account)
-        try FileManager.default.removeItem(at: url)
-        try FileManager.default.moveItem(at: backup, to: url)
-        model.signOut()
-        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(!model.isSignedIn)
-        let reopened = IrohRoomStore(fileURL: url, secretStore: secrets)
-        #expect(reopened.activeReturnState?.cachedUser == nil)
-        #expect(reopened.activeReturnState?.history.isEmpty == true)
-        model.requestIrohRoomLeave()
-        await model.confirmIrohRoomLeave()
-        #expect(model.replicationMode == .offline)
-        #expect(model.user == nil)
-        #expect(model.history.isEmpty)
-        let persisted = try JSONDecoder.api.decode(
-            PersistedTimerState.self, from: #require(defaults.data(forKey: "timer-state-v2"))
-        )
-        #expect(persisted.cachedUser == nil)
-        #expect(persisted.history.isEmpty)
+        ))
+        try await logout.run {
+            await model.restore()
+            try #require(model.isSignedIn)
+            try FileManager.default.moveItem(at: url, to: backup)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+            model.signOut()
+            for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(model.isSignedIn)
+            #expect(model.errorMessage != nil)
+            #expect(tokens.tokens != nil)
+            #expect(store.activeReturnState == account)
+            try FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: backup, to: url)
+            model.signOut()
+            for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(!model.isSignedIn)
+            let reopened = IrohRoomStore(fileURL: url, secretStore: secrets)
+            #expect(reopened.activeReturnState?.cachedUser == nil)
+            #expect(reopened.activeReturnState?.history.isEmpty == true)
+            model.requestIrohRoomLeave()
+            await model.confirmIrohRoomLeave()
+            #expect(model.replicationMode == .offline)
+            #expect(model.user == nil)
+            #expect(model.history.isEmpty)
+            let persisted = try JSONDecoder.api.decode(
+                PersistedTimerState.self, from: #require(defaults.data(forKey: "timer-state-v2"))
+            )
+            #expect(persisted.cachedUser == nil)
+            #expect(persisted.history.isEmpty)
+        }
     }
 
     @Test @MainActor
@@ -2102,12 +2102,17 @@ struct IrohReplicationTests {
             genesis: genesis
         )
 
+        // Core fills a genesis row stored without `elapsedMs` by its old-row
+        // rule: a completed row counts its plan, a cancelled row counts 0.
+        var coreHistory = history
+        coreHistory.elapsedMs = terminalType == .finish ? 60_000 : 0
+
         #expect(projected.canonicalTimer == nil)
-        #expect(projected.history == [history])
+        #expect(projected.history == [coreHistory])
 
         let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
         #expect(restarted.activeRoomState?.canonicalTimer == nil)
-        #expect(restarted.activeRoomState?.history == [history])
+        #expect(restarted.activeRoomState?.history == [coreHistory])
     }
 
     @Test(arguments: [CommandType.cancel, .finish])
@@ -2168,12 +2173,201 @@ struct IrohReplicationTests {
             genesis: genesis
         )
 
+        // Core 0.56.0 pairs this pre-field row with the terminal timer and
+        // gives it the timer's elapsed time (R54 M1). The client must not
+        // compute it, so this pins Core's output. The persisted pair then
+        // passes Core's `workspace::validate_pair` on the next projection.
+        var coreHistory = history
+        coreHistory.elapsedMs = terminalType == .finish ? 60_000 : 10_000
+
         #expect(projected.canonicalTimer == terminal)
-        #expect(projected.history == [history])
+        #expect(projected.history == [coreHistory])
 
         let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
         #expect(restarted.activeRoomState?.canonicalTimer == terminal)
-        #expect(restarted.activeRoomState?.history == [history])
+        #expect(restarted.activeRoomState?.history == [coreHistory])
+    }
+
+    /// An account with a nonzero trusted-clock offset publishes its completed
+    /// timer in the physical clock, while the history row keeps trusted time.
+    /// The room genesis must carry the timer in the row's clock, or Core 0.56
+    /// rejects the pair with "canonical timer overlaps timer history" and the
+    /// room is never created.
+    @Test @MainActor
+    func roomCreationFromAnOffsetAccountKeepsTheTerminalPairInOneClock() async throws {
+        let suiteName = "PomodoroughTests.IrohGenesisClock.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let url = temporaryURL()
+        let secrets = MemoryIrohRoomSecretStore()
+        let account = offsetAccountWithCompletedPair()
+        let timer = try #require(account.canonicalTimer)
+        defaults.set(try JSONEncoder.api.encode(account), forKey: PersistedStateLoader.storageKey)
+        let model = try offsetAccountModel(defaults: defaults, store: IrohRoomStore(fileURL: url, secretStore: secrets))
+        await model.restore()
+        try #require(model.canonicalTimer?.id == timer.id)
+        try #require(model.canonicalTimer?.anchorAt != timer.anchorAt, "the account publishes the physical timer")
+
+        #expect(await model.createIrohRoom(name: "Clock room"))
+
+        #expect(model.errorMessage == nil)
+        #expect(model.replicationMode == .iroh)
+        let reopened = IrohRoomStore(fileURL: url, secretStore: secrets)
+        let room = try #require(reopened.activeRoomState)
+        #expect(room.canonicalTimer == timer)
+        #expect(room.history.map(\.timerId) == [timer.id])
+        #expect(room.history.first?.completedAt == timer.anchorAt)
+        let restarted = try offsetAccountModel(defaults: defaults, store: reopened)
+        await restarted.restore()
+        #expect(restarted.replicationMode == .iroh)
+        #expect(restarted.errorMessage == nil)
+        #expect(restarted.canonicalTimer?.id == timer.id)
+        #expect(restarted.history.map(\.timerId) == [timer.id])
+    }
+
+    /// A pre-0.56 room genesis can hold a terminal timer whose anchorAt was
+    /// shifted to the physical clock while its row kept trusted time. Core
+    /// 0.56 rejects that pair, so the client drops the timer and the room
+    /// still projects and syncs.
+    @Test func roomGenesisWithAShiftedTerminalAnchorStillProjects() throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let completedAt = Date(timeIntervalSince1970: 1_001)
+        let shifted = CanonicalTimer(
+            id: "genesis-shifted-timer", taskId: nil, phase: .focus, status: .completed,
+            plannedDurationMs: 60_000, elapsedAtAnchorMs: 60_000,
+            anchorAt: completedAt.addingTimeInterval(-0.25),
+            lastIntent: TimerIntent(
+                type: .finish, commandId: "command-genesis-shifted-timer", occurredAt: completedAt, deviceId: nil
+            )
+        )
+        let row = TestFixtures.history(id: "genesis-shifted-timer", durationMs: 60_000, date: completedAt)
+        let genesis = IrohGenesis(
+            canonicalTimer: shifted, history: [row], tasks: [], durationsMs: .defaults,
+            autoStartBreaks: false, hlcWallMs: 0, hlcCounter: 0
+        )
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+
+        let projected = try store.createRoom(
+            roomID: roomID, roomSecret: secret, name: nil, returnState: .fresh(), genesis: genesis
+        )
+
+        #expect(projected.canonicalTimer == nil)
+        #expect(projected.history.map(\.id) == [row.id])
+        #expect(projected.history.first?.completedAt == completedAt)
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer == nil)
+        #expect(restarted.activeRoomState?.history.map(\.id) == [row.id])
+    }
+
+    /// A completed timer with its finish intent and history row, stored with
+    /// a trusted clock that runs 250 ms ahead of the device clock.
+    private func offsetAccountWithCompletedPair() -> PersistedTimerState {
+        var state = PersistedTimerState.fresh()
+        state.trustedClockState = TrustedClockState(
+            offsetMs: 250, uncertaintyMs: 10, anchorMs: 1_005_250, anchorUptime: 100
+        )
+        state.canonicalTimer = TestFixtures.terminalTimer(
+            status: .completed, elapsed: 60_000, timerID: "genesis-clock-timer"
+        )
+        state.history = [TestFixtures.history(id: "genesis-clock-timer", durationMs: 60_000, date: TestFixtures.anchor)]
+        return state
+    }
+
+    /// A signed-out model with no network, Keychain or Iroh endpoint access.
+    @MainActor
+    private func offsetAccountModel(defaults: UserDefaults, store: IrohRoomStore) throws -> AppModel {
+        let ticket = try EndpointTicket.fromAddr(addr: EndpointAddr(
+            id: try SecretKey.fromBytes(bytes: Data(repeating: 41, count: 32)).public(),
+            relayUrl: nil, addresses: []
+        )).description
+        return AppModel(
+            api: APIClient(session: URLSession(configuration: .ephemeral), keychain: EmptyTokenStore()),
+            defaults: defaults, roomStore: store, endpointKeyStore: PreviewEndpointKeyStore(),
+            roomServiceFactory: { _ in GenesisClockRoomService(ticket: ticket) },
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider(),
+            now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
+        )
+    }
+
+    /// A room record renames the task of a terminal genesis timer. Core
+    /// carries the rename into the timer and its row; the room keeps both.
+    @Test func roomRenameCarriesTheTerminalGenesisTimerTask() throws {
+        let url = temporaryURL()
+        let secretStore = MemoryIrohRoomSecretStore()
+        let secret = Data(0...31)
+        let roomID = try IrohProtocolV1.roomID(for: secret)
+        let old = try #require(FocusTask(title: "Old title"))
+        let renamed = try #require(FocusTask(title: "New title"))
+        let oldID = old.id.uuidString.lowercased()
+        let newID = renamed.id.uuidString.lowercased()
+        let endedAt = Date(timeIntervalSince1970: 1_001)
+        let terminal = CanonicalTimer(
+            id: "timer-genesis-renamed",
+            taskId: oldID,
+            phase: .focus,
+            status: .cancelled,
+            plannedDurationMs: 60_000,
+            elapsedAtAnchorMs: 10_000,
+            anchorAt: endedAt,
+            startedByDeviceId: "device-test0001",
+            lastIntent: TimerIntent(type: .cancel, commandId: "command-genesis-renamed", occurredAt: endedAt, deviceId: nil)
+        )
+        let store = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        _ = try store.createRoom(
+            roomID: roomID,
+            roomSecret: secret,
+            name: nil,
+            returnState: .fresh(),
+            genesis: IrohGenesis(
+                canonicalTimer: terminal,
+                history: [HistoryItem(
+                    id: "history-genesis-renamed",
+                    timerId: terminal.id,
+                    commandId: "command-genesis-renamed",
+                    taskId: oldID,
+                    phase: .focus,
+                    status: "cancelled",
+                    plannedDurationMs: 60_000,
+                    completedAt: nil,
+                    endedAt: endedAt
+                )],
+                tasks: [old],
+                durationsMs: .defaults,
+                autoStartBreaks: false,
+                hlcWallMs: 1_000_000,
+                hlcCounter: 0
+            )
+        )
+        // Core's rename plan: the new identity's upsert, then the rename.
+        let operations = [
+            (TaskOperationType.upsert, newID, "task-operation-renamed-upsert", Int64(0)),
+            (.rename, oldID, "task-operation-renamed-rename", 1),
+        ].map { type, taskID, operationID, counter in
+            IrohOperationRecord(domain: .task, deviceId: "device-a0001", payload: .task(TaskOperation(
+                id: operationID,
+                taskId: taskID,
+                type: type,
+                title: renamed.title,
+                occurredAt: Date(timeIntervalSince1970: 1_002),
+                hlcWallMs: 1_002_000,
+                hlcCounter: counter
+            )))
+        }
+
+        let projected = try store.insertRemoteRecords(operations, roomID: roomID)
+
+        #expect(projected.tasks == [renamed])
+        #expect(projected.canonicalTimer?.taskId == newID, "Core carries the rename into the timer")
+        #expect(projected.canonicalTimer?.elapsedAtAnchorMs == 10_000)
+        #expect(projected.history.map(\.taskId) == [newID])
+        #expect(projected.history.map(\.elapsedMs) == [10_000])
+        let restarted = IrohRoomStore(fileURL: url, secretStore: secretStore)
+        #expect(restarted.activeRoomState?.canonicalTimer?.taskId == newID)
+        #expect(restarted.activeRoomState?.history.map(\.taskId) == [newID])
     }
 
     @Test(arguments: [CommandType.cancel, .finish])
@@ -3050,4 +3244,20 @@ struct IrohReplicationTests {
 private struct StaticIrohEndpointKeyStore: IrohEndpointKeyStoring {
     func load() throws -> Data? { Data(repeating: 7, count: 32) }
     func save(_ secret: Data) throws {}
+}
+
+/// Iroh service stand-in with no peers that hands out one valid ticket.
+private actor GenesisClockRoomService: RoomReplicationServing {
+    let ticket: String
+
+    init(ticket: String) {
+        self.ticket = ticket
+    }
+
+    func start(_ context: IrohServiceContext) async throws -> String { ticket }
+    func stop() async {}
+    func currentEndpointTicket() async throws -> String { ticket }
+    func syncNow() async {}
+    func markConflict(roomID: String?) async {}
+    func join(invite: IrohRoomInvite) async throws {}
 }

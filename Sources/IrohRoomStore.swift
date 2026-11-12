@@ -314,10 +314,8 @@ final class IrohRoomStore: @unchecked Sendable {
                 return JoinPreparation(roomID: roomID, original: original,
                     installedSecret: false, alreadyActive: true)
             }
-            var workspace = original ?? IrohRoomWorkspace(
-                roomID: roomID, roomSecret: roomSecret, roomName: name,
-                returnState: returnState, roomState: Self.makeRoomDeviceState(from: returnState),
-                peers: [], records: [], conflict: nil, createdAt: now
+            var workspace = original ?? Self.makePreparedJoinWorkspace(
+                roomID: roomID, roomSecret: roomSecret, name: name, returnState: returnState, now: now
             )
             try refreshJoinPeer(initialPeer, in: &workspace)
             let installedSecret = try installSecretLocked(roomID: roomID, secret: roomSecret)
@@ -344,7 +342,7 @@ final class IrohRoomStore: @unchecked Sendable {
         _ original: IrohRoomWorkspace?, roomID: String, secret: Data
     ) throws {
         guard state.activeRoomID == nil || state.activeRoomID == roomID else {
-            throw IrohProtocolError.invalidMessage("Leave the current room before joining another room.")
+            throw IrohProtocolError.roomAlreadyActive
         }
         if let original {
             guard original.roomSecret == secret, original.conflict == nil else {
@@ -419,10 +417,13 @@ final class IrohRoomStore: @unchecked Sendable {
                 throw IrohProtocolError.invalidMessage("joined room has no valid genesis")
             }
             guard state.activeRoomID == nil || state.activeRoomID == roomID else {
-                throw IrohProtocolError.invalidMessage("Leave the current room before joining another room.")
+                throw IrohProtocolError.roomAlreadyActive
             }
             if state.activeRoomID == roomID { return state.rooms[index].roomState }
-            let projected = try IrohRoomProjection.project(state.rooms[index], at: self.now())
+            let projected = Self.inheritingAccountIdentity(
+                try IrohRoomProjection.project(state.rooms[index], at: self.now()),
+                from: returnState
+            )
             return try committingLocked {
                 state.rooms[index].returnState = returnState
                 state.rooms[index].roomState = projected
@@ -956,6 +957,40 @@ final class IrohRoomStore: @unchecked Sendable {
         )
     }
 
+    // R54-AP06: a join writes its prepared room before the transport join
+    // runs, and sign-out may detach the account in that window. The prepared
+    // room therefore carries no account identity in either state, so neither
+    // the sign-out window nor a relaunch inside it leaves the account user
+    // in the room file. Activation stamps the identity back.
+    private static func makePreparedJoinWorkspace(
+        roomID: String, roomSecret: Data, name: String?, returnState: PersistedTimerState, now: Date
+    ) -> IrohRoomWorkspace {
+        var anonymous = returnState
+        anonymous.cachedUser = nil
+        anonymous.pendingAccountSwitchUser = nil
+        anonymous.bootstrapUser = nil
+        anonymous.pendingBootstrapResolution = nil
+        return IrohRoomWorkspace(
+            roomID: roomID, roomSecret: roomSecret, roomName: name,
+            returnState: anonymous, roomState: makeRoomDeviceState(from: anonymous),
+            peers: [], records: [], conflict: nil, createdAt: now
+        )
+    }
+
+    // An activated room without an identity takes the account identity of
+    // the workspace it replaces, the fields makeRoomDeviceState keeps. A
+    // room that already carries an identity keeps its own.
+    private static func inheritingAccountIdentity(
+        _ roomState: PersistedTimerState, from returnState: PersistedTimerState
+    ) -> PersistedTimerState {
+        guard roomState.cachedUser == nil, roomState.pendingAccountSwitchUser == nil,
+              roomState.bootstrapUser == nil else { return roomState }
+        var stamped = roomState
+        stamped.cachedUser = returnState.cachedUser
+        stamped.pendingAccountSwitchUser = returnState.pendingAccountSwitchUser
+        return stamped
+    }
+
     private static func makeRoomDeviceState(from local: PersistedTimerState) -> PersistedTimerState {
         var state = local
         state.revision = 0
@@ -1019,10 +1054,6 @@ final class IrohRoomStore: @unchecked Sendable {
     }
 
     private static func defaultFileURL() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("Pomodorough", isDirectory: true)
-            .appendingPathComponent("iroh-rooms-v1.json")
+        DefaultStorageLocation.fileURL("iroh-rooms-v1.json")
     }
 }

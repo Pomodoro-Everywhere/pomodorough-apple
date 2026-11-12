@@ -2,18 +2,40 @@
   "locale": "ar-XB",
   "layoutDirection": "right-to-left",
   "strings": {
-    "Create a new sync request?": { "stringUnit": { "state": "translated", "value": "‏⟦Create a new sync request?⟧" } },
-    "History setup paused: local changes exceed the server limit. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦History setup paused: local changes exceed the server limit. Queued changes remain saved.⟧" } },
-    "Invalid Core batch plan.": { "stringUnit": { "state": "translated", "value": "‏⟦Invalid Core batch plan.⟧" } },
-    "Keep changes and recover": { "stringUnit": { "state": "translated", "value": "‏⟦Keep changes and recover⟧" } },
-    "Recover saved sync request": { "stringUnit": { "state": "translated", "value": "‏⟦Recover saved sync request⟧" } },
-    "Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.⟧" } },
-    "Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.": { "stringUnit": { "state": "translated", "value": "‏⟦Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.⟧" } },
-    "The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.": { "stringUnit": { "state": "translated", "value": "‏⟦The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.⟧" } },
+    "%@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@⟧"
+      }
+    },
+    "%@ arrivals": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ arrivals⟧"
+      }
+    },
+    "%@ completed": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ completed⟧"
+      }
+    },
     "%@ duration": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦%@ duration⟧"
+      }
+    },
+    "%@ finished pomodoros": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ finished pomodoros⟧"
+      }
+    },
+    "%@ of %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@ of %@⟧"
       }
     },
     "%@ remaining, %@": {
@@ -28,46 +50,28 @@
         "value": "‏⟦%@ timer⟧"
       }
     },
-    "%@, %@, %@, %lld minutes": {
-      "variations": {
-        "plural": {
-          "zero": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "‏⟦%@, %@, %@, %lld minutes⟧"
-            }
-          },
-          "one": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "‏⟦%@, %@, %@, %lld minute⟧"
-            }
-          },
-          "two": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "‏⟦%@, %@, %@, %lld minutes⟧"
-            }
-          },
-          "few": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "‏⟦%@, %@, %@, %lld minutes⟧"
-            }
-          },
-          "many": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "‏⟦%@, %@, %@, %lld minutes⟧"
-            }
-          },
-          "other": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "‏⟦%@, %@, %@, %lld minutes⟧"
-            }
-          }
-        }
+    "%@, %@ spent": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@, %@ spent⟧"
+      }
+    },
+    "%@, %@, %@ focus time": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@, %@, %@ focus time⟧"
+      }
+    },
+    "%@, %@, %@, %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@, %@, %@, %@⟧"
+      }
+    },
+    "%@, %@, %@, %@ minutes": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%@, %@, %@, %@ minutes⟧"
       }
     },
     "%@; Iroh %@": {
@@ -76,10 +80,100 @@
         "value": "‏⟦%@; Iroh %@⟧"
       }
     },
+    "%arg arrivals": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg arrivals⟧"
+      }
+    },
+    "%arg of %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg of %arg⟧"
+      }
+    },
+    "%arg of 4 toward the next long break, %arg completed today": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg of 4 toward the next long break, %arg completed today⟧"
+      }
+    },
+    "%arg runs": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg runs⟧"
+      }
+    },
+    "%arg · Σ %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg · Σ %arg⟧"
+      }
+    },
+    "%arg, %arg spent": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg, %arg spent⟧"
+      }
+    },
+    "%arg, %arg, %arg focus time": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg, %arg, %arg focus time⟧"
+      }
+    },
+    "%arg/%arg queued=%arg ": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%arg/%arg queued=%arg ⟧"
+      }
+    },
     "%lld": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦%lld⟧"
+      }
+    },
+    "%lld arrivals": {
+      "variations": {
+        "plural": {
+          "zero": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld arrivals⟧"
+            }
+          },
+          "one": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld arrival⟧"
+            }
+          },
+          "two": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld arrivals⟧"
+            }
+          },
+          "few": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld arrivals⟧"
+            }
+          },
+          "many": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld arrivals⟧"
+            }
+          },
+          "other": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld arrivals⟧"
+            }
+          }
+        }
       }
     },
     "%lld completed": {
@@ -298,6 +392,12 @@
         "value": "‏⟦%lld min⟧"
       }
     },
+    "%lld min planned": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%lld min planned⟧"
+      }
+    },
     "%lld minutes": {
       "variations": {
         "plural": {
@@ -335,6 +435,48 @@
             "stringUnit": {
               "state": "translated",
               "value": "‏⟦%lld minutes⟧"
+            }
+          }
+        }
+      }
+    },
+    "%lld minutes planned": {
+      "variations": {
+        "plural": {
+          "zero": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld minutes planned⟧"
+            }
+          },
+          "one": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld minute planned⟧"
+            }
+          },
+          "two": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld minutes planned⟧"
+            }
+          },
+          "few": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld minutes planned⟧"
+            }
+          },
+          "many": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld minutes planned⟧"
+            }
+          },
+          "other": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld minutes planned⟧"
             }
           }
         }
@@ -424,6 +566,48 @@
         }
       }
     },
+    "%lld pomodoros · %@": {
+      "variations": {
+        "plural": {
+          "zero": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld pomodoros · %@⟧"
+            }
+          },
+          "one": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld pomodoro · %@⟧"
+            }
+          },
+          "two": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld pomodoros · %@⟧"
+            }
+          },
+          "few": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld pomodoros · %@⟧"
+            }
+          },
+          "many": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld pomodoros · %@⟧"
+            }
+          },
+          "other": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld pomodoros · %@⟧"
+            }
+          }
+        }
+      }
+    },
     "%lld queued": {
       "variations": {
         "plural": {
@@ -508,6 +692,48 @@
         }
       }
     },
+    "%lld runs": {
+      "variations": {
+        "plural": {
+          "zero": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld runs⟧"
+            }
+          },
+          "one": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld run⟧"
+            }
+          },
+          "two": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld runs⟧"
+            }
+          },
+          "few": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld runs⟧"
+            }
+          },
+          "many": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld runs⟧"
+            }
+          },
+          "other": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld runs⟧"
+            }
+          }
+        }
+      }
+    },
     "%lld total": {
       "variations": {
         "plural": {
@@ -548,6 +774,12 @@
             }
           }
         }
+      }
+    },
+    "A task you deleted could not be removed yet. Pomodorough will try again the next time it opens.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦A task you deleted could not be removed yet. Pomodorough will try again the next time it opens.⟧"
       }
     },
     "ACTION": {
@@ -712,16 +944,16 @@
         "value": "‏⟦Applies to next timer. Short after focus. Long every fourth completed focus.⟧"
       }
     },
-    "Applies to the next focus timer and does not reassign the active timer.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Applies to the next focus timer and does not reassign the active timer.⟧"
-      }
-    },
     "Applies to the current running focus timer and the next timer.": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Applies to the current running focus timer and the next timer.⟧"
+      }
+    },
+    "Applies to the next focus timer and does not reassign the active timer.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Applies to the next focus timer and does not reassign the active timer.⟧"
       }
     },
     "Arrivals": {
@@ -740,6 +972,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦BEFORE DEPARTURE⟧"
+      }
+    },
+    "Both": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Both⟧"
       }
     },
     "Bundled pomodorough_core.wasm resource is missing.": {
@@ -856,6 +1094,18 @@
         "value": "‏⟦Completed focus time by task⟧"
       }
     },
+    "Completed focus: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Completed focus: %@⟧"
+      }
+    },
+    "Completed focus: %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Completed focus: %arg⟧"
+      }
+    },
     "Confirm %@": {
       "stringUnit": {
         "state": "translated",
@@ -904,10 +1154,22 @@
         "value": "‏⟦Could not confirm Start. Check your iPhone before trying again. Start was not queued.⟧"
       }
     },
+    "Could not delete “%@”. The task is back in your list.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Could not delete “%@”. The task is back in your list.⟧"
+      }
+    },
     "Create Iroh room": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Create Iroh room⟧"
+      }
+    },
+    "Create a new sync request?": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Create a new sync request?⟧"
       }
     },
     "Create another room": {
@@ -940,6 +1202,18 @@
         "value": "‏⟦Creating room⟧"
       }
     },
+    "Current timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Current timer⟧"
+      }
+    },
+    "Delete": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Delete⟧"
+      }
+    },
     "Delete %@": {
       "stringUnit": {
         "state": "translated",
@@ -962,6 +1236,18 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Deleted task⟧"
+      }
+    },
+    "Deleted “%@”": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Deleted “%@”⟧"
+      }
+    },
+    "Deleted “%@”. Undo is available.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Deleted “%@”. Undo is available.⟧"
       }
     },
     "Device": {
@@ -1060,6 +1346,18 @@
         "value": "‏⟦Finish timer⟧"
       }
     },
+    "Finished early": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Finished early⟧"
+      }
+    },
+    "Finishes deleting the task": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Finishes deleting the task⟧"
+      }
+    },
     "Focus": {
       "stringUnit": {
         "state": "translated",
@@ -1076,6 +1374,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Focus task⟧"
+      }
+    },
+    "Focus task, %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Focus task, %arg⟧"
       }
     },
     "Focus task: %@": {
@@ -1156,6 +1460,12 @@
         "value": "‏⟦History setup paused because the server returned an invalid response. Your saved choice and local data were preserved.⟧"
       }
     },
+    "History setup paused: local changes exceed the server limit. Queued changes remain saved.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦History setup paused: local changes exceed the server limit. Queued changes remain saved.⟧"
+      }
+    },
     "Idle": {
       "stringUnit": {
         "state": "translated",
@@ -1172,6 +1482,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦In sync⟧"
+      }
+    },
+    "Invalid Core batch plan.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Invalid Core batch plan.⟧"
       }
     },
     "Invalid room invite: %@": {
@@ -1264,6 +1580,12 @@
         "value": "‏⟦Keep Remote⟧"
       }
     },
+    "Keep changes and recover": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Keep changes and recover⟧"
+      }
+    },
     "Keeping local history requires a server update. Your saved choice and local data remain on this device.": {
       "stringUnit": {
         "state": "translated",
@@ -1334,6 +1656,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Long break complete⟧"
+      }
+    },
+    "Menu bar display": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Menu bar display⟧"
       }
     },
     "NETWORK SWITCHBOARD": {
@@ -1474,6 +1802,18 @@
         "value": "‏⟦One through 64 characters. Room name is display-only.⟧"
       }
     },
+    "Open Pomodorough": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Open Pomodorough⟧"
+      }
+    },
+    "Open Pomodorough on iPhone to connect": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Open Pomodorough on iPhone to connect⟧"
+      }
+    },
     "Open Settings": {
       "stringUnit": {
         "state": "translated",
@@ -1544,6 +1884,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Pause⟧"
+      }
+    },
+    "Pause timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Pause timer⟧"
       }
     },
     "Paused": {
@@ -1654,10 +2000,10 @@
         "value": "‏⟦Queued local changes will be merged into account data. Conflicts or rejected changes are possible.⟧"
       }
     },
-    "Room %@": {
+    "Quit Pomodorough": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Room %@⟧"
+        "value": "‏⟦Quit Pomodorough⟧"
       }
     },
     "ROOM INVITE": {
@@ -1678,6 +2024,12 @@
         "value": "‏⟦Recover⟧"
       }
     },
+    "Recover saved sync request": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Recover saved sync request⟧"
+      }
+    },
     "Refresh arrivals": {
       "stringUnit": {
         "state": "translated",
@@ -1688,6 +2040,24 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Remote history could not be checked. Local data remains unchanged.⟧"
+      }
+    },
+    "Rename": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Rename⟧"
+      }
+    },
+    "Rename task": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Rename task⟧"
+      }
+    },
+    "Rename task…": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Rename task…⟧"
       }
     },
     "Repair required": {
@@ -1732,6 +2102,12 @@
         "value": "‏⟦Resume⟧"
       }
     },
+    "Resume timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Resume timer⟧"
+      }
+    },
     "Retries saved history resolution": {
       "stringUnit": {
         "state": "translated",
@@ -1766,6 +2142,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Review conflict⟧"
+      }
+    },
+    "Room %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Room %@⟧"
       }
     },
     "Room authentication failed.": {
@@ -1804,6 +2186,12 @@
         "value": "‏⟦Room repair needed⟧"
       }
     },
+    "Room secret cleanup failed: %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Room secret cleanup failed: %@⟧"
+      }
+    },
     "Rotating room": {
       "stringUnit": {
         "state": "translated",
@@ -1820,12 +2208,6 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Saved⟧"
-      }
-    },
-    "Synchronized State": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Synchronized State⟧"
       }
     },
     "Saved Iroh room data could not be decoded. Original file was left unchanged.": {
@@ -1864,6 +2246,36 @@
         "value": "‏⟦Sends an alert and plays a sound until you dismiss it or start another timer.⟧"
       }
     },
+    "Server resolved a duration change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a duration change.⟧"
+      }
+    },
+    "Server resolved a selected-task change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a selected-task change.⟧"
+      }
+    },
+    "Server resolved a task change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a task change.⟧"
+      }
+    },
+    "Server resolved a timer action.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved a timer action.⟧"
+      }
+    },
+    "Server resolved an auto-start change.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Server resolved an auto-start change.⟧"
+      }
+    },
     "Server returned an invalid response.": {
       "stringUnit": {
         "state": "translated",
@@ -1874,6 +2286,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Session expired. Sign in again.⟧"
+      }
+    },
+    "Set as focus task": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Set as focus task⟧"
       }
     },
     "Settings": {
@@ -1984,6 +2402,12 @@
         "value": "‏⟦Shows completed focus time by task⟧"
       }
     },
+    "Shows the tab bar and the toolbar": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Shows the tab bar and the toolbar⟧"
+      }
+    },
     "Sign in": {
       "stringUnit": {
         "state": "translated",
@@ -2014,6 +2438,12 @@
         "value": "‏⟦Sign out of Pomodorough?⟧"
       }
     },
+    "Sign-out is in progress. Changes are paused until it finishes.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sign-out is in progress. Changes are paused until it finishes.⟧"
+      }
+    },
     "Sign-out paused because its recovery state could not be saved.": {
       "stringUnit": {
         "state": "translated",
@@ -2036,6 +2466,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Skip to %arg⟧"
+      }
+    },
+    "Start": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Start⟧"
       }
     },
     "Start %@": {
@@ -2161,7 +2597,19 @@
     "Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.": {
       "stringUnit": {
         "state": "translated",
-        "value": "\u200f⟦Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.⟧"
+        "value": "‏⟦Sync paused: older saved timer actions lack dependency provenance. Your queued actions remain unchanged. Contact support to review them before syncing this device.⟧"
+      }
+    },
+    "Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sync paused: the saved request exceeds the server limit. Confirm recovery before creating a new request. Queued changes remain saved.⟧"
+      }
+    },
+    "Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sync paused: timer actions are waiting for a dependency. Queued changes remain saved.⟧"
       }
     },
     "Sync status, %@": {
@@ -2176,10 +2624,22 @@
         "value": "‏⟦Synchronization limit exceeded: %@⟧"
       }
     },
+    "Synchronized State": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Synchronized State⟧"
+      }
+    },
     "Syncing": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Syncing⟧"
+      }
+    },
+    "Syncing latest state before finish.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Syncing latest state before finish.⟧"
       }
     },
     "TASK": {
@@ -2212,10 +2672,28 @@
         "value": "‏⟦Task board⟧"
       }
     },
+    "Task name": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Task name⟧"
+      }
+    },
+    "Task title": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Task title⟧"
+      }
+    },
     "Tasks": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Tasks⟧"
+      }
+    },
+    "The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The saved request exceeds the server limit. Recovery keeps every queued change and its identity, then creates smaller requests. Changes that may have reached the server remain marked as sent.⟧"
       }
     },
     "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.": {
@@ -2224,22 +2702,22 @@
         "value": "‏⟦The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.⟧"
       }
     },
-    "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@": {
+    "The task was not deleted. Changes are paused right now.": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. %@⟧"
-      }
-    },
-    "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. %@⟧"
+        "value": "‏⟦The task was not deleted. Changes are paused right now.⟧"
       }
     },
     "These changes do not alter the running or paused timer.": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦These changes do not alter the running or paused timer.⟧"
+      }
+    },
+    "This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ.⟧"
       }
     },
     "This device has %lld completed entries. Your account has %lld. Timers, tasks, or settings may also differ.": {
@@ -2264,6 +2742,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦This timer changed on your iPhone. Refreshing status.⟧"
+      }
+    },
+    "This will discard %@ changes still waiting to sync.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This will discard %@ changes still waiting to sync.⟧"
       }
     },
     "This will discard %lld changes still waiting to sync.": {
@@ -2332,12 +2816,6 @@
         "value": "‏⟦Timer alerts⟧"
       }
     },
-    "Syncing latest state before finish.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Syncing latest state before finish.⟧"
-      }
-    },
     "Timer changed on another device. Syncing before finish.": {
       "stringUnit": {
         "state": "translated",
@@ -2362,6 +2840,18 @@
         "value": "‏⟦Timer works without internet⟧"
       }
     },
+    "Total Pomodoro time": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Total Pomodoro time⟧"
+      }
+    },
+    "Total includes today’s completed Pomodoros and the current focus session.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Total includes today’s completed Pomodoros and the current focus session.⟧"
+      }
+    },
     "Type DELETE": {
       "stringUnit": {
         "state": "translated",
@@ -2378,6 +2868,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Unavailable⟧"
+      }
+    },
+    "Undo": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Undo⟧"
       }
     },
     "Unknown error": {
@@ -2410,10 +2906,40 @@
         "value": "‏⟦Version %@ (%@)⟧"
       }
     },
+    "View focus breakdown": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦View focus breakdown⟧"
+      }
+    },
     "Waiting for peers": {
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Waiting for peers⟧"
+      }
+    },
+    "Watch Finish not applied.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Watch Finish not applied.⟧"
+      }
+    },
+    "Watch Pause not applied.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Watch Pause not applied.⟧"
+      }
+    },
+    "Watch Resume not applied.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Watch Resume not applied.⟧"
+      }
+    },
+    "Watch Start not applied.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Watch Start not applied.⟧"
       }
     },
     "Work": {
@@ -2462,6 +2988,36 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Your next Pomodorough interval is ready.⟧"
+      }
+    },
+    "account-deletion.rejected": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The server did not accept the account deletion. Check the confirmation, then try again.⟧"
+      }
+    },
+    "app-error.conflict": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This change conflicts with a newer change on the server. Try again.⟧"
+      }
+    },
+    "app-error.server": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The server could not finish the request. Try again later.⟧"
+      }
+    },
+    "applied=%arg ignoredRetarget=%arg ": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦applied=%arg ignoredRetarget=%arg ⟧"
+      }
+    },
+    "core=%arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦core=%arg⟧"
       }
     },
     "duration.compact.hours": {
@@ -2572,154 +3128,16 @@
         }
       }
     },
-    "iPhone connection is not ready. Try again shortly.": {
+    "durationBase category=%arg reason=%arg ": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦iPhone connection is not ready. Try again shortly.⟧"
+        "value": "‏⟦durationBase category=%arg reason=%arg ⟧"
       }
     },
-    "pomodorough1.…": {
+    "hasCanonical=%arg usesCanonical=%arg ": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦pomodorough1.…⟧"
-      }
-    },
-    "timer.time.minutes_seconds": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%1$02lld:%2$02lld⟧"
-      }
-    },
-    "%arg arrivals": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%arg arrivals⟧"
-      }
-    },
-    "%arg completed of %arg runs": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%arg completed of %arg runs⟧"
-      }
-    },
-    "%arg finished pomodoros, %arg spent": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%arg finished pomodoros, %arg spent⟧"
-      }
-    },
-    "%arg of 4 toward the next long break, %arg completed today": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%arg of 4 toward the next long break, %arg completed today⟧"
-      }
-    },
-    "Completed focus: %arg": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Completed focus: %arg⟧"
-      }
-    },
-    "View focus breakdown": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦View focus breakdown⟧"
-      }
-    },
-    "Delete task?": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Delete task?⟧"
-      }
-    },
-    "Delete “%arg”?": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Delete “%arg”?⟧"
-      }
-    },
-    "This removes the task from the board. Completed focus runs stay in history.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦This removes the task from the board. Completed focus runs stay in history.⟧"
-      }
-    },
-    "Both": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Both⟧"
-      }
-    },
-    "Current timer": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Current timer⟧"
-      }
-    },
-    "Menu bar display": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Menu bar display⟧"
-      }
-    },
-    "Open Pomodorough": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Open Pomodorough⟧"
-      }
-    },
-    "Pause timer": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Pause timer⟧"
-      }
-    },
-    "Quit Pomodorough": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Quit Pomodorough⟧"
-      }
-    },
-    "Resume timer": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Resume timer⟧"
-      }
-    },
-    "Total Pomodoro time": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Total Pomodoro time⟧"
-      }
-    },
-    "Total includes today’s completed Pomodoros and the current focus session.": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Total includes today’s completed Pomodoros and the current focus session.⟧"
-      }
-    },
-    "Σ %arg": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Σ %arg⟧"
-      }
-    },
-    "%arg · Σ %arg": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦%arg · Σ %arg⟧"
-      }
-    },
-    "Open Pomodorough on iPhone to connect": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Open Pomodorough on iPhone to connect⟧"
-      }
-    },
-    "Start": {
-      "stringUnit": {
-        "state": "translated",
-        "value": "‏⟦Start⟧"
+        "value": "‏⟦hasCanonical=%arg usesCanonical=%arg ⟧"
       }
     },
     "iPhone": {
@@ -2728,111 +3146,240 @@
         "value": "‏⟦iPhone⟧"
       }
     },
-    "Room join rollback failed: %@": {
+    "iPhone connection is not ready. Try again shortly.": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Room join rollback failed: %@⟧"
+        "value": "‏⟦iPhone connection is not ready. Try again shortly.⟧"
       }
     },
-    "Server resolved a timer action.": {
+    "iroh-error.authentication-failed": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Server resolved a timer action.⟧"
+        "value": "‏⟦The room did not accept this device. Ask for a new invite, then try again.⟧"
       }
     },
-    "Server resolved a task change.": {
+    "iroh-error.immutable-conflict": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Server resolved a task change.⟧"
+        "value": "‏⟦This room has two conflicting changes, so syncing is paused.⟧"
       }
     },
-    "Server resolved a duration change.": {
+    "iroh-error.invalid-data": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Server resolved a duration change.⟧"
+        "value": "‏⟦Room data could not be read. Try again.⟧"
       }
     },
-    "Server resolved an auto-start change.": {
+    "iroh-error.invalid-invite": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Server resolved an auto-start change.⟧"
+        "value": "‏⟦This room invite is not valid. Ask for a new invite, then try again.⟧"
       }
     },
-    "Server resolved a selected-task change.": {
+    "iroh-error.limit": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Server resolved a selected-task change.⟧"
+        "value": "‏⟦The room reached a size limit, so the change was not synced.⟧"
       }
     },
-    "Room secret cleanup failed: %@": {
+    "iroh-error.not-found": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Room secret cleanup failed: %@⟧"
+        "value": "‏⟦The room data was not found. Try again.⟧"
       }
     },
-    "%@": {
+    "iroh-error.room-already-active": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦%@⟧"
+        "value": "‏⟦Leave the current room before joining another room.⟧"
       }
     },
-    "%@ arrivals": {
+    "iroh-error.unavailable": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦%@ arrivals⟧"
+        "value": "‏⟦The room is not available right now. Restart Pomodorough, then try again.⟧"
       }
     },
-    "%@ completed": {
+    "iroh-error.wrong-room": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦%@ completed⟧"
+        "value": "‏⟦The other device is in a different room. Check the invite, then try again.⟧"
       }
     },
-    "%@ finished pomodoros": {
+    "mutation category=%arg reason=%arg ": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦%@ finished pomodoros⟧"
+        "value": "‏⟦mutation category=%arg reason=%arg ⟧"
       }
     },
-    "%@, %@, %@, %@ minutes": {
+    "pending=%arg/%arg/%arg/": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦%@, %@, %@, %@ minutes⟧"
+        "value": "‏⟦pending=%arg/%arg/%arg/⟧"
       }
     },
-    "Completed focus: %@": {
+    "pendingDurations=%arg ": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦Completed focus: %@⟧"
+        "value": "‏⟦pendingDurations=%arg ⟧"
       }
     },
-    "This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ.": {
+    "pomodorough1.…": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦This device has %@ completed entries. Your account has %@. Timers, tasks, or settings may also differ.⟧"
+        "value": "‏⟦pomodorough1.…⟧"
       }
     },
-    "This will discard %@ changes still waiting to sync.": {
+    "room-join.rollback-failed": {
       "stringUnit": {
         "state": "translated",
-        "value": "‏⟦This will discard %@ changes still waiting to sync.⟧"
+        "value": "‏⟦Data from the unfinished join is still saved on this device. Restart Pomodorough, then try again.⟧"
       }
     },
-    "Watch Finish not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Finish not applied.⟧" } },
-    "Watch Pause not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Pause not applied.⟧" } },
-    "Watch Resume not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Resume not applied.⟧" } },
-    "Watch Start not applied.": { "stringUnit": { "state": "translated", "value": "‏⟦Watch Start not applied.⟧" } },
-    "Focus task, %arg": { "stringUnit": { "state": "translated", "value": "‏⟦Focus task, %arg⟧" } },
-    "durationBase category=%arg reason=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦durationBase category=%arg reason=%arg ⟧" } },
-    "pendingDurations=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦pendingDurations=%arg ⟧" } },
-    "hasCanonical=%arg usesCanonical=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦hasCanonical=%arg usesCanonical=%arg ⟧" } },
-    "suppressed=%arg core=%arg": { "stringUnit": { "state": "translated", "value": "‏⟦suppressed=%arg core=%arg⟧" } },
-    "mutation category=%arg reason=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦mutation category=%arg reason=%arg ⟧" } },
-    "pending=%arg/%arg/%arg/": { "stringUnit": { "state": "translated", "value": "‏⟦pending=%arg/%arg/%arg/⟧" } },
-    "%arg/%arg queued=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦%arg/%arg queued=%arg ⟧" } },
-    "applied=%arg ignoredRetarget=%arg ": { "stringUnit": { "state": "translated", "value": "‏⟦applied=%arg ignoredRetarget=%arg ⟧" } },
-    "core=%arg": { "stringUnit": { "state": "translated", "value": "‏⟦core=%arg⟧" } },
-    "Sign-out is in progress. Changes are paused until it finishes.": { "stringUnit": { "state": "translated", "value": "‏⟦Sign-out is in progress. Changes are paused until it finishes.⟧" } }
+    "snapshot-load-failure.durability-uncertain": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The workspace may not be fully saved. Changes are paused until it can be read again. Retry recovery.⟧"
+      }
+    },
+    "snapshot-load-failure.unreadable": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry.⟧"
+      }
+    },
+    "suppressed=%arg core=%arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦suppressed=%arg core=%arg⟧"
+      }
+    },
+    "task-deletion.delete-now": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Delete now⟧"
+      }
+    },
+    "timer.show-tabs": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Show tabs⟧"
+      }
+    },
+    "timer.time.minutes_seconds": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦%1$02lld:%2$02lld⟧"
+      }
+    },
+    "user-facing-failure.add-task": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The task was not added. Try again.⟧"
+      }
+    },
+    "user-facing-failure.change-replication-mode": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The replication line was not changed. Try again.⟧"
+      }
+    },
+    "user-facing-failure.change-timer": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The timer change was not saved. Try again.⟧"
+      }
+    },
+    "user-facing-failure.change-workspace": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The change was not saved. Try again.⟧"
+      }
+    },
+    "user-facing-failure.connection": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Pomodorough could not reach the server. Check your connection and try again.⟧"
+      }
+    },
+    "user-facing-failure.create-invite": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The invite was not created. Try again.⟧"
+      }
+    },
+    "user-facing-failure.create-room": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The room was not created. Try again.⟧"
+      }
+    },
+    "user-facing-failure.delete-account": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Account deletion did not finish. Try again.⟧"
+      }
+    },
+    "user-facing-failure.join-room": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Joining the room did not finish. Check the invite and try again.⟧"
+      }
+    },
+    "user-facing-failure.leave-room": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Leaving the room did not finish. Try again.⟧"
+      }
+    },
+    "user-facing-failure.recover-saved-sync-request": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The saved sync request was not recovered. Try again.⟧"
+      }
+    },
+    "user-facing-failure.recover-saved-workspace": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The saved workspace was not recovered. Restart Pomodorough, then try again.⟧"
+      }
+    },
+    "user-facing-failure.rename-task": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦The task was not renamed. Try again.⟧"
+      }
+    },
+    "user-facing-failure.resolve-history": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Your history choice was not applied. Try again.⟧"
+      }
+    },
+    "user-facing-failure.secure-storage": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Pomodorough could not use secure storage on this device. Unlock or restart the device, then try again.⟧"
+      }
+    },
+    "user-facing-failure.sign-in": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sign-in did not finish. Try again.⟧"
+      }
+    },
+    "user-facing-failure.sign-out": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sign-out did not finish. Try again.⟧"
+      }
+    },
+    "Σ %arg": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Σ %arg⟧"
+      }
+    }
   },
   "version": 1
 }

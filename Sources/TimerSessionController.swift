@@ -752,8 +752,21 @@ private extension TimerSessionController {
         override: CoreProjectionBase?
     ) throws -> CoreProjectionBase {
         if let override { return override }
+        // The base timer is in the physical clock, but history rows keep
+        // trusted (server) time. Core 0.56 pairs a terminal timer with its row
+        // only when anchorAt equals the row's end exactly
+        // (`workspace::validate_pair`), so any nonzero trusted-clock offset
+        // would fail a valid pair with "canonical timer overlaps timer
+        // history". The paired timer is dropped here, as before Core 0.56, and
+        // restoreTerminalCanonicalTimer publishes it again after projection.
+        // This also covers legacy pairs without lastIntent. Projecting the
+        // pair in one clock is a backlog follow-up.
+        let physicalTimer = try state.physicalCanonicalTimer(state.canonicalTimer)
+        let isPaired = physicalTimer.map { timer in
+            state.history.contains { $0.timerId == timer.id }
+        } ?? false
         return CoreProjectionBase(
-            canonicalTimer: try state.physicalCanonicalTimer(state.canonicalTimer),
+            canonicalTimer: isPaired ? nil : physicalTimer,
             history: state.history,
             tasks: state.tasks,
             durationsMs: state.canonicalDurations(),
@@ -867,23 +880,29 @@ private extension TimerSessionController {
                     $0.timerId == candidate.timerId
                 })?.type != .clear
         }) else { return nil }
-        return terminalTimer(from: command, prior: prior, deviceID: state.deviceId)
+        return terminalTimer(from: command, history: output.history, prior: prior, deviceID: state.deviceId)
     }
 
+    /// Takes the counted time from the history row Core projected for the
+    /// command. Core keeps the time stored at a pause when a paused timer is
+    /// finished, so the client never derives it from the command. Without
+    /// that row there is no terminal timer to show.
     private func terminalTimer(
         from command: TimerCommand,
+        history: [HistoryItem],
         prior: CanonicalTimer?,
         deviceID: String
-    ) -> CanonicalTimer {
-        CanonicalTimer(
+    ) -> CanonicalTimer? {
+        guard let elapsed = history.first(where: {
+            $0.timerId == command.timerId && $0.commandId == command.id
+        })?.elapsedMs else { return nil }
+        return CanonicalTimer(
             id: command.timerId,
             taskId: command.taskId,
             phase: command.phase,
             status: command.type == .finish ? .completed : .cancelled,
             plannedDurationMs: command.plannedDurationMs,
-            elapsedAtAnchorMs: command.type == .finish
-                ? command.plannedDurationMs
-                : min(command.plannedDurationMs, max(0, command.observedElapsedMs)),
+            elapsedAtAnchorMs: elapsed,
             anchorAt: command.occurredAt,
             startedByDeviceId: prior?.startedByDeviceId,
             lastIntent: TimerIntent(

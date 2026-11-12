@@ -113,6 +113,9 @@ extension WorkspaceIntentAdmission {
             return 2
         case .upsertTask, .deleteTask, .selectTask, .setDuration, .setAutoStart:
             return 3
+        case .renameTask:
+            // Core may queue upsert, delete, selection move, and retarget.
+            return 4
         }
     }
 

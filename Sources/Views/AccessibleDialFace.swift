@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct AccessibleDialFace: View {
+    static let progressIdentifier = "timer-dial-progress"
+
     let progress: Double
     let phase: TimerPhase
     let status: String
@@ -58,6 +60,7 @@ struct AccessibleDialFace: View {
             LongBreakProgressIndicator(completedToday: completedFocusCount)
             ProgressView(value: max(0, min(1, progress)))
                 .tint(PomodoroughTheme.accent(for: phase))
+                .accessibilityIdentifier(Self.progressIdentifier)
         }
     }
 }

@@ -46,6 +46,10 @@ private struct PrimaryRouteAccountToolbar: ViewModifier {
             .sheet(isPresented: $showsAccount) {
                 AccountView(model: model)
             }
+            .onChange(of: showsAccount) { _, isShown in
+                // Account covers the Tasks screen, so the undo window ends.
+                if isShown { model.pendingTaskDeletion.flush() }
+            }
 #else
         content
 #endif

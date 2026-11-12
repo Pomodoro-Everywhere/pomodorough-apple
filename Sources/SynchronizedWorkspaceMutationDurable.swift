@@ -107,6 +107,8 @@ extension SynchronizedWorkspaceMutationController {
             return (.clear, .timerClear)
         case .task(let type, let task):
             return taskIntentKind(type: type, task: task)
+        case .renameTask(let task, let title):
+            return (.renameTask(taskId: task.id.uuidString.lowercased(), title: title), .taskRename)
         case .command(let command):
             return commandIntentKind(command: command)
         case .commit:
@@ -123,6 +125,9 @@ extension SynchronizedWorkspaceMutationController {
             return (.upsertTask(task.title), .taskUpsert)
         case .delete:
             return (.deleteTask(task.id.uuidString.lowercased()), .taskDelete)
+        case .rename:
+            // A rename is the `.renameTask` intent; no task edit carries it.
+            return (nil, nil)
         }
     }
 

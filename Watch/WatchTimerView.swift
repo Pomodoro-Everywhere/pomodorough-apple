@@ -5,6 +5,7 @@ struct WatchTimerView: View {
     @EnvironmentObject private var sync: WatchSyncService
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var confirmingFinish = false
     @ScaledMetric(relativeTo: .body) private var countdownSize: CGFloat = 58
 
@@ -13,26 +14,18 @@ struct WatchTimerView: View {
     var body: some View {
         Group {
             if let snapshot = sync.snapshot {
-                VStack(spacing: 4) {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        dial(snapshot, at: context.date)
+                if dynamicTypeSize.isAccessibilitySize {
+                    accessibleTimer(snapshot)
+                } else {
+                    VStack(spacing: 4) {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            dial(snapshot, at: context.date)
+                        }
+                        controls(snapshot)
                     }
-                    controls(snapshot)
                 }
             } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "iphone")
-                        .font(.title2)
-                        .foregroundStyle(timerYellow)
-                    Text("Open Pomodorough on iPhone")
-                        .font(.headline)
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.center)
-                    Button("Try again") { sync.requestSync() }
-                        .buttonStyle(.bordered)
-                }
-                .padding()
+                phoneUnavailable
             }
         }
         .padding(.horizontal, 8)
@@ -57,6 +50,42 @@ struct WatchTimerView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { sync.requestSync() }
+        }
+    }
+
+    /// Scrolls, so the button can always be reached: at the largest text
+    /// sizes the text and buttons can be taller than the screen.
+    private var phoneUnavailable: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                Image(systemName: "iphone")
+                    .font(.title2)
+                    .foregroundStyle(timerYellow)
+                    .accessibilityHidden(true)
+                Text("Open Pomodorough on iPhone")
+                    .font(.headline)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.center)
+                Button("Try again") { sync.requestSync() }
+                    .buttonStyle(.bordered)
+            }
+            .padding()
+        }
+    }
+
+    /// WCH-02: at accessibility sizes the dial and the controls scroll. The
+    /// dial is a square as wide as the screen, and the controls stack, so
+    /// no label shares its line with another control.
+    private func accessibleTimer(_ snapshot: WatchTimerSnapshot) -> some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    dial(snapshot, at: context.date)
+                }
+                .aspectRatio(1, contentMode: .fit)
+                controls(snapshot)
+            }
         }
     }
 
@@ -90,11 +119,15 @@ struct WatchTimerView: View {
                         .monospacedDigit()
                         .foregroundStyle(timerYellow)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.5)
+                        // The largest text sizes scale the digits far past
+                        // the ring, so they may shrink further to stay whole.
+                        .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 0.2 : 0.5)
                         .layoutPriority(1)
                     Text(status)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
                 }
                 .padding(.horizontal, 12)
             }
@@ -106,8 +139,12 @@ struct WatchTimerView: View {
         .accessibilityValue("\(formatted(remaining)) remaining")
     }
 
+    @ViewBuilder
     private func controls(_ snapshot: WatchTimerSnapshot) -> some View {
-        HStack(spacing: 10) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 10))
+        layout {
             Button {
                 if snapshot.isRunning {
                     sync.send(.pause(timerId: snapshot.timerId))
@@ -120,6 +157,10 @@ struct WatchTimerView: View {
                 Label(snapshot.isRunning ? "Pause" : snapshot.isPaused ? "Resume" : "Start",
                       systemImage: snapshot.isRunning ? "pause.fill" : "play.fill")
                     .font(.callout.weight(.semibold))
+                    // One word per label: shrink it rather than break it.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.plain)

@@ -7,7 +7,7 @@ enum TaskReducer {
         operations.sorted(by: precedes).reduce(into: baseTasks) { tasks, operation in
             guard let taskID = UUID(uuidString: operation.taskId) else { return }
             switch operation.type {
-            case .delete:
+            case .delete, .rename:
                 tasks.removeAll { $0.id == taskID }
             case .upsert:
                 guard let title = operation.title,

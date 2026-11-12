@@ -156,13 +156,9 @@ enum IrohRoomProjection {
         guard let appliedCommand = operations.commands.last(where: {
             output.timerOutcomes[$0.id]?.outcome == .applied
         }) else {
-            guard let genesisTimer = genesis.canonicalTimer else { return timer }
-            switch genesisTimer.status {
-            case .completed, .cancelled, .superseded:
-                return genesisTimer
-            case .running, .paused:
-                return timer
-            }
+            // Core receives the genesis timer and returns it, with any task
+            // rename carried into its `taskId`.
+            return timer
         }
         if let timer { return timer }
         guard appliedCommand.type != .clear,
@@ -170,7 +166,10 @@ enum IrohRoomProjection {
             $0.timerId == appliedCommand.timerId && $0.commandId == appliedCommand.id
         }),
         let status = CanonicalTimer.Status(rawValue: terminal.status),
-        let endedAt = terminal.completedAt ?? terminal.endedAt else { return nil }
+        let endedAt = terminal.completedAt ?? terminal.endedAt,
+        // Core writes the counted time on every row it projects; the client
+        // never derives it, so a row without it restores no terminal timer.
+        let elapsed = terminal.elapsedMs else { return nil }
         let command = operations.nativeCommands[appliedCommand.id]
         return CanonicalTimer(
             id: terminal.timerId,
@@ -178,7 +177,7 @@ enum IrohRoomProjection {
             phase: terminal.phase,
             status: status,
             plannedDurationMs: terminal.plannedDurationMs,
-            elapsedAtAnchorMs: terminalElapsed(status: status, item: terminal, command: command),
+            elapsedAtAnchorMs: elapsed,
             anchorAt: endedAt,
             startedByDeviceId: operations.timerStarters[terminal.timerId]
                 ?? genesis.canonicalTimer?.startedByDeviceId,
@@ -191,16 +190,6 @@ enum IrohRoomProjection {
                 )
             }
         )
-    }
-
-    private static func terminalElapsed(
-        status: CanonicalTimer.Status,
-        item: HistoryItem,
-        command: TimerCommand?
-    ) -> Int64 {
-        status == .completed
-            ? item.plannedDurationMs
-            : min(item.plannedDurationMs, max(0, command?.observedElapsedMs ?? 0))
     }
 
     private static func projectedState(

@@ -47,20 +47,31 @@ struct TaskComposer: View {
         // R49-U03 label: LabelStyle.automatic resolves standard-path title to
         // white on Xcode 26.6 / iPhone 17 even under .plain + foregroundStyle.
         // Explicit Text + decorative Image remove Label from color path.
-        Button(action: add) {
+        // R54-AU03: Add first collects the keys the keyboard still holds.
+        Button(action: { TaskTitleField.submitAfterPendingInput(add) }) {
             HStack(spacing: 10) {
                 Image(systemName: "plus")
                     .accessibilityHidden(true)
-                    .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+                    .foregroundStyle(addButtonLabel)
                 Text("Add task")
-                    .foregroundStyle(PomodoroughTheme.taskComposerLabel)
+                    .foregroundStyle(addButtonLabel)
             }
             .padding()
-            .background(PomodoroughTheme.signal, in: Capsule())
+            .background(addButtonFill, in: Capsule())
         }
         .buttonStyle(.plain)
-        .opacity(canAdd ? 1 : 0.5)
         .disabled(!canAdd)
+    }
+
+    /// Disabled Add keeps an opaque muted fill and a secondary label so it
+    /// still reads in dark appearance. Half opacity sank the black label
+    /// into the dark board.
+    private var addButtonFill: Color {
+        canAdd ? PomodoroughTheme.signal : PomodoroughTheme.steel.opacity(0.28)
+    }
+
+    private var addButtonLabel: AnyShapeStyle {
+        canAdd ? AnyShapeStyle(PomodoroughTheme.taskComposerLabel) : AnyShapeStyle(.secondary)
     }
 }
 
@@ -102,6 +113,28 @@ final class TaskTitleTextField: UITextField {
             invalidateIntrinsicContentSize()
         }
     }
+
+#if DEBUG
+    // R54-AU03 UI-test stand-in for a keyboard that still holds keys at an
+    // Add tap: XCUITest cannot make the out-of-process keyboard lag on
+    // demand. With POMODOROUGH_UI_TEST_HELD_INPUT set, the field holds that
+    // text and delivers it only inside its first resign, as a composition
+    // that is then committed, the way the keyboard hands over held keys
+    // when the input session ends. Without the variable it holds nothing.
+    private var heldInput = ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_HELD_INPUT"] ?? ""
+
+    override func resignFirstResponder() -> Bool {
+        if isFirstResponder, !heldInput.isEmpty {
+            let held = heldInput
+            heldInput = ""
+            setMarkedText(held, selectedRange: NSRange(location: (held as NSString).length, length: 0))
+            sendActions(for: .editingChanged)
+            unmarkText()
+            sendActions(for: .editingChanged)
+        }
+        return super.resignFirstResponder()
+    }
+#endif
 }
 
 struct TaskTitleField: UIViewRepresentable {
@@ -122,7 +155,7 @@ struct TaskTitleField: UIViewRepresentable {
     func makeUIView(context: Context) -> TaskTitleTextField {
         let field = TaskTitleTextField()
         field.delegate = context.coordinator
-        field.placeholder = "Write release notes"
+        field.placeholder = "Task name"
         field.returnKeyType = .done
         field.borderStyle = .none
         field.backgroundColor = .clear
@@ -157,6 +190,8 @@ struct TaskTitleField: UIViewRepresentable {
             field.text = text
             context.coordinator.syncedText = text
         }
+        // R54-AU02: true only when markedText blocked the push above.
+        context.coordinator.pushDeferred = text != context.coordinator.syncedText
         if field.minHeight != minHeight {
             field.minHeight = minHeight
             field.invalidateIntrinsicContentSize()
@@ -184,6 +219,26 @@ struct TaskTitleField: UIViewRepresentable {
         }
     }
 
+    // R54-AU03: an Add tap reaches the app directly, while the keys typed
+    // just before it travel through the out-of-process keyboard. A lagging
+    // keyboard can still hold some of them when the tap lands, and Add then
+    // stored the shorter title the field showed. Resigning the first
+    // responder ends the input session synchronously: the keyboard delivers
+    // the keys it holds, and commits any marked text, before the call
+    // returns. No external write is pending yet, so editingChanged accepts
+    // those keys and the binding holds the whole title when submit reads
+    // it. Submit runs even when nothing was first responder. Return needs
+    // no flush: it travels through the same keyboard queue as the keys.
+    static func submitAfterPendingInput(_ submit: () -> Void) {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        submit()
+    }
+
     final class Coordinator: NSObject, UITextFieldDelegate {
         var text: Binding<String>
         var focused: FocusState<Bool>.Binding
@@ -196,6 +251,9 @@ struct TaskTitleField: UIViewRepresentable {
         // gated on a true->false transition so passes racing a tap-driven
         // first responder (still false) never resign a just-won session.
         var lastFocused = false
+        // R54-AU02: the last update pass left an external write unpushed
+        // because markedText was active, and no later pass is scheduled.
+        var pushDeferred = false
 
         init(
             text: Binding<String>,
@@ -210,6 +268,24 @@ struct TaskTitleField: UIViewRepresentable {
         }
 
         @objc func editingChanged(_ sender: UITextField) {
+            // R54-AU02: an external write that updateUIView has not pushed
+            // yet (Add's clear, a parent draft) wins over field reports.
+            // The out-of-process keyboard can deliver keys typed before an
+            // Add tap, one report or several, after Add stored the title
+            // the field showed and cleared the binding. Accepting them
+            // would put the full title back in the composer and undo the
+            // clear, so drop them until the pending pass pushes the write.
+            // Only when a pass already skipped that push for markedText is
+            // no pass coming; then this report applies it, never over an
+            // active composition.
+            if text.wrappedValue != syncedText {
+                if pushDeferred, sender.markedTextRange == nil {
+                    sender.text = text.wrappedValue
+                    syncedText = text.wrappedValue
+                    pushDeferred = false
+                }
+                return
+            }
             let current = sender.text ?? ""
             syncedText = current
             text.wrappedValue = current
@@ -240,11 +316,16 @@ struct TaskTitleField: View {
     var onSubmit: () -> Void
 
     var body: some View {
-        TextField("Write release notes", text: $text)
+        TextField("Task name", text: $text)
             .focused(focused)
             .submitLabel(.done)
             .onSubmit(onSubmit)
             .frame(minHeight: minHeight)
+    }
+
+    // R54-AU03 is an iOS keyboard-process race; macOS Add submits directly.
+    static func submitAfterPendingInput(_ submit: () -> Void) {
+        submit()
     }
 }
 #endif
@@ -258,7 +339,7 @@ private struct TaskComposerPreview: View {
         TaskComposer(
             title: $title,
             focused: $focused,
-            canAdd: FocusTask(title: title) != nil,
+            canAdd: FocusTask.acceptsDraft(title),
             add: { title = "" }
         )
         .padding()

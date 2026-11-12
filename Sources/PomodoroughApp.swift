@@ -10,30 +10,23 @@ struct PomodoroughApp: App {
     @State private var model: AppModel
 #if os(macOS)
     @StateObject private var menuBarClock = MenuBarTimerClock()
-    @AppStorage(MenuBarTimerDisplay.defaultsKey) private var menuBarDisplay = MenuBarTimerDisplay.current
+    @AppStorage(MenuBarTimerDisplay.defaultsKey, store: DefaultStorageLocation.defaults)
+    private var menuBarDisplay = MenuBarTimerDisplay.current
 #endif
 
     init() {
         SentrySetup.startIfConfigured()
 #if DEBUG
-        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_RESET"] == "1" {
-            if let bundleIdentifier = Bundle.main.bundleIdentifier {
-                UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
-            }
-            do {
-                try KeychainStore().delete()
-            } catch {
-                Self.uiTestResetFailed(error, step: "keychain-delete")
-            }
-            do {
-                try IrohRoomStore.resetDefaultStorage()
-            } catch {
-                Self.uiTestResetFailed(error, step: "room-store-reset")
-            }
-            AppModel.resetDefaultDurableStorage()
-        }
+        UITestStorageReset.applyIfRequested(environment: ProcessInfo.processInfo.environment)
+        let roomStore = UITestUnavailableRoomSecretStore.roomStore(environment: ProcessInfo.processInfo.environment)
+        let appModel = AppModel(roomStore: roomStore)
+#else
+        let appModel = AppModel()
 #endif
-        _model = State(initialValue: AppModel())
+#if os(macOS)
+        appModel.observeApplicationTermination()
+#endif
+        _model = State(initialValue: appModel)
     }
 
     var body: some Scene {
@@ -49,6 +42,9 @@ struct PomodoroughApp: App {
                 .onOpenURL { Self.handleGoogleSignInURL($0, model: model) }
                 .onChange(of: scenePhase) { _, phase in
                     let isActive = phase == .active
+                    if phase == .background {
+                        model.completeTaskDeletionLeavingForeground()
+                    }
                     model.setSceneActive(isActive)
                     if isActive {
                         Task { await model.refreshAfterForeground() }

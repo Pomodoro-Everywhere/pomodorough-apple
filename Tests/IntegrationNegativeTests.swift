@@ -892,7 +892,9 @@ struct IntegrationNegativeTests {
         #expect(model.tasks == [task])
         #expect(!model.isWorkspaceMutationBlocked)
         #expect(tokenStore.tokens != nil)
-        #expect(model.errorMessage == "Deletion confirmation was rejected.")
+        // UX round 2 B4: the server's text stays in the log.
+        #expect(model.errorMessage
+            == "The server did not accept the account deletion. Check the confirmation, then try again.")
     }
 
     @Test

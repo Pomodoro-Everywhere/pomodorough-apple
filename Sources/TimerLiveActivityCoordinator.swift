@@ -193,7 +193,7 @@ struct TimerLiveActivityModifier: ViewModifier {
         }
         do {
             let data = try JSONEncoder().encode(TimerWidgetSnapshot(timer: timer))
-            guard let defaults = UserDefaults(suiteName: TimerWidgetSnapshot.appGroup) else { return }
+            guard let defaults = DefaultStorageLocation.sharedDefaults(appGroup: TimerWidgetSnapshot.appGroup) else { return }
             // AP122: drain the extension-side decode-failure counter even
             // when the snapshot is unchanged, so an idle timer still reports.
             TimerLiveActivityCoordinator.reportWidgetDecodeFailures(TimerWidgetSnapshot.takeDecodeFailures(from: defaults))

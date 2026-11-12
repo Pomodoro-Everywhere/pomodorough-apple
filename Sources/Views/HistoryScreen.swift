@@ -32,16 +32,20 @@ struct HistoryScreen: View {
                     Section {
                         ForEach(model.history) { item in
                             HistoryRow(item: item, taskContext: model.taskContext(for: item))
+                                .listRowBackground(Rectangle().fill(.background))
                         }
                     } header: {
                         Text("\(model.history.count) arrivals")
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
                 .refreshable { await model.refreshForPull() }
             }
         }
+        .background(TimerBackdrop())
         .navigationTitle("Arrivals")
+        .inlineNavigationTitleIfSupported()
         .toolbar {
             if !model.history.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
@@ -101,8 +105,16 @@ struct HistoryScreen: View {
             }
         }
         .accessibilityLabel("View focus breakdown")
-        .accessibilityValue("\(completedRunCount) completed of \(model.history.count) runs")
+        .accessibilityValue(Self.breakdownAccessibilityValue(completed: completedRunCount, runs: model.history.count))
         .accessibilityHint("Shows completed focus time by task")
+    }
+
+    /// Composed from single-count strings so each count pluralizes on its own
+    /// ("1 completed of 1 run", "2 completed of 3 runs").
+    static func breakdownAccessibilityValue(completed: Int, runs: Int) -> String {
+        let completedText = String(localized: "\(completed) completed")
+        let runsText = String(localized: "\(runs) runs")
+        return String(localized: "\(completedText) of \(runsText)")
     }
 
     /// R52-U01 style chain pin: the breakdown label foreground. Tests resolve

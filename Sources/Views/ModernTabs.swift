@@ -29,6 +29,7 @@ struct ModernTabs: View {
 @available(iOS 18, *)
 #Preview {
     ModernTabs(model: AppModel.preview(.populated), selection: .constant(.timer))
+        .environment(PendingTaskDeletion())
 }
 #endif
 #endif

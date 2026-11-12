@@ -46,6 +46,10 @@ enum TimerPhase: String, Codable, CaseIterable, Identifiable, Sendable {
 struct DurationValues: Codable, Equatable, Sendable {
     static let wireUnitMs: Int64 = 60_000
     static let validRange: ClosedRange<Int64> = 60_000...10_800_000
+    static let minuteRange = Int(validRange.lowerBound / wireUnitMs)...Int(validRange.upperBound / wireUnitMs)
+
+    static func canReduce(minutes: Int) -> Bool { minutes > minuteRange.lowerBound }
+    static func canIncrease(minutes: Int) -> Bool { minutes < minuteRange.upperBound }
     static let defaults = Self(
         focus: Int64(TimerPhase.focus.defaultMinutes) * 60_000,
         shortBreak: Int64(TimerPhase.shortBreak.defaultMinutes) * 60_000,

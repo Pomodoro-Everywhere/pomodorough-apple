@@ -63,6 +63,7 @@ final class SynchronizedWorkspaceMutationController {
         case cancelTimer(at: Date)
         case clearTimer
         case task(TaskOperationType, FocusTask)
+        case renameTask(FocusTask, String)
         case command(CommandIntent)
         case commit(PreparedMutation)
     }
@@ -112,6 +113,8 @@ final class SynchronizedWorkspaceMutationController {
             return try planClear(snapshot)
         case .task(let type, let task):
             return try planTask(type, task: task, snapshot: snapshot)
+        case .renameTask(let task, let title):
+            return try planRename(task, title: title, snapshot: snapshot)
         case .command(let command):
             return try planCommand(command, snapshot: snapshot)
         case .commit(let mutation):
@@ -483,6 +486,17 @@ private extension SynchronizedWorkspaceMutationController {
             snapshot: snapshot,
             kind: kind,
             category: category
+        )
+    }
+
+    // Rename has no local plan: Core atomically queues the replacement
+    // upsert, the old-identity delete, and any selection or retarget move.
+    func planRename(_ task: FocusTask, title: String, snapshot: Snapshot) throws -> Transition {
+        try durableCommit(
+            kind: .renameTask(taskId: task.id.uuidString.lowercased(), title: title),
+            category: .taskRename,
+            snapshot: snapshot,
+            afterSync: []
         )
     }
 

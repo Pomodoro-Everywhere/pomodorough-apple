@@ -66,8 +66,9 @@ struct AccountView: View {
             .onChange(of: model.historyResolutionState) {
                 if model.isHistoryResolutionBlocking { dismiss() }
             }
-
         }
+        // On the stack, not the list: a pushed page must keep the alert here.
+        .modifier(ErrorMessageAlert(model: model, host: .accountSheet))
 #if os(macOS)
         .frame(minWidth: 480, minHeight: 420)
 #endif

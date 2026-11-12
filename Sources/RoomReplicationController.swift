@@ -57,6 +57,10 @@ final class RoomReplicationController {
     private let operationHandler: @MainActor @Sendable (RoomReplicationOperation) async -> Void
     private var mode: ReplicationMode
     private(set) var modeGeneration = 0
+    // R54-AP01: room transition lease. Sign-out revokes it when it takes
+    // workspace ownership; a transition that suspended under an older lease
+    // rolls back instead of durably creating, joining, leaving, or switching.
+    private var transitionLease = 0
     private var revisionLifecycle = RevisionStreamLifecycle()
     private var revisionHints = RevisionHintCoalescer()
     private var revisionStreamTask: Task<Void, Never>?
@@ -193,19 +197,21 @@ final class RoomReplicationController {
         environment: RoomReplicationEnvironment,
         resumesCentralized: Bool
     ) async -> RoomReplicationTransition {
+        let lease = transitionLease
         var preparedState = dependencies.workspaceSnapshot().state
         if mode == .iroh {
             await service.stop()
             do {
+                try requireTransitionLease(lease)
                 preparedState = try dependencies.roomStore.captureAndSuspendActiveRoom(
                     from: dependencies.workspaceSnapshot().state
                 )
             } catch {
                 Self.logger.error("prepareState captureAndSuspend failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                let failure = Self.failedTransition(error, during: .changeReplicationMode)
                 await startIrohIfNeeded(environment: environment)
                 if resumesCentralized { resumeCentralized() }
-                return .failed(error.localizedDescription)
+                return failure
             }
         }
         return activateTarget(
@@ -234,7 +240,7 @@ final class RoomReplicationController {
             Self.logger.error("activateExistingRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
             if resumesCentralized { resumeCentralized() }
-            return .failed(error.localizedDescription)
+            return .failed(UserFacingFailure.sentence(for: error, during: .changeReplicationMode))
         }
     }
 
@@ -260,10 +266,10 @@ final class RoomReplicationController {
             )
         } catch {
             Self.logger.error("createRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            let failure = Self.failedTransition(error, during: .createRoom)
             await service.stop()
             if resumesCentralized { resumeCentralized() }
-            return .failed(error.localizedDescription)
+            return failure
         }
     }
 
@@ -271,6 +277,7 @@ final class RoomReplicationController {
         name: String,
         environment: RoomReplicationEnvironment
     ) async throws -> RoomReplicationTransition {
+        let lease = transitionLease
         let secret = dependencies.secureRandomBytes(32)
         let roomID = try IrohProtocolV1.roomID(for: secret)
         let ticket = try await service.start(context(
@@ -278,6 +285,11 @@ final class RoomReplicationController {
             secret: secret,
             environment: environment
         ))
+        try requireTransitionLease(lease)
+        // R54-AP07: the invite is validated before anything is committed. A
+        // ticket the codec rejects must leave no stored room and keep the
+        // controller centralized, so the caller's catch can resume sync.
+        let invite = try dependencies.encodeInvite(roomID, name.isEmpty ? nil : name, ticket, secret)
         let workspace = dependencies.workspaceSnapshot()
         let returnState = dependencies.roomStore.activeSnapshot?.conflict != nil
             ? dependencies.roomStore.activeReturnState ?? workspace.state
@@ -291,7 +303,6 @@ final class RoomReplicationController {
         )
         mode = .iroh
         cancelCentralizedStreams()
-        let invite = try dependencies.encodeInvite(roomID, name.isEmpty ? nil : name, ticket, secret)
         return .roomCreated(
             roomState,
             invite: invite,
@@ -310,7 +321,7 @@ final class RoomReplicationController {
         } catch {
             Self.logger.error("refreshInvite failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
-            return .failed(error.localizedDescription)
+            return .failed(UserFacingFailure.sentence(for: error, during: .createInvite))
         }
     }
 
@@ -318,6 +329,7 @@ final class RoomReplicationController {
         inviteText: String,
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationTransition {
+        let lease = transitionLease
         let resumesCentralized = mode == .centralized
         if resumesCentralized { quiesceCentralized() }
         var preparation: IrohRoomStore.JoinPreparation?
@@ -334,7 +346,9 @@ final class RoomReplicationController {
             preparation = prepared
             let context = context(roomID: invite.roomID, secret: invite.roomSecret, environment: environment)
             _ = try await service.start(context)
+            try requireTransitionLease(lease)
             try await service.join(invite: invite)
+            try requireTransitionLease(lease)
             let joined = try dependencies.roomStore.activateJoinedRoom(
                 roomID: invite.roomID,
                 returnState: dependencies.workspaceSnapshot().state
@@ -376,45 +390,61 @@ final class RoomReplicationController {
         resumesCentralized: Bool,
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationTransition {
-        var message = error.localizedDescription
         Self.reportJoinFailure(error)
         if preparation != nil || mode != .iroh { await service.stop() }
-        if let preparation {
-            do {
-                try dependencies.roomStore.rollbackJoinedRoom(preparation)
-            } catch {
-                Self.logger.error("recoverFailedJoin rollback failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
-                let rollbackDetail = String(localized: "Room join rollback failed: \(error.localizedDescription)")
-                let joinSentence = message.hasSuffix(".") ? message : message + "."
-                message = "\(joinSentence) \(rollbackDetail)"
-            }
-        }
+        let rollbackDetail = preparation.flatMap { rollbackJoinPreparation($0) }
         if resumesCentralized { resumeCentralized() }
         if mode == .iroh { await startIrohIfNeeded(environment: environment) }
-        return .failed(message)
+        let message = UserFacingFailure.sentence(for: error, during: .joinRoom)
+        guard let rollbackDetail else {
+            return error is RoomTransitionRevokedError ? .ownershipRevoked : .failed(message)
+        }
+        let joinSentence = message.hasSuffix(".") ? message : message + "."
+        return .failed("\(joinSentence) \(rollbackDetail)")
+    }
+
+    // Returns the user-facing rollback failure detail, or nil when the
+    // prepared join was rolled back.
+    private func rollbackJoinPreparation(_ preparation: IrohRoomStore.JoinPreparation) -> String? {
+        do {
+            try dependencies.roomStore.rollbackJoinedRoom(preparation)
+            return nil
+        } catch {
+            Self.logger.error("recoverFailedJoin rollback failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
+            SentryCapture.capture(error)
+            return String(
+                localized: "room-join.rollback-failed",
+                defaultValue: "Data from the unfinished join is still saved on this device. Restart Pomodorough, then try again."
+            )
+        }
     }
 
     // Join failures after invite decode are system failures (transport,
     // projection including duplicate genesis task IDs, retained-room
     // validation) and must log + capture like createRoom. User-dark:
-    // cancelled tasks, malformed invites (bad paste), and joining a
-    // second room while one is active ("Leave the current room").
+    // cancelled tasks, joins revoked because sign-out owns the workspace,
+    // malformed invites (bad paste), and joining a second room while one
+    // is active ("Leave the current room").
     private static func reportJoinFailure(_ error: Error) {
-        if error is CancellationError { return }
-        if case IrohProtocolError.invalidInvite = error { return }
-        if case IrohProtocolError.invalidMessage(let reason) = error,
-           reason.contains("Leave the current room") { return }
-        Self.logger.error("joinRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-        SentryCapture.capture(error)
+        switch error {
+        case is CancellationError, is RoomTransitionRevokedError, IrohProtocolError.invalidInvite:
+            return
+        case IrohProtocolError.roomAlreadyActive:
+            return
+        default:
+            Self.logger.error("joinRoom failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
+            SentryCapture.capture(error)
+        }
     }
 
     func leaveRoom(
         environment: RoomReplicationEnvironment
     ) async -> RoomReplicationTransition {
         guard mode == .iroh else { return .unchanged }
+        let lease = transitionLease
         await service.stop()
         do {
+            try requireTransitionLease(lease)
             let returned = try dependencies.roomStore.captureAndSuspendActiveRoom(
                 from: dependencies.workspaceSnapshot().state
             )
@@ -422,10 +452,29 @@ final class RoomReplicationController {
             return .roomLeft(returned)
         } catch {
             Self.logger.error("leaveRoom captureAndSuspend failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            let failure = Self.failedTransition(error, during: .leaveRoom)
             await startIrohIfNeeded(environment: environment)
-            return .failed(error.localizedDescription)
+            return failure
         }
+    }
+
+    func revokeTransitions() {
+        transitionLease += 1
+    }
+
+    private func requireTransitionLease(_ lease: Int) throws {
+        guard lease == transitionLease else { throw RoomTransitionRevokedError() }
+    }
+
+    // A revoked lease means sign-out superseded the transition: an expected
+    // outcome kept out of Sentry. Every other failure is captured.
+    private static func failedTransition(
+        _ error: Error,
+        during operation: UserFacingFailure.Operation
+    ) -> RoomReplicationTransition {
+        guard !(error is RoomTransitionRevokedError) else { return .ownershipRevoked }
+        SentryCapture.capture(error)
+        return .failed(UserFacingFailure.sentence(for: error, during: operation))
     }
 
     func syncIroh(environment: RoomReplicationEnvironment) async {
@@ -450,7 +499,7 @@ final class RoomReplicationController {
             }
             return .captureFailed(
                 durableState,
-                message: error.localizedDescription,
+                message: UserFacingFailure.sentence(for: error, during: .changeWorkspace),
                 quarantined: quarantined
             )
         }
@@ -480,7 +529,7 @@ final class RoomReplicationController {
             } catch {
                 Self.logger.error("projectionTransition captureLocalOperations failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
-                errorMessage = error.localizedDescription
+                errorMessage = UserFacingFailure.sentence(for: error, during: .changeTimer)
             }
         }
         return .projectionApplied(updated, errorMessage: errorMessage)
@@ -504,7 +553,7 @@ final class RoomReplicationController {
             } catch {
                 Self.logger.error("bootstrapRoomState captureLocalOperations failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
                 SentryCapture.capture(error)
-                return (.iroh, roomState, error.localizedDescription)
+                return (.iroh, roomState, UserFacingFailure.sentence(for: error, during: .changeTimer))
             }
         }
         return (.iroh, roomState, nil)
@@ -662,6 +711,13 @@ final class RoomReplicationController {
             await service.syncNow()
             return .none
         }
+        return resumeCentralizedStreamsIfEligible()
+    }
+
+    // Restarts centralized stream work after a quiesce that was rolled back,
+    // only while this device still owns an active signed-in workspace.
+    @discardableResult
+    func resumeCentralizedStreamsIfEligible() -> RoomReplicationForegroundAction {
         guard mode == .centralized, sceneIsActive else { return .none }
         let state = dependencies.centralizedState()
         guard state.isSignedIn, !state.isWorkspaceMutationBlocked else { return .none }

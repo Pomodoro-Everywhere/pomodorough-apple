@@ -15,6 +15,9 @@ struct TimerMachineCard: View {
     /// phone sizes without device-specific constants.
     var landscapeWidth: CGFloat? = nil
     var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
+    /// True while the screen docks Start, Pause and Resume outside the
+    /// scrolling portrait card (R54-AU05); the card then leaves them out.
+    var docksPrimaryControl = false
 
     /// iOS stretch rule: landscape fills the parent-measured bounded height;
     /// portrait sizes to content inside the vertical ScrollView, where an
@@ -25,8 +28,10 @@ struct TimerMachineCard: View {
 
     /// Share of the macOS landscape card width reserved for the dial; the
     /// picker/controls column takes the remainder. Proportional so narrow
-    /// windows shrink both instead of collapsing the dial to zero.
-    static let macDialWidthFraction: CGFloat = 0.6
+    /// windows shrink both instead of collapsing the dial to zero. An even
+    /// split keeps the aside wide enough at the default window size for
+    /// the task title and the Finish/Cancel pair to render untruncated.
+    static let macDialWidthFraction: CGFloat = 0.5
 
     /// macOS landscape dial diameter from measured geometry: a proportion
     /// of the card width, capped by the card height so the dial never
@@ -43,7 +48,8 @@ struct TimerMachineCard: View {
             usesCompactDial: usesCompactDial,
             landscapeHeight: landscapeHeight,
             landscapeWidth: landscapeWidth,
-            hinge: hinge
+            hinge: hinge,
+            docksPrimaryControl: docksPrimaryControl
         )
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -70,6 +76,7 @@ private struct TimerMachineCardContent: View {
     var landscapeHeight: CGFloat? = nil
     var landscapeWidth: CGFloat? = nil
     var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
+    var docksPrimaryControl = false
 
     var body: some View {
         Group {
@@ -90,7 +97,8 @@ private struct TimerMachineCardContent: View {
                     model: model,
                     layout: layout,
                     usesCompactDial: usesCompactDial,
-                    hinge: hinge
+                    hinge: hinge,
+                    docksPrimaryControl: docksPrimaryControl
                 )
             }
             #endif
@@ -135,11 +143,7 @@ private struct TimerMachineMacOSCard: View {
                     HStack(spacing: 28) {
                         TimerMachineDialSection(model: model, layout: .portrait, usesCompactDial: usesCompactDial)
                             .frame(width: diameter)
-                        VStack(spacing: 14) {
-                            TimerTaskPicker(model: model, layout: layout)
-                            TimerControls(model: model, layout: layout)
-                        }
-                        .frame(maxWidth: .infinity)
+                        TimerMachineMacOSAside(model: model, layout: layout)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -150,6 +154,28 @@ private struct TimerMachineMacOSCard: View {
             }
         }
         .padding(24)
+    }
+}
+
+/// Landscape aside beside the dial. The panel spans the card height so the
+/// picker and controls read as one anchored unit instead of floating in the
+/// empty right half at wide window sizes.
+private struct TimerMachineMacOSAside: View {
+    let model: AppModel
+    let layout: TimerLayout
+
+    var body: some View {
+        VStack(spacing: 14) {
+            TimerTaskPicker(model: model, layout: layout)
+            TimerControls(model: model, layout: layout)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(PomodoroughTheme.track.opacity(0.42), in: .rect(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
+        }
     }
 }
 
@@ -272,6 +298,7 @@ private struct TimerMachineIOSPortraitCard: View {
     let layout: TimerLayout
     var usesCompactDial = false
     var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
+    var docksPrimaryControl = false
 
     private var placesAside: Bool {
         TimerHingeLayout.shouldPlaceDialAsideControls(
@@ -290,10 +317,16 @@ private struct TimerMachineIOSPortraitCard: View {
                 Spacer(minLength: usesCompactDial ? 8 : 14)
                 VStack(spacing: usesCompactDial ? 8 : 14) {
                     TimerTaskPicker(model: model, layout: layout)
-                    TimerControls(model: model, layout: layout, compact: usesCompactDial, hinge: hinge)
+                    TimerControls(
+                        model: model,
+                        layout: layout,
+                        compact: usesCompactDial,
+                        group: docksPrimaryControl ? .secondaryOnly : .all,
+                        hinge: hinge
+                    )
                 }
             }
-            .padding(usesCompactDial ? 14 : 16)
+            .padding(usesCompactDial ? 14 : TimerPortraitSpacing.controlInset)
         }
     }
 

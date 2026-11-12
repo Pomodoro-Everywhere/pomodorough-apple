@@ -25,12 +25,17 @@ struct RootView: View {
         // must fit the tab/navigation hierarchy in actual available space.
         .frame(minWidth: 320)
 #endif
-        .tint(PomodoroughTheme.signal)
-        .alert("Pomodorough", isPresented: errorPresented) {
-            Button("OK") { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? String(localized: "Unknown error"))
+        // IOS27-07: tab labels, toolbar glyphs, text buttons and focus rings
+        // take the darkened signal in the light appearance.
+        .tint(PomodoroughTheme.signalText)
+        .environment(model.pendingTaskDeletion)
+#if os(iOS) || os(watchOS)
+        // One success tap per phase completion, whichever tab is showing.
+        .sensoryFeedback(.success, trigger: model.completionAlertTimerID) { _, alerting in
+            alerting != nil
         }
+#endif
+        .modifier(ErrorMessageAlert(model: model, host: .root))
         .sheet(isPresented: historyResolutionPresented) {
             HistoryResolutionView(model: model)
                 .interactiveDismissDisabled()
@@ -47,13 +52,6 @@ struct RootView: View {
                 Task { await model.retrySnapshotLoad() }
             }
         }
-    }
-
-    private var errorPresented: Binding<Bool> {
-        Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )
     }
 
     private var historyResolutionPresented: Binding<Bool> {

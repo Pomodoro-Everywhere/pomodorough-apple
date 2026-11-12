@@ -73,6 +73,8 @@ final class AccountLifecycleController {
     enum AuthenticationTransition: Equatable, Sendable {
         case stale
         case authenticated(User)
+        /// The person closed the sign-in prompt. Nothing is shown.
+        case cancelled
         case failed(String)
     }
 
@@ -174,8 +176,10 @@ final class AccountLifecycleController {
         } catch {
             guard owns(operation) else { return .stale }
             Self.logger.error("authenticate failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
+            // A closed prompt is not a failure, so it is not reported.
+            guard !UserFacingFailure.isCancelledSignIn(error) else { return .cancelled }
             SentryCapture.capture(error)
-            return .failed(error.localizedDescription)
+            return .failed(UserFacingFailure.sentence(for: error, during: .signIn))
         }
     }
 
@@ -349,7 +353,7 @@ final class AccountLifecycleController {
         } catch {
             Self.logger.error("logout failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
-            return error.localizedDescription
+            return UserFacingFailure.sentence(for: error, during: .signOut)
         }
     }
 
@@ -399,7 +403,7 @@ final class AccountLifecycleController {
         case AppError.invalidResponse, is SharedCoreError:
             // AP86: core/invalidResponse keeps retryable shape, logs + captures.
             Self.logger.error("bootstrap failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.captureOnce(key: "bootstrap-invalid-response", error: error)
+            SentryCapture.captureOnce(key: "bootstrap-invalid-response", error: error, operation: .bootstrap)
             return BootstrapFailureTransition(
                 historyResolutionState: .retryable(strategy),
                 isOffline: false,
@@ -437,7 +441,7 @@ final class AccountLifecycleController {
         }
         let diagnostic = BootstrapBatchPlanDiagnostics(stage: diagnosticStage)
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .bootstrap)
         return BootstrapFailureTransition(
             historyResolutionState: .retryable(strategy),
             isOffline: false,

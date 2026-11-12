@@ -14,7 +14,7 @@ final class WatchSyncService: NSObject, ObservableObject {
     private weak var model: AppModel?
     private nonisolated let replySnapshot = Mutex<Data?>(nil)
     private nonisolated let incomingSerial = WatchCommandSerialQueue()
-    private var sequenceDefaults: UserDefaults = .standard
+    private var sequenceDefaults: UserDefaults = DefaultStorageLocation.defaults
 
     private enum SequenceKeys {
         static let seed = "watch-snapshot-seq-seed"
@@ -25,7 +25,7 @@ final class WatchSyncService: NSObject, ObservableObject {
         WCSession.isSupported() ? WCSession.default : nil
     }
 
-    func attach(_ model: AppModel, defaults: UserDefaults = .standard) {
+    func attach(_ model: AppModel, defaults: UserDefaults = DefaultStorageLocation.defaults) {
         self.model = model
         self.sequenceDefaults = defaults
         _ = push()
@@ -221,7 +221,7 @@ extension WatchSyncService: WCSessionDelegate {
 #else
 @MainActor
 final class WatchSyncService: NSObject, ObservableObject {
-    func attach(_ model: AppModel, defaults: UserDefaults = .standard) {}
+    func attach(_ model: AppModel, defaults: UserDefaults = DefaultStorageLocation.defaults) {}
 
     @discardableResult
     func push() -> String { "Watch sync unavailable" }

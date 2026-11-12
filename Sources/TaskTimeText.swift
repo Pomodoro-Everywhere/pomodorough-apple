@@ -5,8 +5,15 @@ enum TaskTimeText {
         String(localized: "\(minutes) min")
     }
 
+    /// Minutes shown for a recorded time, the same for rows and totals:
+    /// half a minute rounds up, and any time above 0 shows at least 1 minute.
+    static func elapsedMinutes(_ milliseconds: Int64) -> Int {
+        guard milliseconds > 0 else { return 0 }
+        return max(1, Int(milliseconds / 60_000 + (milliseconds % 60_000 >= 30_000 ? 1 : 0)))
+    }
+
     static func compact(_ milliseconds: Int64) -> String {
-        let minutes = Int(milliseconds / 60_000)
+        let minutes = elapsedMinutes(milliseconds)
         guard minutes >= 60 else {
             return String.localizedStringWithFormat(
                 String(localized: "duration.compact.minutes", defaultValue: "%lldm"),
@@ -28,7 +35,7 @@ enum TaskTimeText {
     }
 
     static func spoken(_ milliseconds: Int64) -> String {
-        let minutes = Int(milliseconds / 60_000)
+        let minutes = elapsedMinutes(milliseconds)
         guard minutes >= 60 else {
             return String.localizedStringWithFormat(
                 String(localized: "duration.spoken.minutes", defaultValue: "%lld minutes"),

@@ -91,6 +91,10 @@ extension WorkspaceIntentAdmission {
             }
         case .deleteTask:
             break
+        case .renameTask(_, let title):
+            if let task = FocusTask(title: title) {
+                state.mergeKnownTasks([task])
+            }
         case .selectTask(let taskId):
             state.selectedTaskID = taskId.flatMap(UUID.init(uuidString:))
         case .setDuration(let phase, let minutes):

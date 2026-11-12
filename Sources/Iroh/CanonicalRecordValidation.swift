@@ -42,6 +42,7 @@ enum IrohSnapshotValidation {
             && (item.commandId.map(IrohProtocolV1.isValidIdentifier) ?? true)
             && (item.taskId.map(IrohProtocolV1.isValidTaskID) ?? true)
             && (60_000...14_400_000).contains(item.plannedDurationMs)
+            && item.hasElapsedWithinPlan
             && hasValidTerminalDate
             && item.date.flatMap(WireBounds.physicalMilliseconds(for:)) != nil
             && (item.endedAt == nil || item.endedAt.flatMap(WireBounds.physicalMilliseconds(for:)) != nil)

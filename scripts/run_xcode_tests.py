@@ -61,6 +61,7 @@ EVIDENCE_WRITER_CLEANUP_SECONDS = 0.05
 DESCENDANT_POLL_SECONDS = 0.001
 PEER_IDENTITY_COMPLETION_RESERVE_SECONDS = 0.05
 DESCENDANT_QUIESCENCE_SECONDS = 0.02
+DIRECT_PARENT_POLL_SECONDS = 0.05
 ATTEMPT_OUTPUT_CHUNK_BYTES = 64 * 1024
 CONTAINMENT_HANDSHAKE_SECONDS = 4.0
 # Hosted run 34200493931: 4 consecutive handshake timeouts over ~115s wall
@@ -88,6 +89,8 @@ LAUNCHCTL_AUTHENTICATION_SECONDS = DIRECT_WRAPPER_HANDSHAKE_SECONDS
 LAUNCHCTL_RETRY_SECONDS = 1.0
 LAUNCHCTL_BOOTOUT_SECONDS = 1.5
 CONTAINMENT_SIGNAL_RESERVE_SECONDS = 0.75
+COALITION_MEMBER_DETAIL_LIMIT = 4
+COALITION_VACANCY_WAIT_SECONDS = 0.5
 CONTAINMENT_DRAIN_RESERVE_SECONDS = (
     2 * CONTAINMENT_SIGNAL_RESERVE_SECONDS + DESCENDANT_QUIESCENCE_SECONDS
 )
@@ -109,6 +112,10 @@ CONTAINED_JOB_CLEANUP_SECONDS = (
 )
 LIFECYCLE_BOOTSTRAP_SECONDS = 10.0
 LIFECYCLE_CLEANUP_SECONDS = CONTAINED_JOB_CLEANUP_SECONDS
+# One bootout by label after a failed cleanup, with its process cleanup.
+CONTAINMENT_LABEL_BOOTOUT_SECONDS = (
+    CONTAINMENT_BOOTOUT_RESERVE_SECONDS + CONTAINMENT_BOOTOUT_CLEANUP_RESERVE_SECONDS
+)
 DIRECT_CHANNEL_KEY_BYTES = 32
 DIRECT_CHANNEL_LIMIT_BYTES = 64 * 1024
 DIRECT_CHANNEL_WORK_PER_PUMP = 128
@@ -116,13 +123,19 @@ DIRECT_WRAPPER_REAP_SECONDS = 0.5
 LAUNCHCTL_WRAPPER_REAP_SECONDS = 0.2
 CONTAINED_CHILD_ARGUMENT = "--contained-child"
 DIRECT_CHILD_ARGUMENT = "--direct-child"
-DIRECT_TARGET_ARGUMENT = "--direct-target"
 EVIDENCE_WRITER_ARGUMENT = "--evidence-writer"
 ATOMIC_WRITER_ARGUMENT = "--atomic-writer"
-DIRECTORY_SYNC_ARGUMENT = "--directory-sync"
 LAUNCHCTL = "/bin/launchctl"
 LAUNCHD_EXIT_TIMEOUT_SECONDS = 1
-LAUNCHD_DELEGATION_SANDBOX = b"(version 1)(allow default)(deny job-creation)"
+# Contained targets must not hand work to launchd, which would run it outside
+# the coalition that cleanup kills. A sandboxed process cannot apply another
+# profile, so /usr/bin/sandbox-exec (SwiftPM manifests and plugins) execs
+# without this one and applies its own. launchd refuses submissions from that
+# sandboxed child unless its own profile grants unsandboxed exec again.
+LAUNCHD_DELEGATION_SANDBOX = (
+    b"(version 1)(allow default)(deny job-creation)"
+    b'(allow process-exec (literal "/usr/bin/sandbox-exec") (with no-sandbox))'
+)
 PROCESS_PATH_BUFFER_BYTES = 4096
 PROCESS_ARGUMENTS_LIMIT_BYTES = 2 * 1024 * 1024
 DIRECT_MARKER_CENSUS_SECONDS = 0.5
@@ -130,6 +143,7 @@ DIRECT_JOB_ENVIRONMENT = "POMODOROUGH_DIRECT_JOB"
 CTL_KERN = 1
 KERN_PROCARGS2 = 49
 PROC_PIDTBSDINFO = 3
+PROC_PIDT_SHORTBSDINFO = 13
 PROC_PIDUNIQIDENTIFIERINFO = 17
 PROC_PIDCOALITIONINFO = 20
 RUSAGE_INFO_V0 = 0
@@ -181,6 +195,24 @@ class ProcBSDInfo(ctypes.Structure):
     ]
 
 
+class ProcShortBSDInfo(ctypes.Structure):
+    _fields_ = [
+        ("pbsi_pid", ctypes.c_uint32),
+        ("pbsi_ppid", ctypes.c_uint32),
+        ("pbsi_pgid", ctypes.c_uint32),
+        ("pbsi_status", ctypes.c_uint32),
+        ("pbsi_comm", ctypes.c_char * 16),
+        ("pbsi_flags", ctypes.c_uint32),
+        ("pbsi_uid", ctypes.c_uint32),
+        ("pbsi_gid", ctypes.c_uint32),
+        ("pbsi_ruid", ctypes.c_uint32),
+        ("pbsi_rgid", ctypes.c_uint32),
+        ("pbsi_svuid", ctypes.c_uint32),
+        ("pbsi_svgid", ctypes.c_uint32),
+        ("pbsi_rfu", ctypes.c_uint32),
+    ]
+
+
 class AuditToken(ctypes.Structure):
     _fields_ = [("values", ctypes.c_uint32 * 8)]
 
@@ -199,6 +231,10 @@ class RusageInfoV0(ctypes.Structure):
         ("ri_proc_start_abstime", ctypes.c_uint64),
         ("ri_proc_exit_abstime", ctypes.c_uint64),
     ]
+
+
+class MachTimebaseInfo(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
 
 
 class ProcUniqueIdentifierInfo(ctypes.Structure):
@@ -244,6 +280,8 @@ if LIBPROC is not None:
         ctypes.POINTER(RusageInfoV0),
     ]
     LIBPROC.proc_pid_rusage.restype = ctypes.c_int
+    LIBSYSTEM.mach_timebase_info.argtypes = [ctypes.POINTER(MachTimebaseInfo)]
+    LIBSYSTEM.mach_timebase_info.restype = ctypes.c_int
     LIBPROC.proc_signal_with_audittoken.argtypes = [
         ctypes.POINTER(AuditToken),
         ctypes.c_int,
@@ -301,6 +339,31 @@ class OperationDeadlineExpired(SimulatorLifecycleError):
     pass
 
 
+class DirectHandshakeTimeout(SimulatorLifecycleError):
+    """The direct wrapper sent no identity in time.
+
+    Hosted run 40834751768 failed here with no lifecycle record, so the
+    wrapper's state at the deadline travels with the error to the caller
+    that knows the lifecycle label.
+    """
+
+    def __init__(self, lifecycle: str) -> None:
+        super().__init__("direct wrapper handshake timeout")
+        self.lifecycle = lifecycle
+
+
+class RunnerTerminated(BaseException):
+    """SIGTERM reached the runner.
+
+    It unwinds like an interrupt, so the failure paths clean up the running
+    contained job before the runner exits.
+    """
+
+    def __init__(self, signal_number: int) -> None:
+        super().__init__(f"runner received {signal.Signals(signal_number).name}")
+        self.signal_number = signal_number
+
+
 DeadlineResult = TypeVar("DeadlineResult")
 DESCRIPTOR_CLOSE_LOCK = threading.RLock()
 # Hosted run 34204502227: preflight dies because EVERY launchd operation
@@ -351,6 +414,53 @@ def tracked_children_live() -> bool:
         else:
             live = True
     return live
+
+
+@dataclass
+class TerminationState:
+    signal_number: int | None = None
+    deferral_depth: int = 0
+
+
+TERMINATION = TerminationState()
+
+
+def request_termination(signal_number: int, frame: object) -> None:
+    # Only the first request raises. A repeat must not interrupt the cleanup
+    # that the first one started.
+    first_request = TERMINATION.signal_number is None
+    TERMINATION.signal_number = signal_number
+    if first_request and not TERMINATION.deferral_depth:
+        raise RunnerTerminated(signal_number)
+
+
+def raise_requested_termination() -> None:
+    # Raises a request that arrived during deferred cleanup, or one that a
+    # broad handler recorded as an error. A termination that is already
+    # being handled is left to unwind on its own.
+    signal_number = TERMINATION.signal_number
+    if signal_number is None or TERMINATION.deferral_depth:
+        return
+    if isinstance(sys.exception(), RunnerTerminated):
+        return
+    raise RunnerTerminated(signal_number)
+
+
+class TerminationDeferred:
+    """Lets containment cleanup finish before a SIGTERM is raised.
+
+    A cleanup cut short could remove a root whose label is still loaded, or
+    record the interrupt as a cleanup error and continue. The request is
+    raised when the outermost deferred block exits without its own error.
+    """
+
+    def __enter__(self) -> None:
+        TERMINATION.deferral_depth += 1
+
+    def __exit__(self, error_type: object, error: object, traceback: object) -> None:
+        TERMINATION.deferral_depth -= 1
+        if error is None:
+            raise_requested_termination()
 
 
 @dataclass
@@ -988,6 +1098,19 @@ class DirectReporter:
 
 
 @dataclass(frozen=True)
+class DirectParentLink:
+    """The wrapper's tie to the runner that spawned it.
+
+    Only that runner can read status, census descendants, and reap the
+    target. Once it exits (the wrapper is reparented) or closes the control
+    socket, the wrapper is released and must stop instead of polling forever.
+    """
+
+    pid: int
+    control_peer: DirectPeer
+
+
+@dataclass(frozen=True)
 class DirectJob:
     root: Path
     stdout_path: Path
@@ -1154,6 +1277,21 @@ def darwin_process_start_abstime(pid: int) -> int | None:
     if result != 0 or not info.ri_proc_start_abstime:
         return None
     return int(info.ri_proc_start_abstime)
+
+
+def darwin_process_cpu_seconds(pid: int) -> float | None:
+    if LIBPROC is None:
+        return None
+    info = RusageInfoV0()
+    if LIBPROC.proc_pid_rusage(pid, RUSAGE_INFO_V0, ctypes.byref(info)) != 0:
+        return None
+    # rusage times are Mach absolute-time ticks, not nanoseconds, on Apple
+    # silicon.
+    timebase = MachTimebaseInfo()
+    if LIBSYSTEM.mach_timebase_info(ctypes.byref(timebase)) != 0 or not timebase.denom:
+        return None
+    ticks = info.ri_user_time + info.ri_system_time
+    return ticks * timebase.numer / timebase.denom / 1e9
 
 
 def darwin_task_audit_token(task: int, pid: int) -> tuple[int, ...] | None:
@@ -1343,6 +1481,24 @@ def darwin_process_path(pid: int) -> str:
     if size <= 0:
         return ""
     return buffer.value.decode("utf-8", errors="replace")
+
+
+def darwin_process_owner(pid: int) -> str:
+    # The short BSD record skips the same-user check, so it can still name
+    # the owner of a process that refused a signal for credential reasons.
+    assert LIBPROC is not None
+    info = ProcShortBSDInfo()
+    size = LIBPROC.proc_pidinfo(
+        pid, PROC_PIDT_SHORTBSDINFO, 0, ctypes.byref(info), ctypes.sizeof(info)
+    )
+    if size != ctypes.sizeof(info):
+        return "owner unavailable"
+    return f"uid {info.pbsi_uid} ruid {info.pbsi_ruid} svuid {info.pbsi_svuid}"
+
+
+def darwin_process_detail(pid: int) -> str:
+    path = darwin_process_path(pid) or "path unavailable"
+    return f"pid {pid} {path!r} {darwin_process_owner(pid)}"
 
 
 def darwin_process_arguments(pid: int) -> bytes | None:
@@ -1692,15 +1848,23 @@ def identity_is_live(identity: ProcessIdentity) -> bool:
     return process_identity(identity.pid) == identity
 
 
-def signal_audit_token(
+def audit_token_signal_error(
     token_values: tuple[int, ...], requested: signal.Signals
-) -> bool:
+) -> int:
+    # libproc returns the kernel errno itself (EPERM for a credential or MAC
+    # denial, ESRCH for a stale token) and 0 after delivery.
     assert LIBPROC is not None
     token = AuditToken()
     token.values[:] = token_values
-    return LIBPROC.proc_signal_with_audittoken(
-        ctypes.byref(token), int(requested)
-    ) == 0
+    return int(
+        LIBPROC.proc_signal_with_audittoken(ctypes.byref(token), int(requested))
+    )
+
+
+def signal_audit_token(
+    token_values: tuple[int, ...], requested: signal.Signals
+) -> bool:
+    return audit_token_signal_error(token_values, requested) == 0
 
 
 def signal_identity(identity: ProcessIdentity, requested: signal.Signals) -> bool:
@@ -2602,22 +2766,100 @@ def reap_direct_orphans(target_pid: int) -> None:
             raise SimulatorLifecycleError("direct target reaped outside Popen")
 
 
+# The direct target connects to both rendezvous sockets, waits for its
+# acknowledgement, turns on exec tracing and execs the command. It runs the
+# short program below instead of the runner. The wrapper already starts the
+# runner once, and a second whole-runner start in every direct job spent the
+# launchctl and lifecycle budgets under load (R54-APB10). Execs are traced
+# where the runner loads libproc, which is Darwin. Process exit closes the
+# descriptors on every failure path.
+DIRECT_TARGET_PROGRAM = f"""\
+import os
+import select
+import socket
+import sys
+
+
+def fail(detail):
+    print(detail, file=sys.stderr)
+    raise SystemExit({PRETEST_INFRASTRUCTURE_FAILURE})
+
+
+def os_error_text(error):
+    if type(error.errno) is not int or type(error.strerror) is not str:
+        if len(error.args) == 1 and type(error.args[0]) is str:
+            return error.args[0]
+        return type(error).__name__ + " raised without safe detail"
+    detail = "[Errno %d] %s" % (error.errno, error.strerror)
+    if type(error.filename) is str:
+        return detail + ": " + error.filename
+    return detail
+
+
+def connect(path):
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        peer.connect(path)
+    except BaseException:
+        peer.close()
+        raise
+    return peer.detach()
+
+
+def trace_execs():
+    import ctypes
+
+    system = ctypes.CDLL(None, use_errno=True)
+    system.ptrace.argtypes = [
+        ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int
+    ]
+    system.ptrace.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    if system.ptrace({PT_TRACE_ME}, 0, None, 0) != 0:
+        detail = os.strerror(ctypes.get_errno())
+        fail("direct target exec tracing unavailable: " + detail)
+
+
+gate_text = sys.argv[1] if len(sys.argv) > 1 else ""
+if len(sys.argv) < 6 or sys.argv[4] != "--" or not (
+    gate_text == "-1" or gate_text.isdigit()
+):
+    fail("invalid direct-target arguments")
+gate, command = int(gate_text), sys.argv[5:]
+try:
+    peers = [connect(path) for path in sys.argv[2:4]]
+    for peer in peers:
+        os.set_inheritable(peer, True)
+    acknowledgement = peers[0] if gate < 0 else gate
+    ready, _, _ = select.select(
+        [acknowledgement], [], [], {CONTAINMENT_HANDSHAKE_SECONDS}
+    )
+    if not ready or os.read(acknowledgement, 1) != b"1":
+        fail("direct target acknowledgement unavailable")
+    if gate >= 0:
+        os.close(gate)
+    if sys.platform == "darwin":
+        trace_execs()
+    os.execvp(command[0], command)
+except OSError as error:
+    fail(os_error_text(error))
+"""
+
+
 def direct_target_arguments(
     gate_descriptor: int,
     parent_socket_path: str,
     wrapper_socket_path: str,
     command: list[str],
 ) -> list[str]:
-    return [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        DIRECT_TARGET_ARGUMENT,
+    return isolated_child_command(
+        DIRECT_TARGET_PROGRAM,
         str(gate_descriptor),
         parent_socket_path,
         wrapper_socket_path,
         "--",
         *command,
-    ]
+    )
 
 
 def direct_target_environment(marker: str | None) -> dict[str, str] | None:
@@ -2707,15 +2949,6 @@ def refresh_direct_target_identity(
     return current
 
 
-def trace_direct_target_execs() -> None:
-    if LIBPROC is None:
-        return
-    ctypes.set_errno(0)
-    if LIBSYSTEM.ptrace(PT_TRACE_ME, 0, None, 0) != 0:
-        detail = os.strerror(ctypes.get_errno())
-        raise SimulatorLifecycleError(f"direct target exec tracing unavailable: {detail}")
-
-
 def continue_direct_target(pid: int, requested: int) -> None:
     ctypes.set_errno(0)
     address = ctypes.c_void_p(1)
@@ -2779,6 +3012,62 @@ def observe_darwin_target_state(
     return identity, False, exec_observed or transitioned
 
 
+def direct_parent_released(parent: DirectParentLink) -> bool:
+    if os.getppid() != parent.pid or direct_descriptor(parent.control_peer) < 0:
+        return True
+    return direct_peer_closed(parent.control_peer)
+
+
+def await_direct_release(parent: DirectParentLink) -> None:
+    # A failed wrapper still waits for its runner to kill it, but only while
+    # that runner can: an orphaned wrapper exits instead of pausing forever.
+    while not direct_parent_released(parent):
+        time.sleep(DIRECT_PARENT_POLL_SECONDS)
+
+
+def stop_released_direct_target(
+    process: subprocess.Popen[bytes],
+    wrapper: ProcessIdentity,
+    observed: set[ProcessIdentity],
+) -> None:
+    # No runner remains to escalate or census. Recount first: a report write
+    # that failed mid-census dropped what it had just found, and descendants
+    # reparent away from the target once it dies. Kill the target's session
+    # group while its unreaped pid still reserves that group id, then every
+    # observed descendant by identity, since those may have left the group.
+    # Identities seen before an exec carry a stale audit token, so the signal
+    # re-reads them.
+    try:
+        observed = observe_direct_descendants(observed)
+    finally:
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                # Darwin answers EPERM, not ESRCH, when the group's only
+                # member is the exited but unreaped target. Descendants that
+                # left the group still get the identity kills below.
+                pass
+        deadline = time.monotonic() + DIRECT_IDENTITY_READ_SECONDS
+        for descendant in observed - {wrapper}:
+            signal_direct_identity(descendant, signal.SIGKILL, deadline)
+
+
+def direct_target_returncode(
+    process: subprocess.Popen[bytes], status_sent: bool, target_exited: bool
+) -> int | None:
+    if status_sent:
+        return None
+    if LIBPROC is None:
+        return process.poll()
+    if not target_exited:
+        return None
+    returncode = process.poll()
+    if returncode is None:
+        raise SimulatorLifecycleError("direct target status unavailable")
+    return returncode
+
+
 def monitor_direct_command(
     process: subprocess.Popen[bytes],
     wrapper: ProcessIdentity,
@@ -2786,8 +3075,37 @@ def monitor_direct_command(
     identity: ProcessIdentity,
     marker: str | None,
     peer_descriptor: int,
+    parent: DirectParentLink,
 ) -> None:
     observed = {wrapper, identity}
+    try:
+        poll_direct_command(
+            process, reporter, identity, marker, peer_descriptor, parent, observed
+        )
+    except BaseException as error:
+        # A runner killed between polls breaks the event pipe first, so the
+        # failed write can be the first sign of release. A live runner still
+        # gets the error and owns cleanup.
+        try:
+            if direct_parent_released(parent):
+                stop_released_direct_target(process, wrapper, observed)
+        except BaseException as stop_error:
+            append_secondary_error(
+                error, "released direct target stop failed", stop_error
+            )
+        raise
+    stop_released_direct_target(process, wrapper, observed)
+
+
+def poll_direct_command(
+    process: subprocess.Popen[bytes],
+    reporter: DirectReporter,
+    identity: ProcessIdentity,
+    marker: str | None,
+    peer_descriptor: int,
+    parent: DirectParentLink,
+    observed: set[ProcessIdentity],
+) -> None:
     target_exec_observed = False
     status_sent = False
     while True:
@@ -2803,26 +3121,19 @@ def monitor_direct_command(
             )
             if identity != previous:
                 observed.add(identity)
-        observed = report_observed_direct_descendants(
+        observed |= report_observed_direct_descendants(
             observed, target_exited, marker, reporter
         )
-        if status_sent:
-            returncode = None
-        elif LIBPROC is None:
-            returncode = process.poll()
-        elif target_exited:
-            returncode = process.poll()
-            if returncode is None:
-                raise SimulatorLifecycleError("direct target status unavailable")
-        else:
-            returncode = None
-        if returncode is not None and not status_sent:
+        returncode = direct_target_returncode(process, status_sent, target_exited)
+        if returncode is not None:
             report_direct_event(
                 reporter, {"event": "status", "returncode": returncode}
             )
             status_sent = True
         if status_sent:
             reap_direct_orphans(process.pid)
+        if direct_parent_released(parent):
+            return
         time.sleep(DESCENDANT_POLL_SECONDS)
 
 
@@ -2874,15 +3185,17 @@ def run_gated_direct_target(
     target: ProcessIdentity,
     marker: str | None,
     peer: DirectPeer,
+    parent: DirectParentLink,
 ) -> None:
     primary_error: BaseException | None = None
     try:
-        for requested in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(requested, signal.SIG_IGN)
+        # Cleanup escalates SIGINFO/SIGINT/SIGTERM to the target only. SIGTERM
+        # stays fatal here so an operator can stop a stray wrapper.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if hasattr(signal, "SIGINFO"):
             signal.signal(signal.SIGINFO, signal.SIG_IGN)
         monitor_direct_command(
-            process, wrapper, reporter, target, marker, direct_descriptor(peer)
+            process, wrapper, reporter, target, marker, direct_descriptor(peer), parent
         )
     except BaseException as error:
         primary_error = error
@@ -2942,13 +3255,16 @@ def direct_child(
     wrapper_socket_path: str,
     parent_target_socket_path: str,
     wrapper_target_socket_path: str,
+    parent_pid: int,
     command: list[str],
 ) -> int:
     key = b""
     reporter: DirectReporter | None = None
-    wrapper_peer = -1
+    parent = DirectParentLink(parent_pid, -1)
     try:
-        wrapper_peer = connect_direct_peer(Path(wrapper_socket_path))
+        parent = DirectParentLink(
+            parent_pid, connect_direct_peer(Path(wrapper_socket_path))
+        )
         key = read_direct_key(key_descriptor)
         reporter = DirectReporter(event_descriptor, key)
         os.close(key_descriptor)
@@ -2963,13 +3279,9 @@ def direct_child(
             marker,
         )
         run_gated_direct_target(
-            process,
-            identity,
-            reporter,
-            target_identity,
-            marker,
-            target_peer,
+            process, identity, reporter, target_identity, marker, target_peer, parent
         )
+        return PRETEST_INFRASTRUCTURE_FAILURE
     except (OSError, SimulatorLifecycleError) as error:
         if reporter is not None and not reporter.status_sent and not reporter.failure_sent:
             try:
@@ -2978,46 +3290,7 @@ def direct_child(
                 )
             except OSError:
                 return PRETEST_INFRASTRUCTURE_FAILURE
-        while True:
-            signal.pause()
-
-
-def direct_target(
-    gate_descriptor: int,
-    parent_socket_path: str,
-    wrapper_socket_path: str,
-    command: list[str],
-) -> int:
-    peers: list[DirectPeer] = []
-    gate_owned = gate_descriptor >= 0
-    try:
-        for path in (parent_socket_path, wrapper_socket_path):
-            peers.append(connect_direct_peer(Path(path)))
-        for peer in peers:
-            os.set_inheritable(direct_descriptor(peer), True)
-        acknowledgement_descriptor = (
-            direct_descriptor(peers[0]) if gate_descriptor < 0 else gate_descriptor
-        )
-        ready, _, _ = select.select(
-            [acknowledgement_descriptor], [], [], CONTAINMENT_HANDSHAKE_SECONDS
-        )
-        if not ready or os.read(acknowledgement_descriptor, 1) != b"1":
-            raise SimulatorLifecycleError("direct target acknowledgement unavailable")
-        if gate_owned:
-            gate_owned = False
-            close_owned_direct_descriptor(
-                gate_descriptor, None, "direct target gate close failed"
-            )
-        trace_direct_target_execs()
-        os.execvp(command[0], command)
-    except BaseException as error:
-        if gate_owned:
-            gate_owned = False
-            peers.append(gate_descriptor)
-        close_owned_direct_descriptors(peers, error, "direct target close failed")
-        if not isinstance(error, (OSError, SimulatorLifecycleError)):
-            raise
-        report_stderr_error(error)
+        await_direct_release(parent)
         return PRETEST_INFRASTRUCTURE_FAILURE
 
 
@@ -3499,6 +3772,7 @@ def direct_child_arguments(
         str(wrapper_socket_path),
         str(parent_target_socket_path),
         str(wrapper_target_socket_path),
+        str(os.getpid()),
         "--",
         *command,
     ]
@@ -3688,14 +3962,27 @@ def spawn_direct_job(
             marker,
         )
     except BaseException as error:
-        errors: list[str] = []
-        if channel is not None:
-            record_cleanup_failure(errors, "channel close failed", lambda: close_direct_channel(channel))
-        errors.extend(cleanup_direct_spawn(resources, deadline))
-        if tracked_process is not None:
-            untrack_direct_child(tracked_process)
-        append_direct_spawn_cleanup(error, errors)
+        with TerminationDeferred():
+            cleanup_failed_direct_spawn(
+                error, resources, channel, tracked_process, deadline
+            )
         raise
+
+
+def cleanup_failed_direct_spawn(
+    error: BaseException,
+    resources: DirectSpawnResources,
+    channel: DirectChannel | None,
+    tracked_process: subprocess.Popen[bytes] | None,
+    deadline: float | None,
+) -> None:
+    errors: list[str] = []
+    if channel is not None:
+        record_cleanup_failure(errors, "channel close failed", lambda: close_direct_channel(channel))
+    errors.extend(cleanup_direct_spawn(resources, deadline))
+    if tracked_process is not None:
+        untrack_direct_child(tracked_process)
+    append_direct_spawn_cleanup(error, errors)
 
 
 def launchd_domain() -> str:
@@ -3803,19 +4090,25 @@ def launchctl_run(
 
 
 def launchctl_retry(
-    arguments: list[str], deadline: float, maximum: float = LAUNCHCTL_RETRY_SECONDS
+    arguments: list[str],
+    deadline: float,
+    maximum: float = LAUNCHCTL_RETRY_SECONDS,
+    process_cleanup_deadline: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # Process cleanup ends by the deadline unless the caller lets it run later.
+    cleanup_by = deadline
+    if process_cleanup_deadline is not None:
+        cleanup_by = process_cleanup_deadline
+    command_deadline = min(deadline, cleanup_by - LAUNCHCTL_PROCESS_CLEANUP_SECONDS)
     last_timeout: SimulatorLifecycleError | None = None
     while True:
-        remaining = deadline - time.monotonic()
-        command_budget = remaining - LAUNCHCTL_PROCESS_CLEANUP_SECONDS
+        command_budget = command_deadline - time.monotonic()
         if command_budget <= 0:
             break
         attempt_maximum = min(maximum, command_budget)
-        command_deadline = deadline - LAUNCHCTL_PROCESS_CLEANUP_SECONDS
         try:
             return launchctl_run(
-                arguments, command_deadline, attempt_maximum, deadline
+                arguments, command_deadline, attempt_maximum, cleanup_by
             )
         except SimulatorLifecycleError as error:
             if not isinstance(error.__cause__, subprocess.TimeoutExpired):
@@ -3860,30 +4153,57 @@ def launchd_plist(
 
 
 def create_launchd_job() -> LaunchdJob:
+    # No new job once termination is requested, even one a broad handler
+    # recorded as an error instead of letting it unwind.
+    if TERMINATION.signal_number is not None:
+        raise RunnerTerminated(TERMINATION.signal_number)
     label = f"com.pomodorough.xcode-tests.{secrets.token_hex(16)}"
     service = f"{launchd_domain()}/{label}"
-    root = Path(tempfile.mkdtemp(prefix="pomodorough-xcode-tests-"))
-    return LaunchdJob(
-        label,
-        service,
-        root,
-        root / "stdout.log",
-        root / "stderr.log",
-        root / "status.json",
-        root / "identity.json",
-        root / "coalition.json",
-        root / "acknowledgement.json",
-    )
+    root_path = tempfile.mkdtemp(prefix="pomodorough-xcode-tests-")
+    # The root exists from here on. A SIGTERM or Ctrl-C handled before the
+    # caller's guarded block starts must not leave it behind, so the caller
+    # starts that block right after this returns.
+    try:
+        root = Path(root_path)
+        return LaunchdJob(
+            label,
+            service,
+            root,
+            root / "stdout.log",
+            root / "stderr.log",
+            root / "status.json",
+            root / "identity.json",
+            root / "coalition.json",
+            root / "acknowledgement.json",
+        )
+    except BaseException as error:
+        with TerminationDeferred():
+            cleanup_errors: list[str] = []
+            record_cleanup_failure(
+                cleanup_errors,
+                "setup root removal failed",
+                lambda: remove_job_root(Path(root_path)),
+            )
+            append_cleanup_errors(error, "launchd setup cleanup error", cleanup_errors)
+        raise
 
 
 def await_containment_handshake(
     job: LaunchdJob, setup_deadline: float | None
 ) -> tuple[object, int, ProcessIdentity]:
     handshake_by = time.monotonic() + CONTAINMENT_HANDSHAKE_SECONDS
+    # A launchctl call that times out here has already failed the handshake,
+    # so its process cleanup may run past the handshake window, up to the
+    # setup deadline. Reserving that cleanup inside the window left the
+    # wrapper about 1 s to authenticate, which load exceeded (R54-APB10).
+    cleanup_by = handshake_by + LAUNCHCTL_PROCESS_CLEANUP_SECONDS
     if setup_deadline is not None:
         handshake_by = min(handshake_by, setup_deadline)
+        cleanup_by = min(cleanup_by, setup_deadline)
     payload = wait_for_containment_sidecar(job, handshake_by)
-    coalition_id, wrapper_identity = launchd_service_containment(job, handshake_by)
+    coalition_id, wrapper_identity = launchd_service_containment(
+        job, handshake_by, cleanup_by
+    )
     return payload, coalition_id, wrapper_identity
 
 
@@ -3929,9 +4249,7 @@ def containment_setup_cleanup_errors(
                 job, coalition_id, deadline, cleanup_reserve
             ),
         )
-    record_cleanup_failure(
-        errors, "setup root removal failed", lambda: remove_job_root(job.root)
-    )
+    retire_job_root(errors, job, deadline, "setup root removal failed")
     return errors
 
 
@@ -3944,11 +4262,11 @@ def spawn_contained_job(
 ) -> LaunchdJob:
     acknowledgement_token = secrets.token_hex(32)
     setup_deadline = reserved_deadline(deadline, cleanup_reserve)
-    job = create_launchd_job()
-    plist_path = job.root / "job.plist"
     bootstrap_attempted = False
     coalition_id: int | None = None
+    job = create_launchd_job()
     try:
+        plist_path = job.root / "job.plist"
         with plist_path.open("wb") as stream:
             plistlib.dump(
                 launchd_plist(job, command, combine_stderr, acknowledgement_token),
@@ -3979,10 +4297,11 @@ def spawn_contained_job(
         track_contained_job(bound_job)
         return bound_job
     except BaseException as error:
-        cleanup_errors = containment_setup_cleanup_errors(
-            job, bootstrap_attempted, coalition_id, deadline, cleanup_reserve
-        )
-        append_cleanup_errors(error, "launchd setup cleanup error", cleanup_errors)
+        with TerminationDeferred():
+            cleanup_errors = containment_setup_cleanup_errors(
+                job, bootstrap_attempted, coalition_id, deadline, cleanup_reserve
+            )
+            append_cleanup_errors(error, "launchd setup cleanup error", cleanup_errors)
         raise
 
 
@@ -4586,7 +4905,8 @@ def await_direct_identity(
     deadline: float | None,
     cleanup_reserve: float = CLEANUP_RESERVE_SECONDS,
 ) -> ProcessIdentity:
-    handshake_by = time.monotonic() + DIRECT_WRAPPER_HANDSHAKE_SECONDS
+    started = time.monotonic()
+    handshake_by = started + DIRECT_WRAPPER_HANDSHAKE_SECONDS
     setup_deadline = reserved_deadline(deadline, cleanup_reserve)
     if setup_deadline is not None:
         handshake_by = min(handshake_by, setup_deadline)
@@ -4625,7 +4945,24 @@ def await_direct_identity(
         if channel.closed or process.poll() is not None:
             raise SimulatorLifecycleError("direct wrapper exited before identity handshake")
         time.sleep(bounded_wait(handshake_by, DESCENDANT_POLL_SECONDS))
-    raise SimulatorLifecycleError("direct wrapper handshake timeout")
+    raise direct_handshake_timeout(channel, process, started)
+
+
+def direct_handshake_timeout(
+    channel: DirectChannel, process: subprocess.Popen[bytes], started: float
+) -> DirectHandshakeTimeout:
+    elapsed = time.monotonic() - started
+    # Read CPU time before poll(), which reaps an exited wrapper.
+    cpu = darwin_process_cpu_seconds(process.pid)
+    returncode = process.poll()
+    state = "alive" if returncode is None else f"exited {returncode}"
+    cpu_text = "unavailable" if cpu is None else f"{cpu:.3f}s"
+    return DirectHandshakeTimeout(
+        f"elapsed={elapsed:.3f}s wrapper_pid={process.pid} wrapper={state} "
+        f"wrapper_cpu={cpu_text} events={channel.sequence} "
+        f"buffered_bytes={len(channel.buffer)} "
+        f"channel={'closed' if channel.closed else 'open'}"
+    )
 
 
 def darwin_direct_ancestry_maps(
@@ -4763,9 +5100,15 @@ def direct_job_status(job: DirectJob, deadline: float | None = None) -> int | No
     return job.channel.returncode
 
 
-def launchd_service_pid(job: LaunchdJob, deadline: float) -> int:
+def launchd_service_pid(
+    job: LaunchdJob, deadline: float, process_cleanup_deadline: float
+) -> int:
     while time.monotonic() < deadline:
-        result = launchctl_retry(["print", job.service], deadline)
+        result = launchctl_retry(
+            ["print", job.service],
+            deadline,
+            process_cleanup_deadline=process_cleanup_deadline,
+        )
         if service_is_absent(result):
             raise SimulatorLifecycleError("launchd containment disappeared")
         if result.returncode:
@@ -4784,9 +5127,9 @@ def launchd_service_pid(job: LaunchdJob, deadline: float) -> int:
 
 
 def launchd_service_containment(
-    job: LaunchdJob, deadline: float
+    job: LaunchdJob, deadline: float, process_cleanup_deadline: float
 ) -> tuple[int, ProcessIdentity]:
-    pid = launchd_service_pid(job, deadline)
+    pid = launchd_service_pid(job, deadline, process_cleanup_deadline)
     inspection = deadline_call(
         lambda: inspect_launchd_service_containment(pid),
         deadline,
@@ -4969,6 +5312,47 @@ def bootout_job(
     return None
 
 
+def bootout_job_label(job: LaunchdJob, deadline: float | None) -> None:
+    launchd_job_domain(job)
+    retry_by = cleanup_deadline(deadline, CONTAINMENT_LABEL_BOOTOUT_SECONDS)
+    result = launchctl_retry(
+        ["bootout", job.service], retry_by, LAUNCHCTL_BOOTOUT_SECONDS
+    )
+    if result.returncode and not bootout_result_is_absent(result):
+        raise SimulatorLifecycleError(
+            f"launchd label bootout exited {result.returncode}: "
+            f"{result.stderr.strip()}"
+        )
+
+
+def retain_job_root(errors: list[str], job: LaunchdJob) -> None:
+    detail = f"launchd job retained: label={job.label} root={job.root}"
+    errors.append(detail)
+    try:
+        print(f"classification=containment-cleanup-failure; {detail}", file=sys.stderr)
+    except BaseException:
+        # The detail is already in errors; a closed stderr must not stop cleanup.
+        pass
+
+
+def retire_job_root(
+    errors: list[str], job: LaunchdJob, deadline: float | None, removal_label: str
+) -> None:
+    # The root holds job.plist, the only durable record of a label that may
+    # still be loaded. After any cleanup error, boot the label out or confirm
+    # it absent before removing the root; otherwise keep the root and name
+    # both on stderr, so the registration can still be found and removed.
+    if errors:
+        failures = len(errors)
+        record_cleanup_failure(
+            errors, "label bootout failed", lambda: bootout_job_label(job, deadline)
+        )
+        if len(errors) > failures:
+            retain_job_root(errors, job)
+            return
+    record_cleanup_failure(errors, removal_label, lambda: remove_job_root(job.root))
+
+
 def confirm_job_absent(
     job: LaunchdJob,
     deadline: float | None,
@@ -5006,31 +5390,122 @@ def confirm_job_absent(
         time.sleep(wait)
 
 
+def coalition_signal_refusal(
+    identity: ProcessIdentity, requested: signal.Signals
+) -> str | None:
+    if identity.audit_token is None:
+        return "audit token unavailable"
+    error = audit_token_signal_error(identity.audit_token, requested)
+    if error == 0:
+        return None
+    return errno.errorcode.get(error, f"error {error}")
+
+
+def coalition_member_detail(
+    identity: ProcessIdentity, coalition_id: int, deadline: float
+) -> str | None:
+    """Describe a member, or return None once its pid names another process."""
+    detail = deadline_call(
+        lambda: darwin_process_detail(identity.pid),
+        deadline,
+        "Darwin coalition member lookup deadline expired",
+    )
+    current = coalition_member_identity(identity.pid, coalition_id, deadline)
+    return detail if current == identity else None
+
+
+def signal_coalition_member(
+    identity: ProcessIdentity,
+    coalition_id: int,
+    requested: signal.Signals,
+    deadline: float,
+) -> str | None:
+    """Signal one unchanged member and describe it if it refused."""
+    require_census_budget(deadline)
+    current = coalition_member_identity(identity.pid, coalition_id, deadline)
+    if current != identity:
+        return None
+    reason = coalition_signal_refusal(identity, requested)
+    require_census_budget(deadline)
+    if reason is None:
+        return None
+    detail = coalition_member_detail(identity, coalition_id, deadline)
+    if detail is None:
+        return None
+    return f"{detail} refused {requested.name} with {reason}"
+
+
+def signal_census_members(
+    members: list[ProcessIdentity],
+    coalition_id: int,
+    requested: signal.Signals,
+    deadline: float,
+    refusals: list[str],
+) -> None:
+    # A refusal must not shield later members. The census lists the newest
+    # process first, so xcodebuild follows the helpers it started.
+    for identity in members:
+        refusal = signal_coalition_member(identity, coalition_id, requested, deadline)
+        if refusal is not None:
+            refusals.append(refusal)
+
+
+def coalition_refusal_text(refusals: list[str]) -> str:
+    shown = ", ".join(refusals[:COALITION_MEMBER_DETAIL_LIMIT])
+    hidden = len(refusals) - COALITION_MEMBER_DETAIL_LIMIT
+    more = f", {hidden} more" if hidden > 0 else ""
+    return f"signaller uid {os.getuid()} euid {os.geteuid()}: {shown}{more}"
+
+
 def signal_coalition_members(
     coalition_id: int, requested: signal.Signals, deadline: float
 ) -> None:
-    for identity in coalition_members(coalition_id, deadline):
-        require_census_budget(deadline)
-        current = coalition_member_identity(identity.pid, coalition_id, deadline)
-        if current != identity:
-            continue
-        signaled = signal_identity(identity, requested)
-        require_census_budget(deadline)
-        if signaled:
-            continue
-        current = coalition_member_identity(identity.pid, coalition_id, deadline)
-        if current == identity:
-            raise SimulatorLifecycleError("identity-bound coalition signal failed")
+    refusals: list[str] = []
+    try:
+        members = coalition_members(coalition_id, deadline)
+        signal_census_members(members, coalition_id, requested, deadline, refusals)
+    except SimulatorLifecycleError as error:
+        if refusals:
+            raise SimulatorLifecycleError(
+                f"{safe_exception_text(error)}; {coalition_refusal_text(refusals)}"
+            ) from error
+        raise
+    if refusals:
+        raise SimulatorLifecycleError(
+            "identity-bound coalition signal failed: "
+            f"{coalition_refusal_text(refusals)}"
+        )
 
 
-def drain_coalition(coalition_id: int, deadline: float) -> None:
+def kill_drain_round(
+    members: list[ProcessIdentity],
+    coalition_id: int,
+    deadline: float,
+    refusals: list[str],
+) -> None:
+    # Refusals describe the latest round, so a drain failure names the
+    # members that persisted. A round cut short by the deadline before any
+    # refusal keeps the previous round's list.
+    current: list[str] = []
+    try:
+        signal_census_members(members, coalition_id, signal.SIGKILL, deadline, current)
+    except SimulatorLifecycleError:
+        if current:
+            refusals[:] = current
+        raise
+    refusals[:] = current
+
+
+def drain_coalition_rounds(
+    coalition_id: int, deadline: float, refusals: list[str]
+) -> None:
     empty_since: float | None = None
     while time.monotonic() < deadline:
         members = coalition_members(coalition_id, deadline)
         now = time.monotonic()
         if members:
             empty_since = None
-            signal_coalition_members(coalition_id, signal.SIGKILL, deadline)
+            kill_drain_round(members, coalition_id, deadline, refusals)
         else:
             empty_since = empty_since or now
             if now - empty_since >= DESCENDANT_QUIESCENCE_SECONDS:
@@ -5039,6 +5514,39 @@ def drain_coalition(coalition_id: int, deadline: float) -> None:
         if wait > 0:
             time.sleep(wait)
     raise SimulatorLifecycleError("coalition cleanup incomplete")
+
+
+def drain_coalition(coalition_id: int, deadline: float) -> None:
+    refusals: list[str] = []
+    try:
+        drain_coalition_rounds(coalition_id, deadline, refusals)
+    except SimulatorLifecycleError as error:
+        if refusals:
+            raise SimulatorLifecycleError(
+                f"{safe_exception_text(error)}; {coalition_refusal_text(refusals)}"
+            ) from error
+        raise
+
+
+def require_vacated_coalition(coalition_id: int, deadline: float) -> None:
+    # launchd bootout can kill members this process could not; give those
+    # kills a moment to finish before naming the survivors.
+    wait_by = min(deadline, time.monotonic() + COALITION_VACANCY_WAIT_SECONDS)
+    survivors = coalition_members(coalition_id, deadline)
+    while survivors and time.monotonic() < wait_by:
+        time.sleep(bounded_wait(wait_by, DESCENDANT_POLL_SECONDS))
+        survivors = coalition_members(coalition_id, deadline)
+    if not survivors:
+        return
+    details = [
+        coalition_member_detail(identity, coalition_id, deadline)
+        or f"pid {identity.pid} exited"
+        for identity in survivors[:COALITION_MEMBER_DETAIL_LIMIT]
+    ]
+    raise SimulatorLifecycleError(
+        f"coalition members survived bootout ({len(survivors)}): "
+        f"{', '.join(details)}"
+    )
 
 
 def cleanup_deadline(
@@ -5096,12 +5604,14 @@ def record_containment_finalization(
         bootout_job(job, deadlines.bootout_by, deadlines.bootout_cleanup_by)
         bootout_confirmed = True
 
+    drained = len(errors)
     if coalition_id is not None:
         record_cleanup_failure(
             errors,
             "coalition drain failed",
             lambda: drain_coalition(coalition_id, deadlines.drain_by),
         )
+    drain_failed = len(errors) > drained
     record_cleanup_failure(
         errors,
         "bootout failed",
@@ -5114,6 +5624,16 @@ def record_containment_finalization(
             job, deadlines.confirmation_by, bootout_confirmed
         ),
     )
+    # Job absence names the launchd label only; after a failed drain, the
+    # coalition census says whether any member outlived the job.
+    if coalition_id is not None and drain_failed:
+        record_cleanup_failure(
+            errors,
+            "coalition vacancy check failed",
+            lambda: require_vacated_coalition(
+                coalition_id, deadlines.confirmation_by
+            ),
+        )
 
 
 def abort_containment_handshake(
@@ -5497,7 +6017,10 @@ def terminate_bounded_writer(
     errors: list[str] = []
     try:
         os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        # A writer that exits after poll() leaves an unreaped session leader
+        # as its group's only member, and Darwin answers EPERM, not ESRCH.
+        # The reap below still reports a writer that outlives the deadline.
         pass
     except BaseException as error:
         errors.append(f"kill failed: {safe_exception_text(error)}")
@@ -5557,23 +6080,118 @@ def communicate_bounded_writer(
         raise
 
 
-def bounded_writer_command(
-    path: Path, writer_argument: str, write: AtomicWrite | None
-) -> list[str]:
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        writer_argument,
-        str(path),
-    ]
+# The timeout evidence writer child runs this short program instead of the
+# runner. Starting the runner compiles all of it: 0.1 to 0.2 s on an idle host,
+# and more than the writer's 0.95 s grant at load 30 to 50, which turned a
+# timeout into an evidence failure (R54-APB08). This program starts in about
+# 0.02 s. Its error text follows safe_os_error_text.
+EVIDENCE_WRITER_PROGRAM = f"""\
+import os
+import sys
+
+if len(sys.argv) != 2:
+    print("invalid evidence-writer arguments", file=sys.stderr)
+    raise SystemExit({EVIDENCE_FAILURE})
+try:
+    content = sys.stdin.buffer.read()
+    with open(sys.argv[1], "wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+except OSError as error:
+    if type(error.errno) is int and type(error.strerror) is str:
+        detail = "[Errno %d] %s" % (error.errno, error.strerror)
+        if type(error.filename) is str:
+            detail += ": " + error.filename
+        print(detail, file=sys.stderr)
+    raise SystemExit({EVIDENCE_FAILURE})
+"""
+
+# The containment acknowledgement writer and its directory synchronization
+# children run the two short programs below instead of the runner, for the
+# same reason as the evidence writer. At load 104 and above a whole-runner
+# start outlasted the setup grant, and the attempt failed as a containment
+# setup or cleanup failure instead of keeping its class (R54-APB08 stage 2).
+# The writer checks only the temporary file it writes. The parent's commit
+# checks the directory, the destination and the temporary file again before
+# the rename. Only descriptor calls can fail with an OSError here, so the
+# error text is the errno text that safe_os_error_text gives, with no path.
+BOUNDED_CHILD_SUPPORT = f"""\
+import os
+import stat
+import sys
+
+
+def fail(detail):
+    print(detail, file=sys.stderr)
+    raise SystemExit({PRETEST_INFRASTRUCTURE_FAILURE})
+
+
+def os_error_text(error):
+    return "[Errno %d] %s" % (error.errno, error.strerror)
+"""
+
+ATOMIC_WRITER_PROGRAM = BOUNDED_CHILD_SUPPORT + """\
+
+
+def validate_temporary(name, descriptor, directory):
+    try:
+        opened = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except OSError:
+        fail("untrusted atomic temporary file")
+    trusted = (
+        stat.S_ISREG(opened.st_mode)
+        and opened.st_uid == os.geteuid()
+        and opened.st_nlink == 1
+        and (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
+    )
+    if not trusted:
+        fail("untrusted atomic temporary file")
+
+
+if len(sys.argv) != 4 or not (sys.argv[2].isdigit() and sys.argv[3].isdigit()):
+    fail("invalid atomic-writer arguments")
+name, descriptor, directory = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+try:
+    content = memoryview(sys.stdin.buffer.read())
+    validate_temporary(name, descriptor, directory)
+    while content:
+        content = content[os.write(descriptor, content):]
+    os.fsync(descriptor)
+    validate_temporary(name, descriptor, directory)
+except OSError as error:
+    fail(os_error_text(error))
+"""
+
+DIRECTORY_SYNC_PROGRAM = BOUNDED_CHILD_SUPPORT + """\
+
+
+if len(sys.argv) != 2 or not sys.argv[1].isdigit():
+    fail("invalid directory-sync arguments")
+try:
+    os.fsync(int(sys.argv[1]))
+except OSError as error:
+    fail(os_error_text(error))
+"""
+
+
+def isolated_child_command(program: str, *arguments: str) -> list[str]:
+    # Isolated mode and no site import keep the start short and free of the
+    # caller's Python environment.
+    return [sys.executable, "-I", "-S", "-c", program, *arguments]
+
+
+def bounded_writer_command(path: Path, write: AtomicWrite | None) -> list[str]:
     if write is None:
-        return command
-    return [
-        *command,
-        str(write.temporary),
-        str(write.descriptor),
-        str(write.directory_descriptor),
-    ]
+        # Only the timeout evidence writer has no atomic write.
+        return isolated_child_command(EVIDENCE_WRITER_PROGRAM, str(path))
+    return isolated_child_command(
+        ATOMIC_WRITER_PROGRAM,
+        write.temporary_name,
+        str(descriptor_number(write.descriptor)),
+        str(descriptor_number(write.directory_descriptor)),
+    )
 
 
 def bounded_atomic_commit(
@@ -5590,12 +6208,9 @@ def sync_atomic_directory_bounded(
     remaining = deadline - time.monotonic()
     if remaining <= EVIDENCE_WRITER_CLEANUP_SECONDS:
         raise OSError(f"{label} deadline expired")
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        DIRECTORY_SYNC_ARGUMENT,
-        str(write.directory_descriptor),
-    ]
+    command = isolated_child_command(
+        DIRECTORY_SYNC_PROGRAM, str(descriptor_number(write.directory_descriptor))
+    )
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -5621,7 +6236,7 @@ def write_bytes_bounded(
     if remaining <= EVIDENCE_WRITER_CLEANUP_SECONDS:
         raise OSError(f"{label} write deadline expired")
     write = open_atomic_write(path) if writer_argument == ATOMIC_WRITER_ARGUMENT else None
-    command = bounded_writer_command(path, writer_argument, write)
+    command = bounded_writer_command(path, write)
     primary_error: BaseException | None = None
     try:
         process = subprocess.Popen(
@@ -5871,28 +6486,35 @@ def complete_direct_job(
     cleanup_errors: list[str] = []
     try:
         returncode = wait_for_direct_status(job, timeout, deadline, cleanup_reserve)
-        cleanup_attempted = True
-        try:
-            cleanup_direct_job(job, deadline, returncode is None)
-        except SimulatorLifecycleError as error:
-            cleanup_errors.append(safe_exception_text(error))
+        with TerminationDeferred():
+            cleanup_attempted = True
+            try:
+                cleanup_direct_job(job, deadline, returncode is None)
+            except SimulatorLifecycleError as error:
+                cleanup_errors.append(safe_exception_text(error))
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
     except BaseException as error:
-        if not cleanup_attempted and job.root.exists():
+        with TerminationDeferred():
+            if not cleanup_attempted and job.root.exists():
+                record_cleanup_failure(
+                    cleanup_errors,
+                    "",
+                    lambda: cleanup_direct_job(job, deadline, True),
+                )
             record_cleanup_failure(
-                cleanup_errors,
-                "",
-                lambda: cleanup_direct_job(job, deadline, True),
+                cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
             )
-        record_cleanup_failure(
-            cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
-        )
+            append_cleanup_errors(error, "direct cleanup error", cleanup_errors)
+        raise
+    try:
+        with TerminationDeferred():
+            record_cleanup_failure(
+                cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
+            )
+    except BaseException as error:
         append_cleanup_errors(error, "direct cleanup error", cleanup_errors)
         raise
-    record_cleanup_failure(
-        cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
-    )
     return DirectCompletion(
         returncode, stdout, stderr, cleanup_error_text(cleanup_errors)
     )
@@ -5914,21 +6536,24 @@ def contained_lifecycle_process(
         returncode = wait_for_job_status(
             job, timeout, deadline, LIFECYCLE_CLEANUP_SECONDS
         )
-        cleanup_attempted = True
-        record_lifecycle_cleanup(cleanup_errors, job, deadline, returncode is None)
+        with TerminationDeferred():
+            cleanup_attempted = True
+            record_lifecycle_cleanup(cleanup_errors, job, deadline, returncode is None)
         stdout = job_output(job.stdout_path)
         stderr = job_output(job.stderr_path)
     except BaseException as error:
-        if not cleanup_attempted and job.root.exists():
-            record_lifecycle_cleanup(cleanup_errors, job, deadline, True)
-        record_cleanup_failure(
-            cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
-        )
+        with TerminationDeferred():
+            if not cleanup_attempted and job.root.exists():
+                record_lifecycle_cleanup(cleanup_errors, job, deadline, True)
+            retire_job_root(cleanup_errors, job, deadline, "job root removal failed")
+            append_cleanup_errors(error, "coalition cleanup error", cleanup_errors)
+        raise
+    try:
+        with TerminationDeferred():
+            retire_job_root(cleanup_errors, job, deadline, "job root removal failed")
+    except BaseException as error:
         append_cleanup_errors(error, "coalition cleanup error", cleanup_errors)
         raise
-    record_cleanup_failure(
-        cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
-    )
     cleanup_error = cleanup_error_text(cleanup_errors)
     if cleanup_error is not None:
         stderr += f"\ncoalition cleanup error: {cleanup_error}\n"
@@ -5953,16 +6578,6 @@ def lifecycle_process(
             return contained_lifecycle_process(command, timeout, deadline)
         return direct_lifecycle_process(command, timeout, deadline)
     return direct_lifecycle_process(command, timeout, deadline)
-
-
-def contained_cleanup_error(
-    job: LaunchdJob, deadline: float | None, signal_root: bool
-) -> SimulatorLifecycleError | None:
-    try:
-        cleanup_contained_job(job, deadline, signal_root)
-    except SimulatorLifecycleError as error:
-        return error
-    return None
 
 
 def cleanup_process_evidence(
@@ -5990,12 +6605,31 @@ def lifecycle_command(
         raise SimulatorLifecycleError(
             f"{label} timed out after {command_timeout:g}s"
         ) from error
+    except DirectHandshakeTimeout as error:
+        record_handshake_evidence(args, label, command, error)
+        raise
     append_lifecycle_evidence(
         args, label, command, result.returncode, result.stdout, result.stderr
     )
     if check and result.returncode:
         raise SimulatorLifecycleError(f"{label} exited {result.returncode}")
     return result
+
+
+def record_handshake_evidence(
+    args: argparse.Namespace,
+    label: str,
+    command: list[str],
+    error: DirectHandshakeTimeout,
+) -> None:
+    # Diagnostics only: a failed write must not turn the infrastructure
+    # failure into an evidence failure.
+    try:
+        append_lifecycle_evidence(
+            args, label, command, None, "", f"{error}: {error.lifecycle}\n"
+        )
+    except OSError as write_error:
+        append_secondary_error(error, "handshake evidence write failed", write_error)
 
 
 def diagnostic_command(
@@ -6106,7 +6740,9 @@ def constrained_candidates(
     candidates: list[SimulatorCandidate], destination: SimulatorDestination
 ) -> list[SimulatorCandidate]:
     expected_os = requested_os_version(destination.os_version)
-    if destination.os_version in (None, "latest") and candidates:
+    # xcodebuild picks the latest OS only for a name; an id already names one device.
+    implicit_latest = destination.os_version is None and destination.udid is None
+    if (implicit_latest or destination.os_version == "latest") and candidates:
         expected_os = max(candidate.runtime for candidate in candidates)
     selected = [
         candidate
@@ -6339,18 +6975,39 @@ def append_failed_attempt_cleanup(
     job: LaunchdJob,
     deadline: float | None,
     cleanup_attempted: bool,
+    cleanup_errors: list[str],
 ) -> None:
-    cleanup_errors: list[str] = []
-    if not cleanup_attempted and job.root.exists():
-        record_cleanup_failure(
-            cleanup_errors,
-            "containment cleanup failed",
-            lambda: cleanup_contained_job(job, deadline, True),
+    # cleanup_errors holds any errors of an attempted cleanup, an interrupted
+    # one included, so a root that cleanup kept for its label is never removed
+    # here, and a root whose cleanup was cut short goes only after its label.
+    with TerminationDeferred():
+        if not cleanup_attempted and job.root.exists():
+            record_cleanup_failure(
+                cleanup_errors,
+                "containment cleanup failed",
+                lambda: cleanup_contained_job(job, deadline, True),
+            )
+        retire_job_root(cleanup_errors, job, deadline, "job root removal failed")
+        append_cleanup_errors(error, "xcodebuild cleanup error", cleanup_errors)
+
+
+def finish_attempt_cleanup(
+    job: LaunchdJob, deadline: float | None, timed_out: bool, cleanup_errors: list[str]
+) -> str | None:
+    try:
+        cleanup_contained_job(job, deadline, timed_out)
+    except SimulatorLifecycleError as error:
+        cleanup_errors.append(safe_exception_text(error))
+    except BaseException as error:
+        # A cleanup cut short may have left the label loaded. Recording that
+        # makes the failure path boot the label out before it removes the
+        # root, or keep the root.
+        cleanup_errors.append(
+            f"containment cleanup interrupted: {safe_exception_text(error)}"
         )
-    record_cleanup_failure(
-        cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
-    )
-    append_cleanup_errors(error, "xcodebuild cleanup error", cleanup_errors)
+        raise
+    retire_job_root(cleanup_errors, job, deadline, "job root removal failed")
+    return cleanup_error_text(cleanup_errors)
 
 
 def run_attempt(
@@ -6373,6 +7030,7 @@ def run_attempt(
         cleanup_reserve=CONTAINED_JOB_CLEANUP_SECONDS,
     )
     cleanup_attempted = False
+    cleanup_errors: list[str] = []
     try:
         returncode, output, timeout_reason = observe_attempt(
             job, args, run_started, log, evidence_errors
@@ -6381,17 +7039,11 @@ def run_attempt(
         if timeout_reason:
             evidence_deadline = process_evidence_deadline(deadline)
             process_evidence = launchd_job_evidence(job, evidence_deadline)
-        cleanup_attempted = True
-        cleanup_errors: list[str] = []
-        containment_error = contained_cleanup_error(
-            job, deadline, timeout_reason is not None
-        )
-        if containment_error is not None:
-            cleanup_errors.append(safe_exception_text(containment_error))
-        record_cleanup_failure(
-            cleanup_errors, "job root removal failed", lambda: remove_job_root(job.root)
-        )
-        cleanup_error = cleanup_error_text(cleanup_errors)
+        with TerminationDeferred():
+            cleanup_attempted = True
+            cleanup_error = finish_attempt_cleanup(
+                job, deadline, timeout_reason is not None, cleanup_errors
+            )
         process_evidence = cleanup_process_evidence(process_evidence, cleanup_error)
         return AttemptOutcome(
             returncode if returncode is not None else -signal.SIGKILL,
@@ -6401,7 +7053,9 @@ def run_attempt(
             cleanup_error,
         )
     except BaseException as error:
-        append_failed_attempt_cleanup(error, job, deadline, cleanup_attempted)
+        append_failed_attempt_cleanup(
+            error, job, deadline, cleanup_attempted, cleanup_errors
+        )
         raise
 
 
@@ -6431,19 +7085,52 @@ def record_timeout(
     outcome: AttemptOutcome,
     attempt: int,
     run_started: float,
+    evidence_errors: list[OSError],
 ) -> int:
     classification, returncode = timeout_classification(args, outcome)
     assert outcome.timeout_reason is not None
-    write_timeout_evidence(
-        args,
-        attempt,
-        classification,
-        outcome.timeout_reason,
-        run_started,
-        outcome.process_evidence,
-    )
+    try:
+        write_timeout_evidence(
+            args,
+            attempt,
+            classification,
+            outcome.timeout_reason,
+            run_started,
+            outcome.process_evidence,
+        )
+    except OSError as error:
+        # A lost timeout record is an evidence failure like a lost log line:
+        # attempt_exit_code returns 126 for it after the timeout and cleanup
+        # classifications are printed.
+        evidence_errors.append(error)
     print(f"classification={classification}; {outcome.timeout_reason}", file=sys.stderr)
     return returncode
+
+
+def attempt_exit_code(
+    outcome: AttemptOutcome,
+    timeout_code: int | None,
+    evidence_errors: list[OSError],
+) -> int | None:
+    # Every failure of the attempt prints its classification before an exit
+    # code is chosen, so none hides another; a timeout has printed its own in
+    # record_timeout. The exit code then follows precedence: evidence failure,
+    # because no other result can be audited without the log or the timeout
+    # record; then the test result or timeout class; then cleanup failure,
+    # which only replaces a success. None means the attempt may be retried.
+    if outcome.cleanup_error is not None:
+        print(
+            f"classification=containment-cleanup-failure; {outcome.cleanup_error}",
+            file=sys.stderr,
+        )
+    if evidence_failed(evidence_errors):
+        return EVIDENCE_FAILURE
+    succeeded = outcome.returncode == 0 and outcome.timeout_reason is None
+    if outcome.cleanup_error is not None and succeeded:
+        return PRETEST_INFRASTRUCTURE_FAILURE
+    if not recoverable_launch_failure(outcome):
+        return timeout_code if timeout_code is not None else outcome.returncode
+    return None
 
 
 def prepare_simulator(args: argparse.Namespace) -> tuple[str, bool]:
@@ -6455,6 +7142,61 @@ def prepare_simulator(args: argparse.Namespace) -> tuple[str, bool]:
     except SimulatorLifecycleError as error:
         report_stderr_error(error, "classification=simulator-preflight-failure; ")
         return recover_simulator(args, udid, "preflight"), True
+
+
+def termination_notes(termination: BaseException | None) -> list[str]:
+    # A termination raised after deferred cleanup carries the interrupted
+    # error as its context, and the cleanup details are notes on that error.
+    # Raising never chains a cycle, so the walk ends.
+    notes: list[str] = []
+    error = termination
+    while error is not None:
+        try:
+            notes.extend(object.__getattribute__(error, "__notes__"))
+        except AttributeError:
+            pass
+        error = error.__context__
+    return [note for note in notes if type(note) is str]
+
+
+def report_termination(signal_number: int, termination: BaseException | None) -> int:
+    # The exit code follows the shell convention for death by a signal, so
+    # callers read the same status as before the runner cleaned up. A cleanup
+    # failure is printed but, as in attempt_exit_code, never replaces it.
+    name = signal.Signals(signal_number).name
+    try:
+        print(f"classification=runner-terminated; signal={name}", file=sys.stderr)
+        notes = termination_notes(termination)
+        if notes:
+            print(
+                f"classification=containment-cleanup-failure; {'; '.join(notes)}",
+                file=sys.stderr,
+            )
+    except BaseException:
+        # The cleanup already ran; a failed report must not change the exit.
+        pass
+    return 128 + signal_number
+
+
+def run_with_sigterm_cleanup(args: argparse.Namespace) -> int:
+    # SIGTERM unwinds the test run through the same cleanup as a failed
+    # attempt; a repeat is only recorded. A request that a broad handler
+    # recorded as an error, instead of letting it unwind, is reported the same
+    # way. Once run() returns no job is left, so SIGTERM is then ignored:
+    # Python resets its own handlers to the default action at exit, and a
+    # late signal would otherwise replace the reported status. Each step stays
+    # inside the try, so a first request between them still reaches a report.
+    signal.signal(signal.SIGTERM, request_termination)
+    try:
+        exit_code = run(args)
+        requested = TERMINATION.signal_number
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if requested is None:
+            return exit_code
+    except RunnerTerminated as error:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        return report_termination(error.signal_number, error)
+    return report_termination(requested, None)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -6477,22 +7219,13 @@ def run(args: argparse.Namespace) -> int:
                     args, command, log, attempt, run_started, evidence_errors
                 )
                 timeout_code = (
-                    record_timeout(args, outcome, attempt, run_started)
+                    record_timeout(args, outcome, attempt, run_started, evidence_errors)
                     if outcome.timeout_reason
                     else None
                 )
-                if evidence_failed(evidence_errors):
-                    return EVIDENCE_FAILURE
-                if outcome.cleanup_error is not None:
-                    print(
-                        "classification=containment-cleanup-failure; "
-                        f"{outcome.cleanup_error}",
-                        file=sys.stderr,
-                    )
-                    if outcome.returncode == 0 and outcome.timeout_reason is None:
-                        return PRETEST_INFRASTRUCTURE_FAILURE
-                if not recoverable_launch_failure(outcome):
-                    return timeout_code if timeout_code is not None else outcome.returncode
+                exit_code = attempt_exit_code(outcome, timeout_code, evidence_errors)
+                if exit_code is not None:
+                    return exit_code
                 if recovery_used or simulator_udid is None:
                     return PRETEST_INFRASTRUCTURE_FAILURE
                 preserve_partial_result_bundle(args, attempt)
@@ -6546,7 +7279,7 @@ def run_contained_child(arguments: list[str]) -> int:
 
 
 def run_direct_child(arguments: list[str]) -> int:
-    if len(arguments) < 9 or arguments[7] != "--":
+    if len(arguments) < 10 or arguments[8] != "--":
         print("invalid direct-child arguments", file=sys.stderr)
         return PRETEST_INFRASTRUCTURE_FAILURE
     return direct_child(
@@ -6556,93 +7289,9 @@ def run_direct_child(arguments: list[str]) -> int:
         arguments[4],
         arguments[5],
         arguments[6],
-        arguments[8:],
+        int(arguments[7]),
+        arguments[9:],
     )
-
-
-def run_direct_target(arguments: list[str]) -> int:
-    if len(arguments) < 6 or arguments[4] != "--":
-        print("invalid direct-target arguments", file=sys.stderr)
-        return PRETEST_INFRASTRUCTURE_FAILURE
-    return direct_target(int(arguments[1]), arguments[2], arguments[3], arguments[5:])
-
-
-def run_evidence_writer(arguments: list[str]) -> int:
-    if len(arguments) != 2:
-        print("invalid evidence-writer arguments", file=sys.stderr)
-        return EVIDENCE_FAILURE
-    try:
-        content = sys.stdin.buffer.read()
-        with Path(arguments[1]).open("wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except OSError as error:
-        report_stderr_error(error)
-        return EVIDENCE_FAILURE
-    return 0
-
-
-def run_directory_sync(arguments: list[str]) -> int:
-    if len(arguments) != 2:
-        print("invalid directory-sync arguments", file=sys.stderr)
-        return PRETEST_INFRASTRUCTURE_FAILURE
-    try:
-        os.fsync(int(arguments[1]))
-    except (OSError, ValueError) as error:
-        report_stderr_error(error)
-        return PRETEST_INFRASTRUCTURE_FAILURE
-    return 0
-
-
-def inherited_atomic_write(
-    path: Path,
-    temporary: Path,
-    descriptor: int,
-    directory_descriptor: int,
-) -> AtomicWrite:
-    destination, candidate = validated_atomic_paths(path, temporary)
-    temporary_identity = atomic_file_identity(os.fstat(descriptor))
-    directory_identity = atomic_file_identity(os.fstat(directory_descriptor))
-    write = AtomicWrite(
-        destination,
-        candidate,
-        descriptor,
-        directory_descriptor,
-        directory_identity,
-        destination.name,
-        candidate.name,
-        None,
-        temporary_identity,
-        temporary_identity,
-    )
-    validate_atomic_directory(write)
-    write.destination_identity = atomic_destination_identity(write)
-    return write
-
-
-def write_inherited_atomic_temporary(
-    path: Path,
-    temporary: Path,
-    descriptor: int,
-    directory_descriptor: int,
-    content: bytes,
-) -> None:
-    primary_error: BaseException | None = None
-    try:
-        write = inherited_atomic_write(
-            path, temporary, descriptor, directory_descriptor
-        )
-        validate_atomic_temporary_file(write)
-        write_atomic_descriptor(descriptor, content)
-        validate_atomic_temporary_file(write)
-    except BaseException as error:
-        primary_error = error
-        raise
-    finally:
-        close_atomic_descriptors(
-            (descriptor, directory_descriptor), primary_error
-        )
 
 
 def write_direct_atomic_temporary(
@@ -6661,7 +7310,7 @@ def write_direct_atomic_temporary(
 
 
 def run_atomic_writer(arguments: list[str]) -> int:
-    if len(arguments) not in (3, 5):
+    if len(arguments) != 3:
         print("invalid atomic-writer arguments", file=sys.stderr)
         return PRETEST_INFRASTRUCTURE_FAILURE
     try:
@@ -6670,16 +7319,7 @@ def run_atomic_writer(arguments: list[str]) -> int:
         if os.path.normpath(arguments[2]) != arguments[2]:
             raise OSError("invalid atomic temporary path")
         content = sys.stdin.buffer.read()
-        if len(arguments) == 3:
-            write_direct_atomic_temporary(path, temporary, content)
-        else:
-            write_inherited_atomic_temporary(
-                path,
-                temporary,
-                int(arguments[3]),
-                int(arguments[4]),
-                content,
-            )
+        write_direct_atomic_temporary(path, temporary, content)
     except (OSError, ValueError) as error:
         report_stderr_error(error)
         return PRETEST_INFRASTRUCTURE_FAILURE
@@ -6691,15 +7331,11 @@ def main() -> int:
         return run_contained_child(sys.argv[1:])
     if sys.argv[1:2] == [DIRECT_CHILD_ARGUMENT]:
         return run_direct_child(sys.argv[1:])
-    if sys.argv[1:2] == [DIRECT_TARGET_ARGUMENT]:
-        return run_direct_target(sys.argv[1:])
-    if sys.argv[1:2] == [EVIDENCE_WRITER_ARGUMENT]:
-        return run_evidence_writer(sys.argv[1:])
     if sys.argv[1:2] == [ATOMIC_WRITER_ARGUMENT]:
         return run_atomic_writer(sys.argv[1:])
-    if sys.argv[1:2] == [DIRECTORY_SYNC_ARGUMENT]:
-        return run_directory_sync(sys.argv[1:])
-    return run(parse_args())
+    # The child modes above keep the default SIGTERM action, and exec resets
+    # the runner's handler in every child.
+    return run_with_sigterm_cleanup(parse_args())
 
 
 if __name__ == "__main__":

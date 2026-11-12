@@ -123,15 +123,19 @@ struct LogoutRevocationTests {
         let tokens = tokenPair(access: "non-blocking")
         let store = MemoryLogoutRevocationStore()
         let session = BlockingLogoutSession(tokens: tokens)
-        let controller = SessionRevocationController(session: session, store: store)
+        // The retry delay outlasts the checkpoint deadline, so only the pass
+        // that finishes the revocation can remove the obligation in time.
+        let controller = SessionRevocationController(session: session, store: store, retryDelay: .seconds(3_600))
 
         try await controller.signOut()
 
-        await session.waitUntilRevocationBlocked()
+        // Checkpoints, not Task.yield budgets: under load the retry task can
+        // reach the revocation, and the removal after it, late (R54-AP04b).
+        try #require(await session.waitUntilRevocationBlocked())
         #expect(await session.isRevocationBlocked)
         #expect(try store.load().count == 1)
         await session.releaseRevocation()
-        for _ in 0..<100 where try !store.load().isEmpty { await Task.yield() }
+        #expect(await store.obligationRemoved.waitUntilReached())
         #expect(try store.load().isEmpty)
     }
 
@@ -162,18 +166,18 @@ struct LogoutRevocationTests {
         // semaphore-blocked thread that wedges the whole runner.
         defer { security.resumeRead() }
 
+        // Await checkpoints, not a Task.yield budget: under load a detached
+        // task can start after any fixed number of yields (R54-AP04).
         let removal = Task.detached { try removalStore.remove(id: first.id) }
-        for _ in 0..<1_000 where !security.isReadPaused { await Task.yield() }
-        #expect(security.isReadPaused)
+        #expect(await security.readPaused.waitUntilReached())
         let append = Task.detached {
-            security.markAppendStarted()
+            security.appendStarted.reach()
             try appendStore.append(second)
         }
-        for _ in 0..<1_000 where !security.hasAppendStarted { await Task.yield() }
-        try #require(security.hasAppendStarted)
-        for _ in 0..<1_000 where security.readCount == readsBeforeOverlap + 1 {
-            await Task.yield()
-        }
+        try #require(await security.appendStarted.waitUntilReached())
+        // An unserialized append reads while the removal's read is parked.
+        // A serialized append stays blocked for the whole window.
+        _ = await security.readDuringPause.waitUntilReached(within: 0.1)
         let serializedAcrossInstances = security.readCount == readsBeforeOverlap + 1
         security.resumeRead()
         try await removal.value
@@ -551,6 +555,7 @@ private struct LegacyLogoutRevocationObligation: Codable {
 
 private final class MemoryLogoutRevocationStore: LogoutRevocationStoring, @unchecked Sendable {
     let failAppend = LockedTestValue(false)
+    let obligationRemoved = InterleavingCheckpoint()
     private let lock = NSLock()
     private var storage: [LogoutRevocationObligation]
     private let events: EventLog?
@@ -570,7 +575,10 @@ private final class MemoryLogoutRevocationStore: LogoutRevocationStoring, @unche
             storage[index] = obligation
         }
     }
-    func remove(id: UUID) throws { lock.withLock { storage.removeAll { $0.id == id } } }
+    func remove(id: UUID) throws {
+        lock.withLock { storage.removeAll { $0.id == id } }
+        obligationRemoved.reach()
+    }
 }
 
 private enum RevocationStoreReadError: LocalizedError, Sendable {
@@ -626,6 +634,7 @@ private final class ControllableReadLogoutRevocationStore: LogoutRevocationStori
 
 private actor BlockingLogoutSession: LogoutRevoking, LogoutSessionDetaching {
     private let tokens: TokenPair
+    private let revocationBlocked = InterleavingCheckpoint()
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var isRevocationBlocked = false
 
@@ -641,7 +650,10 @@ private actor BlockingLogoutSession: LogoutRevoking, LogoutSessionDetaching {
 
     func revoke(_ obligation: LogoutRevocationObligation) async -> LogoutRevocationResult {
         isRevocationBlocked = true
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation {
+            continuation = $0
+            revocationBlocked.reach()
+        }
         isRevocationBlocked = false
         return .revoked
     }
@@ -651,9 +663,11 @@ private actor BlockingLogoutSession: LogoutRevoking, LogoutSessionDetaching {
         continuation = nil
     }
 
-    func waitUntilRevocationBlocked() async {
-        // Bounded: a starved runner must fail this test, never hang it.
-        for _ in 0..<100_000 where !isRevocationBlocked { await Task.yield() }
+    /// Bounded by the checkpoint deadline: a starved runner must fail this
+    /// test, never hang it. Reached only once the continuation is stored,
+    /// so a release that follows always finds it.
+    nonisolated func waitUntilRevocationBlocked() async -> Bool {
+        await revocationBlocked.waitUntilReached()
     }
 }
 
@@ -701,33 +715,54 @@ private actor StoreObservingLogoutRevoker: LogoutRevoking {
     }
 }
 
+/// A step that detached work reaches. Tests await it against a wall-clock
+/// deadline because a Task.yield budget runs out whenever the detached task
+/// starts late under load (R54-AP04).
+private final class InterleavingCheckpoint: Sendable {
+    private let reached = DispatchSemaphore(value: 0)
+
+    func reach() { reached.signal() }
+
+    /// Parks on a GCD thread so the wait never holds a cooperative-pool
+    /// thread that the detached work needs in order to start.
+    func waitUntilReached(within seconds: TimeInterval = 10) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { [reached] in
+                continuation.resume(returning: reached.wait(timeout: .now() + seconds) == .success)
+            }
+        }
+    }
+}
+
 private final class InterleavingKeychainSecurity: KeychainSecurityOperating, @unchecked Sendable {
+    let readPaused = InterleavingCheckpoint()
+    let appendStarted = InterleavingCheckpoint()
+    let readDuringPause = InterleavingCheckpoint()
     private let lock = NSLock()
     private let readResume = DispatchSemaphore(value: 0)
     private var data: Data?
     private var shouldPauseRead = false
     private var readIsPaused = false
     private var copies = 0
-    private var appendStarted = false
 
     func pauseNextRead() { lock.withLock { shouldPauseRead = true } }
-    var isReadPaused: Bool { lock.withLock { readIsPaused } }
     var readCount: Int { lock.withLock { copies } }
-    var hasAppendStarted: Bool { lock.withLock { appendStarted } }
-    func markAppendStarted() { lock.withLock { appendStarted = true } }
     func resumeRead() { readResume.signal() }
 
     func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?) {
         let snapshot: Data?
         let pause: Bool
-        (snapshot, pause) = lock.withLock {
+        let overlapsPausedRead: Bool
+        (snapshot, pause, overlapsPausedRead) = lock.withLock {
             copies += 1
             let pause = shouldPauseRead
             shouldPauseRead = false
-            return (data, pause)
+            return (data, pause, readIsPaused)
         }
+        if overlapsPausedRead { readDuringPause.reach() }
         if pause {
             lock.withLock { readIsPaused = true }
+            readPaused.reach()
             readResume.wait()
             lock.withLock { readIsPaused = false }
         }

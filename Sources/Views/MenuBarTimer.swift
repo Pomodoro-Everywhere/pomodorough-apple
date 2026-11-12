@@ -83,7 +83,8 @@ struct MenuBarTimerLabel: View {
 }
 
 struct MenuBarTimerPicker: View {
-    @AppStorage(MenuBarTimerDisplay.defaultsKey) private var display = MenuBarTimerDisplay.current
+    @AppStorage(MenuBarTimerDisplay.defaultsKey, store: DefaultStorageLocation.defaults)
+    private var display = MenuBarTimerDisplay.current
 
     var body: some View {
         Picker("Menu bar display", selection: $display) {

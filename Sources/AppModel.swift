@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 import OSLog
+#if os(macOS)
+import AppKit
+#endif
 
 private enum AccountDeletionPurgeState: String {
     case prepared
@@ -99,7 +102,7 @@ struct SyncFailureDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDia
 
 // R50-AP01: bounded account-switch confirm outcome. Counts only, no
 // account IDs, titles, credentials, or payloads.
-struct AccountSwitchConfirmDiagnostics: Error, LocalizedError, Sendable {
+struct AccountSwitchConfirmDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Outcome: String, Sendable { case failed, uncertain }
     let outcome: Outcome
     let quarantined: Bool
@@ -110,12 +113,14 @@ struct AccountSwitchConfirmDiagnostics: Error, LocalizedError, Sendable {
         "account-switch stage=confirm outcome=\(outcome.rawValue) "
             + "quarantined=\(quarantined) pending=\(pendingOperations)"
     }
+    var diagnosticIdentity: String { "AccountSwitch.confirm" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 // R51-AP02: bounded account-switch cancel stage/outcome. Fixed stage
 // and outcome with quarantine and pending counts only. No titles,
 // account IDs, credentials, file payloads, or transport text.
-struct AccountSwitchCancelDiagnostics: Error, LocalizedError, Sendable {
+struct AccountSwitchCancelDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Stage: String, Sendable { case credentials, persist }
     enum Outcome: String, Sendable { case failed, uncertain }
     let stage: Stage
@@ -128,6 +133,8 @@ struct AccountSwitchCancelDiagnostics: Error, LocalizedError, Sendable {
         "account-switch stage=cancel phase=\(stage.rawValue) outcome=\(outcome.rawValue) "
             + "quarantined=\(quarantined) pending=\(pendingOperations)"
     }
+    var diagnosticIdentity: String { "AccountSwitch.cancel" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 // R51-AP01: bounded sign-out stage/outcome. Fixed stage and outcome
@@ -165,7 +172,7 @@ struct SignOutMutationRefusedDiagnostics: Error, LocalizedError, Sendable, Fixed
 
 // R50-AP02: bounded bootstrap install outcome. Counts only, no timer
 // IDs, titles, account IDs, or response bodies.
-struct BootstrapInstallDiagnostics: Error, LocalizedError, Sendable {
+struct BootstrapInstallDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Outcome: String, Sendable { case failed, uncertain }
     let outcome: Outcome
     let quarantined: Bool
@@ -176,11 +183,13 @@ struct BootstrapInstallDiagnostics: Error, LocalizedError, Sendable {
         "bootstrap stage=install outcome=\(outcome.rawValue) "
             + "quarantined=\(quarantined) pending=\(pendingOperations)"
     }
+    var diagnosticIdentity: String { "Bootstrap.install" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 // R50-AP03: bounded Iroh foreground refresh outcome. Backend and gate
 // transition only, no room IDs, invites, secrets, or timer IDs.
-struct IrohForegroundRefreshDiagnostics: Error, LocalizedError, Sendable {
+struct IrohForegroundRefreshDiagnostics: Error, LocalizedError, Sendable, FixedTaxonomyDiagnostic {
     enum Outcome: String, Sendable { case released, retained }
     let outcome: Outcome
     let backend = "iroh"
@@ -189,6 +198,8 @@ struct IrohForegroundRefreshDiagnostics: Error, LocalizedError, Sendable {
     var errorDescription: String? {
         "foreground backend=\(backend) outcome=\(outcome.rawValue)"
     }
+    var diagnosticIdentity: String { "Iroh.foregroundRefresh" }
+    var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
 }
 
 @MainActor
@@ -272,10 +283,22 @@ final class AppModel {
     private(set) var snapshotLoadFailure: AppStatePersistenceCoordinator.SnapshotLoadFailure?
     private(set) var hasOversizedSavedSyncClaim = false
     var errorMessage: String?
+    /// The Account sheet shows `errorMessage` itself while it is open.
+    var errorAlertHost = ErrorAlertHost.root
+    /// Task deletion waiting out its undo window on the Tasks board. The
+    /// model owns it so that a start or a focus-task selection from any
+    /// surface (menu bar, Watch, widget link) cannot act on the hidden task.
+    /// Its marker lives in the same key-value store as the workspace.
+    @ObservationIgnored private(set) lazy var pendingTaskDeletion = PendingTaskDeletion(
+        markers: TaskDeletionMarkerStore(defaults: defaults)
+    )
+#if os(macOS)
+    @ObservationIgnored private var applicationTerminationObserver: (any NSObjectProtocol)?
+#endif
 
     init(
         api: APIClient = APIClient(),
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = DefaultStorageLocation.defaults,
         accountDeletionJournal: AccountDeletionJournal? = nil,
         durableLocalStore: AtomicDurableFileStore? = nil,
         roomStore: IrohRoomStore = IrohRoomStore(),
@@ -283,7 +306,7 @@ final class AppModel {
         roomServiceFactory: (@MainActor @Sendable (RoomReplicationController.ServiceHandlers) -> any RoomReplicationServing)? = nil,
         alarmScheduler: (any TimerAlarmScheduling)? = nil,
         completionScheduler: TimerCompletionScheduler = TimerCompletionScheduler(),
-        googleIdentityProvider: any GoogleIdentityProviding = SystemGoogleIdentityProvider(),
+        googleIdentityProvider: any GoogleIdentityProviding = GoogleIdentityProviderDefault.resolve(),
         retryDelay: Duration = .seconds(5),
         now: @escaping () -> Date = { .now },
         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -333,7 +356,7 @@ final class AppModel {
         uptime: () -> TimeInterval,
         sharedCoreProvider: @escaping @MainActor () throws -> SharedCore
     ) -> AppModelStartup {
-        let usesProductionStorage = defaults === UserDefaults.standard
+        let usesProductionStorage = defaults === DefaultStorageLocation.defaults
         let journal = accountDeletionJournal ?? (usesProductionStorage
             ? AccountDeletionJournal(fileURL: productionStorageURL("account-deletion-v1.json"))
             : nil)
@@ -393,7 +416,7 @@ final class AppModel {
                 journalLoad = try journal.load()
             } catch {
                 logger.error("loadAccountDeletionRecovery journal load failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .persistence)
                 journalLoad = .corrupt
             }
         } else {
@@ -410,7 +433,7 @@ final class AppModel {
                 topology = try roomStore.accountDeletionTopology()
             } catch {
                 logger.error("loadAccountDeletionRecovery topology failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .persistence)
                 topology = nil
             }
             let record = AccountDeletionJournal.Record(
@@ -430,9 +453,7 @@ final class AppModel {
     }
 
     private static func productionStorageURL(_ name: String) -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Pomodorough", isDirectory: true)
-            .appendingPathComponent(name)
+        DefaultStorageLocation.fileURL(name)
     }
 
     static func resetDefaultDurableStorage() {
@@ -443,7 +464,7 @@ final class AppModel {
                 // DEBUG UI-test reset only: outcome kept (reset continues),
                 // Error-only capture (file error, never workspace content).
                 logger.error("resetDefaultDurableStorage \(name, privacy: .public) failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .persistence)
             }
         }
     }
@@ -946,7 +967,7 @@ final class AppModel {
         if WatchSyncLogDedupe.shouldLog(key: "watch-command-unknown") {
             Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         }
-        SentryCapture.captureOnce(key: "watch-command-unknown", error: diagnostic)
+        SentryCapture.captureOnce(key: "watch-command-unknown", error: diagnostic, operation: .watch)
     }
 
     /// Revision comparison also rejects replays after a successful mutation,
@@ -988,12 +1009,14 @@ final class AppModel {
         if WatchSyncLogDedupe.shouldLog(key: "watch-command-stale-workspace") {
             Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         }
-        SentryCapture.captureOnce(key: "watch-command-stale-workspace", error: diagnostic)
+        SentryCapture.captureOnce(key: "watch-command-stale-workspace", error: diagnostic, operation: .watch)
     }
 
     private func reportWatchPauseRefusal() {
         Self.logger.error("watch pause refused")
-        SentryCapture.captureOnce(key: "watch-command-pause-refused", error: WatchPauseRefusedError())
+        SentryCapture.captureOnce(
+            key: "watch-command-pause-refused", error: WatchPauseRefusedError(), operation: .watch
+        )
         if errorMessage == nil {
             errorMessage = String(localized: "Watch Pause not applied.")
         }
@@ -1027,7 +1050,9 @@ final class AppModel {
 
     private func reportWatchStartRefusal() {
         Self.logger.error("watch start refused")
-        SentryCapture.captureOnce(key: "watch-command-start-refused", error: WatchStartRefusedError())
+        SentryCapture.captureOnce(
+            key: "watch-command-start-refused", error: WatchStartRefusedError(), operation: .watch
+        )
         if errorMessage == nil {
             errorMessage = String(localized: "Watch Start not applied.")
         }
@@ -1035,7 +1060,9 @@ final class AppModel {
 
     private func reportWatchResumeRefusal() {
         Self.logger.error("watch resume refused")
-        SentryCapture.captureOnce(key: "watch-command-resume-refused", error: WatchResumeRefusedError())
+        SentryCapture.captureOnce(
+            key: "watch-command-resume-refused", error: WatchResumeRefusedError(), operation: .watch
+        )
         if errorMessage == nil {
             errorMessage = String(localized: "Watch Resume not applied.")
         }
@@ -1043,7 +1070,9 @@ final class AppModel {
 
     private func reportWatchFinishRefusal() {
         Self.logger.error("watch finish refused")
-        SentryCapture.captureOnce(key: "watch-command-finish-refused", error: WatchFinishRefusedError())
+        SentryCapture.captureOnce(
+            key: "watch-command-finish-refused", error: WatchFinishRefusedError(), operation: .watch
+        )
         if errorMessage == nil {
             errorMessage = String(localized: "Watch Finish not applied.")
         }
@@ -1065,6 +1094,10 @@ final class AppModel {
             refuseWorkspaceMutationDuringSignOut()
             return false
         }
+        guard !FocusTask.isBlankDraft(title) else {
+            Self.logger.info("addTask refused a blank draft")
+            return false
+        }
         let task: FocusTask
         do {
             let core = try taskIdentityCore ?? taskIdentityCoreProvider()
@@ -1079,21 +1112,155 @@ final class AppModel {
             }
         } catch {
             Self.logger.error("addTask failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
-            errorMessage = error.localizedDescription
+            SentryCapture.capture(error, operation: .mutation)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .addTask)
             return false
         }
         guard !tasks.contains(where: { $0.id == task.id }) else { return true }
         return enqueueTaskOperation(.upsert, task: task)
     }
 
-    func deleteTask(id: UUID) {
+    /// Returns whether the deletion is complete: the delete was written, or
+    /// the task is already gone. A blocked workspace or a refused delete
+    /// returns false.
+    @discardableResult
+    func deleteTask(id: UUID) -> Bool {
         guard !isWorkspaceMutationBlocked else {
             refuseWorkspaceMutationDuringSignOut()
+            return false
+        }
+        guard let task = tasks.first(where: { $0.id == id }) else { return true }
+        return enqueueTaskOperation(.delete, task: task)
+    }
+
+    /// Hides the task behind the undo window and writes its durable marker.
+    /// A workspace that refuses changes opens no window: the row stays and
+    /// the person is told the task was not deleted.
+    @discardableResult
+    func requestTaskDeletion(id: UUID, title: String) -> Bool {
+        guard !isWorkspaceMutationBlocked else {
+            Self.logger.info("task deletion refused: the workspace does not accept changes now")
+            refuseWorkspaceMutationDuringSignOut()
+            if errorMessage == nil {
+                errorMessage = String(localized: "The task was not deleted. Changes are paused right now.")
+            }
+            return false
+        }
+        pendingTaskDeletion.request(id: id, title: title, workspace: taskDeletionWorkspace) { [weak self] id in
+            self?.commitTaskDeletion(id: id, title: title) ?? false
+        }
+        return true
+    }
+
+    /// Writes the delete when the undo window ends. A refused delete shows
+    /// the task again with the reason; the window's caller decides whether
+    /// the marker stays for a replay.
+    private func commitTaskDeletion(id: UUID, title: String) -> Bool {
+        guard deleteTask(id: id) else {
+            Self.logger.error("task deletion not written when the undo window ended")
+            errorMessage = String(localized: "Could not delete “\(title)”. The task is back in your list.")
+            return false
+        }
+        return true
+    }
+
+    /// The workspace a task deletion belongs to: the active room in iroh
+    /// mode, otherwise the signed-in account, otherwise the signed-out
+    /// local workspace, at the current workspace generation.
+    private var taskDeletionWorkspace: TaskDeletionWorkspace {
+        let owner = if replicationMode == .iroh, let roomID = activeRoom?.roomID {
+            "room:\(roomID)"
+        } else {
+            TaskDeletionWorkspace.owner(accountID: timerState.cachedUser?.id)
+        }
+        return TaskDeletionWorkspace(owner: owner, generation: watchWorkspaceGeneration)
+    }
+
+    /// Finishes a deletion whose undo window ended without a written
+    /// delete: the process stopped inside the window, or the delete failed
+    /// while the scene left the foreground. Fails closed: a marker for
+    /// another workspace or generation, or for a task that no longer exists,
+    /// deletes nothing and is dropped. A blocked workspace keeps the marker.
+    private func replayTaskDeletionMarker() {
+        guard pendingTaskDeletion.entry == nil,
+              let marker = pendingTaskDeletion.marker,
+              !isWorkspaceMutationBlocked else { return }
+        guard marker.workspace == taskDeletionWorkspace,
+              tasks.contains(where: { $0.id == marker.taskID }) else {
+            Self.logger.info("task deletion marker dropped: its workspace or task is gone")
+            pendingTaskDeletion.clearMarker()
             return
         }
-        guard let task = tasks.first(where: { $0.id == id }) else { return }
-        _ = enqueueTaskOperation(.delete, task: task)
+        guard deleteTask(id: marker.taskID) else {
+            errorMessage = String(localized: "A task you deleted could not be removed yet. Pomodorough will try again the next time it opens.")
+            return
+        }
+        pendingTaskDeletion.clearMarker()
+    }
+
+    /// Ends the undo window when the scene moves to the background or the
+    /// app quits. A delete that fails here opens no alert: the marker stays,
+    /// and the next foreground or start replays it and tells the person if
+    /// it fails again.
+    func completeTaskDeletionLeavingForeground() {
+        let shownMessage = errorMessage
+        guard !pendingTaskDeletion.flushLeavingForeground() else { return }
+        errorMessage = shownMessage
+        Self.logger.error("task deletion not written while leaving the foreground; marker kept for replay")
+    }
+
+#if os(macOS)
+    /// Quitting does not reliably change the scene phase first, and a Mac
+    /// app can quit with no window open, so no view may own this. The app
+    /// registers the model once at launch; leaving the foreground otherwise
+    /// goes through `setSceneActive(_:)`. AppKit posts the notification on
+    /// the main thread, and a nil queue runs the block there synchronously,
+    /// before the process exits.
+    func observeApplicationTermination(on center: NotificationCenter = .default) {
+        if let applicationTerminationObserver {
+            center.removeObserver(applicationTerminationObserver)
+        }
+        applicationTerminationObserver = center.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.completeTaskDeletionLeavingForeground() }
+        }
+    }
+#endif
+
+    /// Renames a projected task through Core's atomic rename plan. Blank
+    /// titles and titles whose normalized identity equals the current task
+    /// return without queuing a mutation.
+    @discardableResult
+    func renameTask(id: UUID, title: String) async -> Bool {
+        guard !isWorkspaceMutationBlocked else {
+            refuseWorkspaceMutationDuringSignOut()
+            return false
+        }
+        guard let task = tasks.first(where: { $0.id == id }) else { return false }
+        guard !FocusTask.isBlankDraft(title) else { return false }
+        let renamed: FocusTask
+        do {
+            let core = try taskIdentityCore ?? taskIdentityCoreProvider()
+            taskIdentityCore = core
+            renamed = try core.dispatch(
+                "task.identity.v1",
+                inputJSON: JSONEncoder.api.encode(["title": title]),
+                as: FocusTask.self
+            )
+            guard renamed.isValid else {
+                throw SharedCoreError.invalidResponse("task identity is inconsistent")
+            }
+        } catch {
+            Self.logger.error("renameTask failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
+            SentryCapture.capture(error, operation: .mutation)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .renameTask)
+            return false
+        }
+        guard renamed.id != task.id else { return true }
+        return performWorkspaceMutation(.renameTask(task, renamed.title))
     }
 
     func task(forTimerID timerID: String) -> FocusTask? {
@@ -1150,6 +1317,9 @@ final class AppModel {
 
     func restore() async {
         guard snapshotLoadFailure == nil else { return }
+        // The saved workspace is ready here; finish a deletion the last
+        // process left open before the account session can replace it.
+        replayTaskDeletionMarker()
         if accountDeletionPurgeState != nil {
             await resumeAccountDeletion()
             return
@@ -1173,7 +1343,7 @@ final class AppModel {
             try await alarmScheduler.requestAuthorization()
         } catch {
             Self.logger.error("allowTimerAlerts failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .timer)
         }
         completePermissionIntroduction()
     }
@@ -1188,6 +1358,10 @@ final class AppModel {
             errorMessage = String(localized: "Finish account deletion cleanup before signing in.")
             return
         }
+        // A sign-in can switch accounts; the deletion belongs to the
+        // workspace the person deleted it from. A refused delete stops the
+        // sign-in so its sentence stays visible.
+        guard pendingTaskDeletion.flush() else { return }
         let transition = accountSessionCoordinator.beginSignIn(
             isWorking: isWorking
         )
@@ -1206,7 +1380,7 @@ final class AppModel {
                 platform: Self.platform
             )
             switch applyCoordinatorTransition(authentication) {
-            case .stale:
+            case .stale, .cancelled:
                 return
             case .authenticated(let user, let operation):
                 await completeAuthenticatedSession(
@@ -1220,6 +1394,7 @@ final class AppModel {
     }
 
     func confirmAccountSwitch() async {
+        guard pendingTaskDeletion.flush() else { return }
         guard let proposed = accountSessionCoordinator.confirmAccountSwitch(
             state: timerState,
             authenticatedUser: user
@@ -1262,7 +1437,7 @@ final class AppModel {
             pendingOperations: pendingChangeCount
         )
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .account)
     }
 
     func cancelAccountSwitch() async {
@@ -1306,14 +1481,19 @@ final class AppModel {
             pendingOperations: pendingChangeCount
         )
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .account)
     }
 
     func signOut() {
         guard snapshotLoadFailure == nil, !isWorking else { return }
+        // Before the sign-out fence: the fence refuses every workspace
+        // mutation, the delete included. A refused delete stops the
+        // sign-out, so the person sees why the task is back.
+        guard pendingTaskDeletion.flush() else { return }
         let preservesBootstrapResolution = timerState.cachedUser == nil && timerState.bootstrapUser != nil
         isWorking = true
         isSignOutTransitionActive = true
+        roomReplicationController.revokeTransitions()
         Task {
             await persistLogoutThenReset(
                 preservesBootstrapResolution: preservesBootstrapResolution
@@ -1324,31 +1504,56 @@ final class AppModel {
     private func persistLogoutThenReset(
         preservesBootstrapResolution: Bool
     ) async {
-        defer {
-            isSignOutTransitionActive = false
-            isWorking = false
-        }
+        let detached = await detachAccountThenReset(
+            preservesBootstrapResolution: preservesBootstrapResolution
+        )
+        isSignOutTransitionActive = false
+        isWorking = false
+        resumeWorkspaceAfterSignOut(detached: detached)
+    }
+
+    // Returns true once credentials are detached. Every false return keeps
+    // the account workspace.
+    private func detachAccountThenReset(
+        preservesBootstrapResolution: Bool
+    ) async -> Bool {
         errorMessage = nil
         guard prepareSignedOutReturnState(preservesBootstrapResolution: preservesBootstrapResolution) else {
-            return
+            return false
         }
         await quiesceCentralizedSyncForSignOut()
         let previous = timerState
         let proposal = signedOutProposal(preservesBootstrapResolution: preservesBootstrapResolution)
         guard precommitSignedOutSnapshot(previous: previous, proposed: proposal.state) else {
-            return
+            return false
         }
         if let failure = await accountSessionCoordinator.logout() {
             restoreAccountSnapshotAfterDetachFailure()
             reportSignOutFailure(stage: .credentials)
             errorMessage = failure
-            return
+            return false
         }
         finishSignedOutPublication(
             preservesBootstrapResolution: preservesBootstrapResolution,
             proposal: proposal,
             previousTimerID: canonicalTimer?.id
         )
+        return true
+    }
+
+    // R54-AP03/AP05: sign-out quiescence cancelled the completion deadline
+    // and centralized streams under the fence. Once the fence is released,
+    // rearm the deadline of whatever workspace this device now holds: the
+    // account workspace after a failed sign-out, or after a successful one
+    // the retained Iroh room or preserved bootstrap workspace, whose running
+    // timer survives sign-out. A fresh signed-out workspace has no timer, so
+    // nothing is armed for it. Streams restart only while credentials remain.
+    // A quarantined snapshot stays fail-closed because both paths refuse
+    // while mutations are blocked.
+    private func resumeWorkspaceAfterSignOut(detached: Bool) {
+        reconcileTimerCompletion()
+        guard !detached else { return }
+        roomReplicationController.resumeCentralizedStreamsIfEligible()
     }
 
     private func signedOutProposal(
@@ -1398,7 +1603,7 @@ final class AppModel {
             pendingOperations: pendingChangeCount
         )
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .account)
     }
 
     // R52-AP02: reports a domain mutation refused while the sign-out
@@ -1407,7 +1612,7 @@ final class AppModel {
         guard isSignOutTransitionActive else { return }
         let diagnostic = SignOutMutationRefusedDiagnostics(pendingOperations: pendingChangeCount)
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .account)
         if errorMessage == nil {
             errorMessage = String(localized: "Sign-out is in progress. Changes are paused until it finishes.")
         }
@@ -1439,7 +1644,9 @@ final class AppModel {
         applyAccountReset(transition)
         timerState = proposal.state
         if proposal.rebuildsProjection { rebuildOptimisticState() }
-        if !preservesBootstrapResolution, let timerID = previousTimerID {
+        // R54-AP05: only a timer that left with the account workspace loses
+        // its alarm. An Iroh sign-out keeps the room and its running timer.
+        if !preservesBootstrapResolution, let timerID = previousTimerID, canonicalTimer?.id != timerID {
             cancelAlarm(timerID: timerID)
         }
         guard persist() else {
@@ -1479,7 +1686,7 @@ final class AppModel {
             } catch {
                 reportSignOutFailure(stage: .roomSnapshot)
                 Self.logger.error("prepareSignedOutReturnState return-state failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.captureOnce(key: "sign-out-return-state", error: error)
+                SentryCapture.captureOnce(key: "sign-out-return-state", error: error, operation: .persistence)
                 errorMessage = String(localized: "Sign-out paused because its recovery state could not be saved.")
                 return false
             }
@@ -1506,6 +1713,7 @@ final class AppModel {
 
     func deleteAccount(confirmation: String) async {
         guard confirmation == "DELETE", isSignedIn, !isWorking else { return }
+        guard pendingTaskDeletion.flush() else { return }
         isWorking = true
         errorMessage = nil
         defer { isWorking = false }
@@ -1514,7 +1722,7 @@ final class AppModel {
             topology = try roomStore.accountDeletionTopology()
         } catch {
             Self.logger.error("deleteAccount topology failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             topology = nil
         }
         guard let topology,
@@ -1561,7 +1769,7 @@ final class AppModel {
                 discovered = try roomStore.accountDeletionTopology()
             } catch {
                 Self.logger.error("resumeAccountDeletion topology failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .persistence)
                 errorMessage = String(localized: "Account deletion paused because its recovery state could not be saved.")
                 return
             }
@@ -1621,7 +1829,7 @@ final class AppModel {
             )
         } catch {
             Self.logger.error("purgeAccountData failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             quarantineAccountDeletion()
             errorMessage = String(localized: "Account deletion was confirmed; use Retry account deletion to continue room cleanup.")
             return
@@ -1640,13 +1848,19 @@ final class AppModel {
         defaults.set(ReplicationMode.offline.rawValue, forKey: Self.replicationModeKey)
         guard defaults.string(forKey: Self.replicationModeKey) == ReplicationMode.offline.rawValue else {
             Self.logger.error("completeAccountDeletionOfflineReset replication-mode write failed")
-            SentryCapture.captureOnce(key: "account-deletion-offline-mode", error: AccountDeletionDurableWriteError(step: "replication-mode"))
+            SentryCapture.captureOnce(
+                key: "account-deletion-offline-mode",
+                error: AccountDeletionDurableWriteError(step: "replication-mode"), operation: .persistence
+            )
             errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
             return false
         }
         guard clearAccountDeletionRoomIDs() else {
             Self.logger.error("completeAccountDeletionOfflineReset room-ids clear failed")
-            SentryCapture.captureOnce(key: "account-deletion-room-ids", error: AccountDeletionDurableWriteError(step: "room-ids"))
+            SentryCapture.captureOnce(
+                key: "account-deletion-room-ids",
+                error: AccountDeletionDurableWriteError(step: "room-ids"), operation: .persistence
+            )
             errorMessage = String(localized: "Account data was removed; use Retry account deletion to continue room cleanup.")
             return false
         }
@@ -1657,7 +1871,10 @@ final class AppModel {
         rebuildOptimisticState()
         guard clearAccountDeletionState() else {
             Self.logger.error("completeAccountDeletionOfflineReset deletion-state clear failed")
-            SentryCapture.captureOnce(key: "account-deletion-state", error: AccountDeletionDurableWriteError(step: "deletion-state"))
+            SentryCapture.captureOnce(
+                key: "account-deletion-state",
+                error: AccountDeletionDurableWriteError(step: "deletion-state"), operation: .persistence
+            )
             errorMessage = String(localized: "Local cleanup completed; use Retry account deletion to continue recovery-state cleanup.")
             return false
         }
@@ -1729,7 +1946,7 @@ final class AppModel {
             prior = try journal.load()
         } catch {
             Self.logger.error("reconcileJournalSave load failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             return (.unknown, false)
         }
         if case .record(let priorRecord) = prior,
@@ -1743,7 +1960,7 @@ final class AppModel {
             completedWithoutError = true
         } catch {
             Self.logger.error("reconcileJournalSave failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             completedWithoutError = false
         }
         let current: AccountDeletionJournal.LoadResult
@@ -1751,7 +1968,7 @@ final class AppModel {
             current = try journal.load()
         } catch {
             Self.logger.error("reconcileJournalSave verify-load failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             return (.unknown, completedWithoutError)
         }
         if case .record(let observed) = current,
@@ -1800,7 +2017,7 @@ final class AppModel {
                 return true
             } catch {
                 Self.logger.error("clearAccountDeletionState failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .persistence)
                 return false
             }
         }
@@ -1816,7 +2033,7 @@ final class AppModel {
             data = try JSONEncoder().encode(roomIDs.sorted())
         } catch {
             Self.logger.error("persistAccountDeletionRoomIDs encode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             return false
         }
         defaults.set(data, forKey: Self.accountDeletionRoomIDsKey)
@@ -1830,7 +2047,7 @@ final class AppModel {
             return try JSONDecoder().decode([String].self, from: data)
         } catch {
             Self.logger.error("accountDeletionRoomIDs decode failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             return nil
         }
     }
@@ -2124,8 +2341,8 @@ final class AppModel {
             }
         } catch {
             Self.logger.error("completeIrohTimerIfNeeded failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
-            errorMessage = error.localizedDescription
+            SentryCapture.capture(error, operation: .timer)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeTimer)
             retryAutomaticCompletion(timer: timer, at: date)
         }
     }
@@ -2502,7 +2719,7 @@ final class AppModel {
         guard syncFailureDiagnosticBudget.record(diagnostic) else { return }
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         guard diagnostic.warrantsCapture else { return }
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .sync)
     }
 
     private func shouldRestorePreSendClaim(for error: Error) -> Bool {
@@ -2528,7 +2745,8 @@ final class AppModel {
             errorMessage = nil
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            Self.logger.error("recoverOversizedSavedSyncClaim failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
+            errorMessage = UserFacingFailure.sentence(for: error, during: .recoverSavedSyncRequest)
             return false
         }
     }
@@ -2638,7 +2856,7 @@ final class AppModel {
         let diagnostic = IrohForegroundRefreshDiagnostics(outcome: outcome)
         Self.logger.info("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
         guard outcome == .retained else { return }
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .room)
     }
 
     /// S1 OOM relief (POMODOROUGH-37): drops cached WasmKit runtimes after
@@ -2652,6 +2870,12 @@ final class AppModel {
 
     func setSceneActive(_ active: Bool) {
         sceneIsActive = active
+        // The undo window outlasts `.inactive` (Control Center, a system
+        // sheet, the app switcher); it ends at `.background` or quit. A
+        // process killed from the switcher replays the marker here.
+        if active {
+            replayTaskDeletionMarker()
+        }
         guard snapshotLoadFailure == nil else { return }
         guard accountDeletionPurgeState == nil else { return }
         if !active {
@@ -2674,6 +2898,7 @@ final class AppModel {
             }
             return
         }
+        guard admitsWorkspaceOwnershipChange() else { return }
         errorMessage = nil
         roomInvite = nil
         suspendTimerCompletion()
@@ -2683,7 +2908,7 @@ final class AppModel {
         )
         resumeTimerCompletion()
         guard case .modeChanged(let target, let state) = transition else {
-            if case .failed(let message) = transition { errorMessage = message }
+            presentFailedRoomTransition(transition)
             return
         }
         replicationMode = target
@@ -2706,6 +2931,7 @@ final class AppModel {
     func createIrohRoom(name rawName: String) async -> Bool {
         guard snapshotLoadFailure == nil else { return false }
         guard accountDeletionPurgeState == nil else { return false }
+        guard admitsWorkspaceOwnershipChange() else { return false }
         suspendTimerCompletion()
         let transition = await roomReplicationController.createRoom(
             name: rawName,
@@ -2713,7 +2939,7 @@ final class AppModel {
         )
         resumeTimerCompletion()
         guard case .roomCreated(let state, let invite, let status) = transition else {
-            if case .failed(let message) = transition { errorMessage = message }
+            presentFailedRoomTransition(transition)
             return false
         }
         replicationMode = .iroh
@@ -2727,7 +2953,7 @@ final class AppModel {
 
     private func irohGenesis() -> IrohGenesis {
         IrohGenesis(
-            canonicalTimer: canonicalTimer,
+            canonicalTimer: irohGenesisTimer(),
             history: history,
             tasks: tasks,
             durationsMs: timerState.canonicalDurations(),
@@ -2736,6 +2962,22 @@ final class AppModel {
             hlcWallMs: timerState.hlcWallMs,
             hlcCounter: timerState.hlcCounter
         )
+    }
+
+    /// The genesis timer in the clock of the genesis history. A terminal
+    /// timer restored from the stored state is published in the physical
+    /// clock, while its history row keeps trusted (server) time. Core 0.56
+    /// pairs the two only when anchorAt equals the row's end exactly
+    /// (`workspace::validate_pair`), so the genesis takes the stored timer.
+    /// A terminal timer built from a pending command already carries the
+    /// command's trusted time and is kept as published.
+    private func irohGenesisTimer() -> CanonicalTimer? {
+        guard let published = canonicalTimer,
+              history.contains(where: { $0.timerId == published.id }),
+              let stored = timerState.canonicalTimer,
+              stored.id == published.id,
+              stored.status == published.status else { return canonicalTimer }
+        return stored
     }
 
     private static func emptyIrohGenesis(from state: PersistedTimerState) -> IrohGenesis {
@@ -2764,6 +3006,7 @@ final class AppModel {
     func joinIrohRoom(inviteText: String) async -> Bool {
         guard snapshotLoadFailure == nil else { return false }
         guard accountDeletionPurgeState == nil else { return false }
+        guard admitsWorkspaceOwnershipChange() else { return false }
         suspendTimerCompletion()
         let transition = await roomReplicationController.joinRoom(
             inviteText: inviteText,
@@ -2771,7 +3014,7 @@ final class AppModel {
         )
         resumeTimerCompletion()
         guard case .roomJoined(let state) = transition else {
-            if case .failed(let message) = transition { errorMessage = message }
+            presentFailedRoomTransition(transition)
             return false
         }
         replicationMode = .iroh
@@ -2800,6 +3043,7 @@ final class AppModel {
               isIrohRoomLeaveConfirmationPresented,
               !isLeavingIrohRoom else { return }
         isIrohRoomLeaveConfirmationPresented = false
+        guard admitsWorkspaceOwnershipChange() else { return }
         isLeavingIrohRoom = true
         suspendTimerCompletion()
         defer { isLeavingIrohRoom = false }
@@ -2808,7 +3052,7 @@ final class AppModel {
         )
         resumeTimerCompletion()
         guard case .roomLeft(let state) = transition else {
-            if case .failed(let message) = transition { errorMessage = message }
+            presentFailedRoomTransition(transition)
             return
         }
         replicationMode = .offline
@@ -2818,6 +3062,32 @@ final class AppModel {
         guard persist() else {
             errorMessage = conflictMessage
             return
+        }
+    }
+
+    // R54-AP01: mode and room transitions replace the workspace this
+    // device owns. Sign-out owns it until it finishes, so they are refused
+    // through the sign-out refusal path. Only the sign-out fence is checked,
+    // not isWorkspaceMutationBlocked: callers refuse load failure and
+    // deletion purge with their own guards, and history resolution or a
+    // pending account switch is not sign-out, so it keeps the behaviour
+    // these transitions had before the fence and must not surface the
+    // sign-out refusal or its breadcrumb. Transitions already suspended
+    // when sign-out starts are fenced by the controller's transition lease.
+    // An open undo window belongs to the workspace being replaced, so its
+    // delete is written first; a refused delete refuses the transition and
+    // keeps its sentence.
+    private func admitsWorkspaceOwnershipChange() -> Bool {
+        guard isSignOutTransitionActive else { return pendingTaskDeletion.flush() }
+        refuseWorkspaceMutationDuringSignOut()
+        return false
+    }
+
+    private func presentFailedRoomTransition(_ transition: RoomReplicationTransition) {
+        switch transition {
+        case .failed(let message): errorMessage = message
+        case .ownershipRevoked: refuseWorkspaceMutationDuringSignOut()
+        default: return
         }
     }
 
@@ -2855,7 +3125,7 @@ final class AppModel {
             )
         } catch {
             Self.logger.error("nextBreakPhase fallback: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .timer)
             return timerState.settings.selectedPhase
         }
     }
@@ -2902,10 +3172,49 @@ final class AppModel {
         )
     }
 
+    /// A task hidden by an open undo window must not gain a selection or a
+    /// timer. The deletion is committed first, through the same path the
+    /// end of the window uses, and the intent then sees the task as gone.
+    private func endTaskDeletionUndoWindow(
+        before intent: SynchronizedWorkspaceMutationController.Intent
+    ) {
+        guard let hidden = pendingTaskDeletion.entry?.id,
+              self.intent(intent, actsOnTask: hidden) else { return }
+        pendingTaskDeletion.flush()
+    }
+
+    /// Whether `intent` would start, resume, change or select the task the
+    /// undo window hides. Every surface (Tasks board, Timer, menu bar,
+    /// Watch, widget links, automatic starts) reaches the workspace through
+    /// these intents, so this one check guards all of them.
+    private func intent(
+        _ intent: SynchronizedWorkspaceMutationController.Intent,
+        actsOnTask hidden: UUID
+    ) -> Bool {
+        let timerTask = canonicalTimer?.taskId.flatMap(UUID.init(uuidString:))
+        switch intent {
+        case .selectTask(let id):
+            return id == hidden
+        case .startTimer:
+            return projectedSelectedTaskID == hidden
+        case .resumeTimer:
+            return timerTask == hidden
+        case .task(_, let task), .renameTask(let task, _):
+            return task.id == hidden
+        case .command(let command):
+            let commandTask = command.taskID.flatMap(UUID.init(uuidString:))
+            return commandTask == hidden || (command.type == .resume && timerTask == hidden)
+        case .selectPhase, .setAutoStartBreaks, .setDurationMinutes,
+             .pauseTimer, .cancelTimer, .clearTimer, .commit:
+            return false
+        }
+    }
+
     @discardableResult
     private func performWorkspaceMutation(
         _ intent: SynchronizedWorkspaceMutationController.Intent
     ) -> Bool {
+        endTaskDeletionUndoWindow(before: intent)
         do {
             guard let transition = try workspaceMutationController.plan(
                 intent,
@@ -2925,8 +3234,8 @@ final class AppModel {
             return false
         } catch {
             Self.logger.error("performWorkspaceMutation failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
-            errorMessage = error.localizedDescription
+            SentryCapture.capture(error, operation: .mutation)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeWorkspace)
             return false
         }
     }
@@ -2935,15 +3244,15 @@ final class AppModel {
         switch admission {
         case .coreRejected(let diagnostics):
             Self.logger.error("workspace mutation rejected: \(diagnostics.publicMessage(), privacy: .public)")
-            SentryCapture.capture(admission)
-            errorMessage = diagnostics.publicMessage()
+            SentryCapture.capture(admission, operation: .mutation)
+            errorMessage = UserFacingFailure.sentence(for: admission, during: .changeWorkspace)
         case .invalidCoreResponse(let diagnostics):
             Self.logger.error("workspace mutation invalid Core: \(diagnostics.publicMessage(), privacy: .public)")
-            SentryCapture.capture(admission)
-            errorMessage = diagnostics.publicMessage()
+            SentryCapture.capture(admission, operation: .mutation)
+            errorMessage = UserFacingFailure.sentence(for: admission, during: .changeWorkspace)
         case .ignoredRetarget(let diagnostics):
             Self.logger.error("workspace retarget ignored: \(diagnostics.publicMessage(), privacy: .public)")
-            SentryCapture.capture(admission)
+            SentryCapture.capture(admission, operation: .mutation)
         }
     }
 
@@ -3259,7 +3568,7 @@ final class AppModel {
                 // Alarm failures stay silent: the timer continues in
                 // Pomodorough. Sentry still captures the failure.
                 Self.logger.error("alarmOperation failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .timer)
             }
         }
     }
@@ -3272,9 +3581,9 @@ final class AppModel {
             return true
         } catch {
             Self.logger.error("rebuildOptimisticState failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .projection)
             installUnreducedBaseSnapshot()
-            errorMessage = error.localizedDescription
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeWorkspace)
             return false
         }
     }
@@ -3624,6 +3933,10 @@ final class AppModel {
             reportBootstrapInstallPersistFailure()
             throw AppError.invalidResponse
         }
+        // R54-AP02: the durable install replaced the workspace; rotate before
+        // installPreparedPublication pushes the first post-install snapshot,
+        // so deferred Watch settings from the replaced workspace are stale.
+        rotateWatchWorkspaceGeneration()
         installPreparedPublication(publication)
         applyCoordinatorPublication(accountSessionCoordinator.finishBootstrapResolution())
         errorMessage = nil
@@ -3638,7 +3951,7 @@ final class AppModel {
             pendingOperations: pendingChangeCount
         )
         Self.logger.error("\(DiagnosticPrivacy.publicSummary(diagnostic), privacy: .public)")
-        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic)
+        SentryCapture.captureRecurring(key: diagnostic.key, limit: 3, error: diagnostic, operation: .bootstrap)
     }
 
     private func verifyRestoredSession(
@@ -3664,9 +3977,14 @@ final class AppModel {
         )
     }
 
+    /// A stale 401 changes nothing, the undo window included. A current one
+    /// ends the window first; a refused delete keeps its sentence after the
+    /// expiry sentence, because the reset clears every message.
     private func invalidateUnauthorizedSession(
         operation: AccountLifecycleController.Operation
     ) async {
+        guard accountSessionCoordinator.owns(operation) else { return }
+        let deletionRefusal = pendingTaskDeletion.flush() ? nil : errorMessage
         let preservesBootstrapResolution = timerState.cachedUser == nil && timerState.bootstrapUser != nil
         guard let transition = accountSessionCoordinator.invalidateUnauthorized(
             operation,
@@ -3674,7 +3992,9 @@ final class AppModel {
             pendingStrategy: timerState.pendingBootstrapResolution?.strategy
         ) else { return }
         applyAccountReset(transition)
-        errorMessage = AppError.unauthorized.localizedDescription
+        errorMessage = [AppError.unauthorized.localizedDescription, deletionRefusal]
+            .compactMap { $0 }
+            .joined(separator: " ")
         _ = await accountSessionCoordinator.clearTokens()
     }
 
@@ -3805,8 +4125,8 @@ final class AppModel {
             reportInvalidLocalClock()
         } else {
             Self.logger.error("finish failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.captureOnce(key: "timer-finish-plan", error: error)
-            errorMessage = error.localizedDescription
+            SentryCapture.captureOnce(key: "timer-finish-plan", error: error, operation: .timer)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeTimer)
         }
     }
 
@@ -3815,8 +4135,8 @@ final class AppModel {
             reportInvalidLocalClock()
         } else {
             Self.logger.error("centralized break failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.captureOnce(key: "timer-finish-centralized-break", error: error)
-            errorMessage = error.localizedDescription
+            SentryCapture.captureOnce(key: "timer-finish-centralized-break", error: error, operation: .timer)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeTimer)
         }
     }
 
@@ -3825,8 +4145,8 @@ final class AppModel {
             reportInvalidLocalClock()
         } else {
             Self.logger.error("iroh break failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.captureOnce(key: "timer-finish-iroh-break", error: error)
-            errorMessage = error.localizedDescription
+            SentryCapture.captureOnce(key: "timer-finish-iroh-break", error: error, operation: .timer)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeTimer)
         }
     }
 
@@ -3835,8 +4155,8 @@ final class AppModel {
             reportInvalidLocalClock()
         } else {
             Self.logger.error("completion deadline failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.captureOnce(key: "timer-completion-deadline", error: error)
-            errorMessage = error.localizedDescription
+            SentryCapture.captureOnce(key: "timer-completion-deadline", error: error, operation: .timer)
+            errorMessage = UserFacingFailure.sentence(for: error, during: .changeTimer)
         }
     }
 

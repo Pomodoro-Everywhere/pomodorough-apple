@@ -2,148 +2,175 @@ import Foundation
 import Testing
 @testable import Pomodorough
 
-@Suite("Sign-out durability")
+@Suite("Sign-out durability", .timeLimit(.minutes(1)))
 struct SignOutDurabilityTests {
     @Test @MainActor
     func firstWriteRefusalPreservesAccountFence() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedAccount()
-        let model = try fixture.model()
-        try await fixture.restoreSignedIn(model)
-        let beforeBytes = try fixture.savedBytes()
-        let alarmsBefore = fixture.alarms.operations.count
-        try fixture.permissions(0o500, at: fixture.directory)
-        defer { try? fixture.permissions(0o700, at: fixture.directory) }
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        await model.waitForAlarmOperations()
-        #expect(try fixture.savedBytes() == beforeBytes)
-        #expect(try fixture.savedState().cachedUser?.id == seed.cachedUser?.id)
-        #expect(model.isSignedIn)
-        #expect(model.tasks.count == seed.tasks.count)
-        #expect(fixture.tokens.tokens != nil)
-        #expect(fixture.identity.signOutCount == 0)
-        #expect(fixture.alarms.operations.count == alarmsBefore)
-        #expect(model.errorMessage != nil)
-        #expect(model.snapshotLoadFailure == nil)
-        #expect(fixture.errorHidesAccount(seed: seed, model: model))
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            let beforeBytes = try fixture.savedBytes()
+            let alarmsBefore = fixture.alarms.operations.count
+            try fixture.permissions(0o500, at: fixture.directory)
+            defer { try? fixture.permissions(0o700, at: fixture.directory) }
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            await model.waitForAlarmOperations()
+            #expect(try fixture.savedBytes() == beforeBytes)
+            #expect(try fixture.savedState().cachedUser?.id == seed.cachedUser?.id)
+            #expect(model.isSignedIn)
+            #expect(model.tasks.count == seed.tasks.count)
+            #expect(fixture.tokens.tokens != nil)
+            #expect(fixture.identity.signOutCount == 0)
+            #expect(fixture.alarms.operations.count == alarmsBefore)
+            #expect(model.errorMessage != nil)
+            #expect(model.snapshotLoadFailure == nil)
+            #expect(fixture.errorHidesAccount(seed: seed, model: model))
+        }
     }
 
     @Test @MainActor
     func writableRetryAfterRefusalClearsWorkspace() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedAccount()
-        let model = try fixture.model()
-        try await fixture.restoreSignedIn(model)
-        try fixture.permissions(0o500, at: fixture.directory)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(model.isSignedIn)
-        try fixture.permissions(0o700, at: fixture.directory)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        await model.waitForAlarmOperations()
-        try fixture.expectCleanSignOut(model, seed: seed)
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            try fixture.permissions(0o500, at: fixture.directory)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(model.isSignedIn)
+            try fixture.permissions(0o700, at: fixture.directory)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            await model.waitForAlarmOperations()
+            try fixture.expectCleanSignOut(model, seed: seed)
+        }
     }
 
     @Test @MainActor
     func replacementUncertaintyQuarantinesMutations() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let flag = fixture.directory.appendingPathComponent("signout-replacement-fails")
-        let store = AtomicDurableFileStore(fileURL: fixture.url, afterReplacement: {
-            if FileManager.default.fileExists(atPath: flag.path) { throw POSIXError(.EIO) }
-        })
-        let model = try fixture.model(store: store)
-        try await fixture.restoreSignedIn(model)
-        try Data().write(to: flag)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(model.snapshotLoadFailure != nil)
-        #expect(model.isWorkspaceMutationBlocked)
-        #expect(fixture.tokens.tokens != nil)
-        #expect(fixture.identity.signOutCount == 0)
-        #expect(model.errorMessage != nil)
-        try FileManager.default.removeItem(at: flag)
-        await model.retrySnapshotLoad()
-        #expect(model.snapshotLoadFailure == nil)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(try fixture.savedState().tasks.isEmpty)
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            _ = try fixture.seedAccount()
+            let flag = fixture.directory.appendingPathComponent("signout-replacement-fails")
+            let store = AtomicDurableFileStore(fileURL: fixture.url, afterReplacement: {
+                if FileManager.default.fileExists(atPath: flag.path) { throw POSIXError(.EIO) }
+            })
+            let model = try fixture.model(store: store)
+            try await fixture.restoreSignedIn(model)
+            try Data().write(to: flag)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(model.snapshotLoadFailure != nil)
+            #expect(model.isWorkspaceMutationBlocked)
+            #expect(fixture.tokens.tokens != nil)
+            #expect(fixture.identity.signOutCount == 0)
+            #expect(model.errorMessage != nil)
+            try FileManager.default.removeItem(at: flag)
+            await model.retrySnapshotLoad()
+            #expect(model.snapshotLoadFailure == nil)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(try fixture.savedState().tasks.isEmpty)
+        }
     }
 
     @Test @MainActor
     func writableSignOutClearsBytesStateCredentialsAndAlarms() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedAccount()
-        let model = try fixture.model()
-        try await fixture.restoreSignedIn(model)
-        let timerID = try #require(model.canonicalTimer?.id)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        await model.waitForAlarmOperations()
-        try fixture.expectCleanSignOut(model, seed: seed)
-        #expect(fixture.alarms.operations.contains(.cancel(timerID: timerID)))
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            let timerID = try #require(model.canonicalTimer?.id)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            await model.waitForAlarmOperations()
+            try fixture.expectCleanSignOut(model, seed: seed)
+            #expect(fixture.alarms.operations.contains(.cancel(timerID: timerID)))
+        }
+    }
+
+    // R54-APB13 on the sign-out path. Unlike cancelAccountSwitch(), signOut()
+    // returns before its task appends the logout obligation, so teardown must
+    // wait for the model to go idle before it waits for the drain. The stub
+    // holds the revoke on the scenario's revocation gate, which only that
+    // drain wait opens, so the revoke is in flight when teardown begins.
+    @Test @MainActor
+    func teardownDrainsHeldSignOutRevocationBeforeInvalidatingSession() async throws {
+        let tornDown = try await SignOutDurabilityFixture.run(mode: .offline, revocation: .heldUntilDrained) { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            model.signOut()
+            try #require(await TestFixtures.waitForRequest(in: fixture.scenario, path: "/api/v1/auth/logout"))
+            let pending: [LogoutRevocationObligation] = try fixture.tokens.load()
+            try #require(pending.count == 1)
+        }
+        let leftover: [LogoutRevocationObligation] = try tornDown.tokens.load()
+        // A teardown that invalidates first cancels the held revoke, which
+        // keeps its obligation for a retry. Removing it ends the loop's next
+        // pass on .empty instead of on the invalidated session, so such a
+        // regression fails the expectations below instead of aborting the host.
+        for obligation in leftover { try tornDown.tokens.remove(id: obligation.id) }
+        #expect(leftover.isEmpty)
+        let logoutEvents = TestFixtures.lifecycleEvents(for: tornDown.scenario).filter { $0.hasPrefix("logout ") }
+        #expect(logoutEvents == ["logout response completed", "logout session invalidated"])
     }
 
     @Test @MainActor
     func relaunchWithoutCredentialsExposesNothingAfterSuccess() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedAccount()
-        let model = try fixture.model()
-        try await fixture.restoreSignedIn(model)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        try fixture.expectCleanSignOut(model, seed: seed)
-        let relaunched = try fixture.relaunchedWithoutCredentials()
-        await relaunched.restore()
-        #expect(relaunched.sessionState == .localOnly)
-        #expect(relaunched.tasks.isEmpty)
-        #expect(relaunched.history.isEmpty)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(try fixture.savedState().tasks.isEmpty)
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            try fixture.expectCleanSignOut(model, seed: seed)
+            let relaunched = try fixture.relaunchedWithoutCredentials()
+            await relaunched.restore()
+            #expect(relaunched.sessionState == .localOnly)
+            #expect(relaunched.tasks.isEmpty)
+            #expect(relaunched.history.isEmpty)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(try fixture.savedState().tasks.isEmpty)
+        }
     }
 
     @Test @MainActor
     func signOutDuringSyncClearsWithoutResurrection() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .centralizedWithPendingSync)
-        defer { fixture.cleanup() }
-        _ = try fixture.seed(state: TestFixtures.syncContractState(includesPendingOperations: false))
-        let model = try fixture.model()
-        try await fixture.restoreSignedIn(model)
-        let added = await model.addTask("Sync race task")
-        try #require(added)
-        #expect(model.pendingChangeCount > 0)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        await model.waitForAlarmOperations()
-        #expect(model.sessionState == .localOnly)
-        #expect(model.tasks.isEmpty)
-        #expect(model.pendingChangeCount == 0)
-        #expect(fixture.tokens.tokens == nil)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(try fixture.savedState().pendingTaskOperations.isEmpty)
+        try await SignOutDurabilityFixture.run(mode: .centralizedWithPendingSync) { fixture in
+            _ = try fixture.seed(state: TestFixtures.syncContractState(includesPendingOperations: false))
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            let added = await model.addTask("Sync race task")
+            try #require(added)
+            #expect(model.pendingChangeCount > 0)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            await model.waitForAlarmOperations()
+            #expect(model.sessionState == .localOnly)
+            #expect(model.tasks.isEmpty)
+            #expect(model.pendingChangeCount == 0)
+            #expect(fixture.tokens.tokens == nil)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(try fixture.savedState().pendingTaskOperations.isEmpty)
+        }
     }
 
     @Test @MainActor
     func bootstrapPreservingSignOutKeepsResolution() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedBootstrap()
-        let model = try fixture.model()
-        await model.restore()
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(model.sessionState == .localOnly)
-        #expect(try fixture.savedState().bootstrapUser?.id == seed.bootstrapUser?.id)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(model.historyResolutionState == .retryable(nil))
-        #expect(fixture.identity.signOutCount == 1)
-        #expect(!fixture.alarms.operations.contains(where: { $0.isCancel }))
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedBootstrap()
+            let model = try fixture.model()
+            await model.restore()
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(model.sessionState == .localOnly)
+            #expect(try fixture.savedState().bootstrapUser?.id == seed.bootstrapUser?.id)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(model.historyResolutionState == .retryable(nil))
+            #expect(fixture.identity.signOutCount == 1)
+            #expect(!fixture.alarms.operations.contains(where: { $0.isCancel }))
+        }
     }
 
     // R51 sweep DARK branch: AppModel.restoreAccountSnapshotAfterDetachFailure
@@ -156,30 +183,30 @@ struct SignOutDurabilityTests {
     // the fence (sessionState) never leaves signed-in on this path.
     @Test @MainActor
     func detachFailureFollowedByRewriteFailureQuarantinesWithBothReports() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedAccount()
-        let gate = SecondWriteGate()
-        let store = AtomicDurableFileStore(fileURL: fixture.url, afterReplacement: { try gate.hook() })
-        let model = try fixture.model(store: store, revocationStore: FailingDetachStore())
-        try await fixture.restoreSignedIn(model)
-        gate.armFailingSecondWrite()
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(model.snapshotLoadFailure != nil)
-        #expect(model.isWorkspaceMutationBlocked)
-        #expect(model.isSignedIn)
-        #expect(model.tasks.map(\.title) == seed.tasks.map(\.title))
-        #expect(fixture.tokens.tokens != nil)
-        #expect(fixture.identity.signOutCount == 0)
-        #expect(model.errorMessage != nil)
-        #expect(try fixture.savedState().cachedUser?.id == seed.cachedUser?.id)
-        #expect(recorded.value.contains(where: { $0.contains("sign-out stage=snapshot") }))
-        #expect(recorded.value.contains(where: { $0.contains("sign-out stage=credentials") }))
-        #expect(recorded.value.allSatisfy { !$0.contains("signout-access") })
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedAccount()
+            let gate = SecondWriteGate()
+            let store = AtomicDurableFileStore(fileURL: fixture.url, afterReplacement: { try gate.hook() })
+            let model = try fixture.model(store: store, revocationStore: FailingDetachStore())
+            try await fixture.restoreSignedIn(model)
+            gate.armFailingSecondWrite()
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(model.snapshotLoadFailure != nil)
+            #expect(model.isWorkspaceMutationBlocked)
+            #expect(model.isSignedIn)
+            #expect(model.tasks.map(\.title) == seed.tasks.map(\.title))
+            #expect(fixture.tokens.tokens != nil)
+            #expect(fixture.identity.signOutCount == 0)
+            #expect(model.errorMessage != nil)
+            #expect(try fixture.savedState().cachedUser?.id == seed.cachedUser?.id)
+            #expect(recorded.value.contains(where: { $0.contains("sign-out stage=snapshot") }))
+            #expect(recorded.value.contains(where: { $0.contains("sign-out stage=credentials") }))
+            #expect(recorded.value.allSatisfy { !$0.contains("signout-access") })
+        }
     }
 
     // Lifecycle guard behind AppModel.finishSignedOutPublication nil-transition:
@@ -214,67 +241,67 @@ struct SignOutDurabilityTests {
     // already holds the signed-out workspace when the refused edits run.
     @Test @MainActor
     func signOutSuspensionRefusesMutationsWithoutTouchingPrecommit() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        let seed = try fixture.seedAccount()
-        let seedTaskID = try #require(seed.tasks.first?.id)
-        let gate = GatedDetachStore()
-        let model = try fixture.model(revocationStore: gate)
-        try await fixture.restoreSignedIn(model)
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        model.signOut()
-        for _ in 0..<500 where gate.appendCount == 0 {
-            try? await Task.sleep(for: .milliseconds(10))
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            let seed = try fixture.seedAccount()
+            let seedTaskID = try #require(seed.tasks.first?.id)
+            let gate = GatedDetachStore()
+            let model = try fixture.model(revocationStore: gate)
+            try await fixture.restoreSignedIn(model)
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            model.signOut()
+            for _ in 0..<500 where gate.appendCount == 0 {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(gate.appendCount > 0)
+            #expect(model.isWorking)
+            #expect(model.isWorkspaceMutationBlocked)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(try fixture.savedState().tasks.isEmpty)
+            let precommitBytes = try fixture.savedBytes()
+            #expect(await model.addTask("Race task") == false)
+            #expect(model.selectPhase(.shortBreak) == false)
+            #expect(model.start() == false)
+            #expect(model.applyWatchCommand(WatchTimerCommand(
+                name: "setDuration", phase: TimerPhase.focus.rawValue,
+                minutes: 37, sentAt: TestFixtures.anchor
+            )) == false)
+            model.deleteTask(id: seedTaskID)
+            model.toggleTimer()
+            #expect(model.tasks.map(\.title) == seed.tasks.map(\.title))
+            #expect(model.pendingChangeCount == 0)
+            #expect(try fixture.savedBytes() == precommitBytes)
+            #expect(model.errorMessage != nil)
+            #expect(fixture.errorHidesAccount(seed: seed, model: model))
+            #expect(recorded.value.contains(where: { $0.contains("sign-out stage=mutation outcome=refused") }))
+            #expect(recorded.value.allSatisfy { !$0.contains("signout-access") })
+            gate.release()
+            await fixture.waitForSignOut(model)
+            await model.waitForAlarmOperations()
+            try fixture.expectCleanSignOut(model, seed: seed)
+            #expect(!model.isWorkspaceMutationBlocked)
+            let added = await model.addTask("Post sign-out task")
+            #expect(added)
+            #expect(try fixture.savedState().cachedUser == nil)
         }
-        try #require(gate.appendCount > 0)
-        #expect(model.isWorking)
-        #expect(model.isWorkspaceMutationBlocked)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(try fixture.savedState().tasks.isEmpty)
-        let precommitBytes = try fixture.savedBytes()
-        #expect(await model.addTask("Race task") == false)
-        #expect(model.selectPhase(.shortBreak) == false)
-        #expect(model.start() == false)
-        #expect(model.applyWatchCommand(WatchTimerCommand(
-            name: "setDuration", phase: TimerPhase.focus.rawValue,
-            minutes: 37, sentAt: TestFixtures.anchor
-        )) == false)
-        model.deleteTask(id: seedTaskID)
-        model.toggleTimer()
-        #expect(model.tasks.map(\.title) == seed.tasks.map(\.title))
-        #expect(model.pendingChangeCount == 0)
-        #expect(try fixture.savedBytes() == precommitBytes)
-        #expect(model.errorMessage != nil)
-        #expect(fixture.errorHidesAccount(seed: seed, model: model))
-        #expect(recorded.value.contains(where: { $0.contains("sign-out stage=mutation outcome=refused") }))
-        #expect(recorded.value.allSatisfy { !$0.contains("signout-access") })
-        gate.release()
-        await fixture.waitForSignOut(model)
-        await model.waitForAlarmOperations()
-        try fixture.expectCleanSignOut(model, seed: seed)
-        #expect(!model.isWorkspaceMutationBlocked)
-        let added = await model.addTask("Post sign-out task")
-        #expect(added)
-        #expect(try fixture.savedState().cachedUser == nil)
     }
 
     // R52-AP02: the fence lifts when sign-out aborts, so account recovery
     // stays usable instead of wedging mutations behind a dead transition.
     @Test @MainActor
     func detachFailureLiftsFenceSoRetryCanMutate() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .offline)
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let model = try fixture.model(revocationStore: FailingDetachStore())
-        try await fixture.restoreSignedIn(model)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(model.isSignedIn)
-        #expect(!model.isWorkspaceMutationBlocked)
-        #expect(await model.addTask("Retry task"))
-        #expect(model.tasks.contains(where: { $0.title == "Retry task" }))
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model(revocationStore: FailingDetachStore())
+            try await fixture.restoreSignedIn(model)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(model.isSignedIn)
+            #expect(!model.isWorkspaceMutationBlocked)
+            #expect(await model.addTask("Retry task"))
+            #expect(model.tasks.contains(where: { $0.title == "Retry task" }))
+        }
     }
 
     // R52-AP01: iroh sign-out commits the safe local fallback before
@@ -283,88 +310,88 @@ struct SignOutDurabilityTests {
     // mid-flight file and room assertions pin the ordering.
     @Test @MainActor
     func irohSignOutPrecommitsLocalFallbackBeforeCredentialDetach() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .iroh)
-        defer { fixture.cleanup() }
-        let seeded = try fixture.seedIrohRoom()
-        let gate = GatedDetachStore()
-        let model = try fixture.model(revocationStore: gate)
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        model.signIn()
-        await fixture.waitForSignOut(model)
-        try #require(model.isSignedIn)
-        model.signOut()
-        for _ in 0..<500 where gate.appendCount == 0 {
-            try? await Task.sleep(for: .milliseconds(10))
+        try await SignOutDurabilityFixture.run(mode: .iroh) { fixture in
+            let seeded = try fixture.seedIrohRoom()
+            let gate = GatedDetachStore()
+            let model = try fixture.model(revocationStore: gate)
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            model.signIn()
+            await fixture.waitForSignOut(model)
+            try #require(model.isSignedIn)
+            model.signOut()
+            for _ in 0..<500 where gate.appendCount == 0 {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(gate.appendCount > 0)
+            #expect(model.isWorking)
+            #expect(fixture.identity.signOutCount == 0)
+            let precommit = try fixture.savedState()
+            #expect(precommit.cachedUser == nil)
+            #expect(precommit.tasks.map(\.title) == [seeded.returnTask.title])
+            let roomReturn = try #require(fixture.irohStore?.activeReturnState)
+            #expect(roomReturn.cachedUser == nil)
+            #expect(roomReturn.tasks.map(\.title) == [seeded.returnTask.title])
+            #expect(recorded.value.allSatisfy { !$0.contains("sign-out stage=") })
+            gate.release()
+            await fixture.waitForSignOut(model)
+            await model.waitForAlarmOperations()
+            #expect(model.sessionState == .localOnly)
+            #expect(fixture.tokens.tokens == nil)
+            #expect(fixture.identity.signOutCount == 1)
+            #expect(model.errorMessage == nil)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(fixture.irohStore?.activeReturnState?.cachedUser == nil)
         }
-        try #require(gate.appendCount > 0)
-        #expect(model.isWorking)
-        #expect(fixture.identity.signOutCount == 0)
-        let precommit = try fixture.savedState()
-        #expect(precommit.cachedUser == nil)
-        #expect(precommit.tasks.map(\.title) == [seeded.returnTask.title])
-        let roomReturn = try #require(fixture.irohStore?.activeReturnState)
-        #expect(roomReturn.cachedUser == nil)
-        #expect(roomReturn.tasks.map(\.title) == [seeded.returnTask.title])
-        #expect(recorded.value.allSatisfy { !$0.contains("sign-out stage=") })
-        gate.release()
-        await fixture.waitForSignOut(model)
-        await model.waitForAlarmOperations()
-        #expect(model.sessionState == .localOnly)
-        #expect(fixture.tokens.tokens == nil)
-        #expect(fixture.identity.signOutCount == 1)
-        #expect(model.errorMessage == nil)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(fixture.irohStore?.activeReturnState?.cachedUser == nil)
     }
 
     // R52-AP01: unwritable local storage fails the first precommit with the
     // localSnapshot stage and keeps credentials for retry.
     @Test @MainActor
     func irohSignOutLocalFallbackFailureReportsLocalSnapshot() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .iroh)
-        defer { fixture.cleanup() }
-        let seeded = try fixture.seedIrohRoom()
-        let model = try fixture.model()
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        try fixture.permissions(0o500, at: fixture.directory)
-        defer { try? fixture.permissions(0o700, at: fixture.directory) }
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(fixture.identity.signOutCount == 0)
-        #expect(fixture.tokens.tokens != nil)
-        #expect(model.errorMessage != nil)
-        #expect(try fixture.savedState().tasks.map(\.title) == seeded.state.tasks.map(\.title))
-        #expect(recorded.value.contains(where: { $0.contains("sign-out stage=localSnapshot") }))
-        #expect(recorded.value.allSatisfy { !$0.contains("sign-out stage=roomSnapshot") })
+        try await SignOutDurabilityFixture.run(mode: .iroh) { fixture in
+            let seeded = try fixture.seedIrohRoom()
+            let model = try fixture.model()
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            try fixture.permissions(0o500, at: fixture.directory)
+            defer { try? fixture.permissions(0o700, at: fixture.directory) }
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(fixture.identity.signOutCount == 0)
+            #expect(fixture.tokens.tokens != nil)
+            #expect(model.errorMessage != nil)
+            #expect(try fixture.savedState().tasks.map(\.title) == seeded.state.tasks.map(\.title))
+            #expect(recorded.value.contains(where: { $0.contains("sign-out stage=localSnapshot") }))
+            #expect(recorded.value.allSatisfy { !$0.contains("sign-out stage=roomSnapshot") })
+        }
     }
 
     // R52-AP01: a broken room file fails the return-state replace with the
     // roomSnapshot stage after the local fallback is already committed.
     @Test @MainActor
     func irohSignOutRoomReturnFailureReportsRoomSnapshot() async throws {
-        let fixture = try SignOutDurabilityFixture(mode: .iroh)
-        defer { fixture.cleanup() }
-        _ = try fixture.seedIrohRoom()
-        let model = try fixture.model()
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        let roomsURL = fixture.directory.appendingPathComponent("iroh-rooms.json")
-        let backup = fixture.directory.appendingPathComponent("iroh-rooms-backup.json")
-        try FileManager.default.moveItem(at: roomsURL, to: backup)
-        try FileManager.default.createDirectory(at: roomsURL, withIntermediateDirectories: false)
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        #expect(fixture.identity.signOutCount == 0)
-        #expect(fixture.tokens.tokens != nil)
-        #expect(model.errorMessage != nil)
-        #expect(try fixture.savedState().cachedUser == nil)
-        #expect(recorded.value.contains(where: { $0.contains("sign-out stage=roomSnapshot") }))
-        #expect(recorded.value.allSatisfy { !$0.contains("sign-out stage=localSnapshot") })
+        try await SignOutDurabilityFixture.run(mode: .iroh) { fixture in
+            _ = try fixture.seedIrohRoom()
+            let model = try fixture.model()
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            let roomsURL = fixture.directory.appendingPathComponent("iroh-rooms.json")
+            let backup = fixture.directory.appendingPathComponent("iroh-rooms-backup.json")
+            try FileManager.default.moveItem(at: roomsURL, to: backup)
+            try FileManager.default.createDirectory(at: roomsURL, withIntermediateDirectories: false)
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            #expect(fixture.identity.signOutCount == 0)
+            #expect(fixture.tokens.tokens != nil)
+            #expect(model.errorMessage != nil)
+            #expect(try fixture.savedState().cachedUser == nil)
+            #expect(recorded.value.contains(where: { $0.contains("sign-out stage=roomSnapshot") }))
+            #expect(recorded.value.allSatisfy { !$0.contains("sign-out stage=localSnapshot") })
+        }
     }
 
     // R52-AP01: the iroh sign-out transition clears a staged account switch
@@ -406,6 +433,78 @@ struct SignOutDurabilityTests {
     }
 }
 
+// R54-L09 and the R54-L07 return-state gap: sign-out stage and refused-
+// mutation captures carry the account boundary, and the return-state catch
+// keeps the persistence boundary, through the real SDK transport. Before the
+// L09 fix the stage and refusal captures sent application.failure, and no test
+// asserted the return-state boundary at all.
+@Suite("R54-L09 sign-out boundary tags", .serialized, .timeLimit(.minutes(1)))
+struct SignOutBoundaryTagTests {
+    @Test @MainActor
+    func roomSnapshotStageKeepsAccountBoundary() async throws {
+        try await SignOutDurabilityFixture.run(mode: .iroh) { fixture in
+            defer { SentryCapture.resetForTesting() }
+            let captures = try await signOutWithBrokenRoomFile(fixture)
+            let stages = captures.errors(identity: "SignOut.stage")
+            try #require(!stages.isEmpty, "captures: \(captures.summary)")
+            for stage in stages {
+                try expectTransportedBoundary(stage, operation: "account.failure", identity: "SignOut.stage")
+            }
+        }
+    }
+
+    @Test @MainActor
+    func returnStateFailureKeepsPersistenceBoundary() async throws {
+        try await SignOutDurabilityFixture.run(mode: .iroh) { fixture in
+            defer { SentryCapture.resetForTesting() }
+            let captures = try await signOutWithBrokenRoomFile(fixture)
+            let storage = captures.errors.filter { ($0.userInfo["identity"] as? String)?.hasPrefix("SignOut.") != true }
+            try #require(storage.count == 1, "captures: \(captures.summary)")
+            try expectTransportedBoundary(storage[0], operation: "persistence.failure")
+        }
+    }
+
+    @Test @MainActor
+    func refusedMutationDuringSignOutKeepsAccountBoundary() async throws {
+        try await SignOutDurabilityFixture.run(mode: .offline) { fixture in
+            _ = try fixture.seedAccount()
+            let gate = GatedDetachStore()
+            let model = try fixture.model(revocationStore: gate)
+            try await fixture.restoreSignedIn(model)
+            defer { SentryCapture.resetForTesting() }
+            let captures = BoundaryCaptureLog()
+            model.signOut()
+            for _ in 0..<500 where gate.appendCount == 0 {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(gate.appendCount > 0)
+            #expect(model.start() == false)
+            gate.release()
+            await fixture.waitForSignOut(model)
+            let refused = captures.errors(identity: "SignOut.mutationRefused")
+            try #require(refused.count == 1, "captures: \(captures.summary)")
+            try expectTransportedBoundary(refused[0], operation: "account.failure", identity: "SignOut.mutationRefused")
+        }
+    }
+
+    // A directory in place of the room file fails the return-state replace
+    // after the local fallback is committed (see
+    // irohSignOutRoomReturnFailureReportsRoomSnapshot).
+    @MainActor
+    private func signOutWithBrokenRoomFile(_ fixture: SignOutDurabilityFixture) async throws -> BoundaryCaptureLog {
+        _ = try fixture.seedIrohRoom()
+        let model = try fixture.model()
+        let captures = BoundaryCaptureLog()
+        let roomsURL = fixture.directory.appendingPathComponent("iroh-rooms.json")
+        let backup = fixture.directory.appendingPathComponent("iroh-rooms-backup.json")
+        try FileManager.default.moveItem(at: roomsURL, to: backup)
+        try FileManager.default.createDirectory(at: roomsURL, withIntermediateDirectories: false)
+        model.signOut()
+        await fixture.waitForSignOut(model)
+        return captures
+    }
+}
+
 @MainActor
 private final class SignOutDurabilityFixture {
     enum Mode { case offline, centralizedWithPendingSync, iroh }
@@ -421,11 +520,12 @@ private final class SignOutDurabilityFixture {
     ))
     let identity = RecordingGoogleIdentityProvider()
     let alarms = RecordingAlarmScheduler()
-    let scenario = "apple-api-coverage-model-local-signout-\(UUID().uuidString)"
-    var session: URLSession!
+    let scenario: String
+    let logout: LogoutDrainingSession
     var url: URL { directory.appendingPathComponent("workspace.json") }
 
-    init(mode: Mode) throws {
+    private init(mode: Mode, revocation: LogoutRevocationStub) throws {
+        scenario = revocation.scenario("apple-api-coverage-model-local-signout-\(UUID().uuidString)")
         defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defaults.set(ReplicationMode.offline.rawValue, forKey: "replication-mode-v1")
@@ -435,12 +535,27 @@ private final class SignOutDurabilityFixture {
         if mode == .iroh {
             defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
         }
-        session = TestFixtures.session(for: scenario)
+        logout = LogoutDrainingSession(scenario: scenario, obligations: tokens)
     }
 
-    func cleanup() {
-        TestFixtures.releaseScenario(scenario)
-        session.invalidateAndCancel()
+    // Runs one test body with a fixture it owns and tears the fixture down on
+    // every exit path. A successful sign-out starts a logout revocation, so
+    // LogoutDrainingSession drains it before it invalidates the session.
+    @discardableResult
+    static func run(
+        mode: Mode,
+        revocation: LogoutRevocationStub = .immediate,
+        _ body: @MainActor (SignOutDurabilityFixture) async throws -> Void
+    ) async throws -> SignOutDurabilityFixture {
+        let fixture = try SignOutDurabilityFixture(mode: mode, revocation: revocation)
+        defer { fixture.removeStorage() }
+        try await fixture.logout.run {
+            try await body(fixture)
+        }
+        return fixture
+    }
+
+    private func removeStorage() {
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: directory)
     }
@@ -500,13 +615,13 @@ private final class SignOutDurabilityFixture {
     }
 
     func model(store: AtomicDurableFileStore? = nil, revocationStore: (any LogoutRevocationStoring)? = nil) throws -> AppModel {
-        AppModel(
-            api: APIClient(session: session, keychain: tokens, logoutRevocationStore: revocationStore),
+        logout.track(AppModel(
+            api: APIClient(session: logout.session, keychain: tokens, logoutRevocationStore: revocationStore),
             defaults: defaults, durableLocalStore: store ?? AtomicDurableFileStore(fileURL: url),
             roomStore: irohStore ?? TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: alarms, googleIdentityProvider: identity,
             now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
-        )
+        ))
     }
 
     func restoreSignedIn(_ model: AppModel) async throws {
@@ -553,14 +668,14 @@ private final class SignOutDurabilityFixture {
     }
 
     func relaunchedWithoutCredentials() throws -> AppModel {
-        AppModel(
-            api: APIClient(session: session, keychain: EmptyTokenStore()),
+        logout.track(AppModel(
+            api: APIClient(session: logout.session, keychain: EmptyTokenStore()),
             defaults: defaults, durableLocalStore: AtomicDurableFileStore(fileURL: url),
             roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: RecordingAlarmScheduler(),
             googleIdentityProvider: RecordingGoogleIdentityProvider(),
             now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
-        )
+        ))
     }
 }
 

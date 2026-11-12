@@ -35,6 +35,7 @@ struct JoinIrohRoomView: View {
             .interactiveDismissDisabled(isJoining)
 #endif
         }
+        .modifier(ErrorMessageAlert(model: model, host: .joinRoomSheet))
 #if os(macOS)
         .frame(minWidth: 520, minHeight: 460)
 #endif

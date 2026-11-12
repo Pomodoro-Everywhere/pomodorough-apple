@@ -87,7 +87,7 @@ struct BreakTaskDisplayTests {
         let timerID = "timer-retarget-complete"
         let item = TestFixtures.history(
             id: timerID,
-            durationMs: 60_000,
+            durationMs: 60_000, elapsedMs: 60_000,
             date: completedAt,
             taskID: newTask.id.uuidString.lowercased()
         )

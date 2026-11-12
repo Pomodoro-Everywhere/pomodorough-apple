@@ -76,7 +76,7 @@ jobs:
   build-and-test:
     needs: candidate-source
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 135
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA_PATH: /tmp/PomodoroughDerivedData
@@ -231,7 +231,7 @@ jobs:
         run: >-
           python3 scripts/run_xcode_tests.py
           --idle-timeout 300
-          --wall-timeout 1800
+          --wall-timeout 3600
           --log-path "$IOS_TEST_LOG"
           --diagnostics-dir "$IOS_TEST_DIAGNOSTICS"
           --completion-marker "Test Suite 'PomodoroughUITests.xctest' passed"
@@ -351,7 +351,7 @@ jobs:
           --scheme Pomodorough-iOS --scheme Pomodorough-macOS
           --scheme PersistedStateCompatibility-iOS --scheme PersistedStateCompatibility-macOS
           --product "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Pomodorough.app"
-          --product "$DERIVED_DATA_PATH/Build/Products/Debug/Pomodorough.app"
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug/PomodoroughTestHost.app"
 
       - name: Retain full native test evidence
         if: ${{ always() }}

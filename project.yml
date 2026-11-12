@@ -32,7 +32,11 @@ schemes:
   Pomodorough-macOS:
     build:
       targets:
-        Pomodorough-macOS: all
+        # Hosted macOS tests run in PomodoroughMacTestHost, never in the
+        # real app (macOS host isolation, M1). Both targets share the
+        # Pomodorough module name, so one build never contains both.
+        Pomodorough-macOS: [run, profile, analyze, archive]
+        PomodoroughMacTestHost: [test]
     test:
       environmentVariables:
         POMODOROUGH_SILENCE_AUDIO: "1"
@@ -54,7 +58,11 @@ schemes:
   PersistedStateCompatibility-macOS:
     build:
       targets:
-        Pomodorough-macOS: all
+        # Hosted macOS tests run in PomodoroughMacTestHost, never in the
+        # real app (macOS host isolation, M1). Both targets share the
+        # Pomodorough module name, so one build never contains both.
+        Pomodorough-macOS: [run, profile, analyze, archive]
+        PomodoroughMacTestHost: [test]
     test:
       environmentVariables:
         POMODOROUGH_SILENCE_AUDIO: "1"
@@ -64,10 +72,39 @@ settings:
   base:
     SWIFT_VERSION: 6.0
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: 0.53.1
-    CURRENT_PROJECT_VERSION: 63
+    MARKETING_VERSION: 0.56.0
+    CURRENT_PROJECT_VERSION: 64
     GOOGLE_CLIENT_ID: "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com"
     GOOGLE_REVERSED_CLIENT_ID: "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr"
+targetTemplates:
+  # Shared by the macOS app and its test host, so the two cannot drift.
+  PomodoroughMacApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: Resources
+        excludes: [SharedCore]
+        buildPhase: resources
+      - path: Resources/SharedCore/pomodorough_core.wasm
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_RELEASE_TAG
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_COMMIT
+        buildPhase: resources
+      - path: Resources/SharedCore/CORE_SHA256
+        buildPhase: resources
+    dependencies:
+      - package: GoogleSignIn
+        product: GoogleSignIn
+      - package: GoogleSignIn
+        product: GoogleSignInSwift
+      - package: IrohLib
+        product: IrohLib
+      - package: WasmKit
+        product: WasmKit
+      - package: Sentry
+        product: Sentry
 targets:
   Pomodorough-iOS:
     type: application
@@ -162,22 +199,8 @@ targets:
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
   Pomodorough-macOS:
-    type: application
-    platform: macOS
+    templates: [PomodoroughMacApp]
     productName: Pomodorough
-    sources:
-      - path: Sources
-      - path: Resources
-        excludes: [SharedCore]
-        buildPhase: resources
-      - path: Resources/SharedCore/pomodorough_core.wasm
-        buildPhase: resources
-      - path: Resources/SharedCore/CORE_RELEASE_TAG
-        buildPhase: resources
-      - path: Resources/SharedCore/CORE_COMMIT
-        buildPhase: resources
-      - path: Resources/SharedCore/CORE_SHA256
-        buildPhase: resources
     info:
       path: Supporting/macOS-Info.plist
       properties:
@@ -189,17 +212,6 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - $(GOOGLE_REVERSED_CLIENT_ID)
-    dependencies:
-      - package: GoogleSignIn
-        product: GoogleSignIn
-      - package: GoogleSignIn
-        product: GoogleSignInSwift
-      - package: IrohLib
-        product: IrohLib
-      - package: WasmKit
-        product: WasmKit
-      - package: Sentry
-        product: Sentry
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac
@@ -208,6 +220,37 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Pomodorough-macOS.entitlements
         DEVELOPMENT_TEAM: PTT6GCQ699
         CODE_SIGN_STYLE: Automatic
+  # Host of the hosted macOS unit tests (macOS host isolation, M1). AppKit
+  # keeps window frames, the status item position, saved state, caches and
+  # cookies under the bundle identifier, so its own identifier keeps them
+  # out of the real app's domain. DefaultStorageLocation stops any other
+  # host. Signed to run locally only, so it needs no App ID.
+  PomodoroughMacTestHost:
+    templates: [PomodoroughMacApp]
+    productName: PomodoroughTestHost
+    info:
+      path: Supporting/macOS-TestHost-Info.plist
+      properties:
+        CFBundleDisplayName: Pomodorough Test Host
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        GIDClientID: $(GOOGLE_CLIENT_ID)
+        SENTRY_DSN: $(SENTRY_DSN)
+        LSUIElement: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac.testhost
+        # DEBUG only: DefaultStorageLocation fails to compile in Release
+        # with this flag, and stops a standalone launch of the host.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) POMODOROUGH_MAC_TEST_HOST"
+        PRODUCT_NAME: PomodoroughTestHost
+        PRODUCT_MODULE_NAME: Pomodorough
+        ARCHS: arm64
+        CODE_SIGN_ENTITLEMENTS: Pomodorough-macOS.entitlements
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        SKIP_INSTALL: YES
   Pomodorough-watchOS:
     type: application
     platform: watchOS
@@ -240,6 +283,11 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources: [Tests]
+    info:
+      path: Supporting/Tests-iOS-Info.plist
+      properties:
+        # R54-APB02: installs the Keychain guard reporter before any test runs.
+        NSPrincipalClass: PomodoroughKeychainIsolationPrincipal
     dependencies:
       - target: Pomodorough-iOS
     settings:
@@ -267,13 +315,18 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources: [Tests]
+    info:
+      path: Supporting/Tests-macOS-Info.plist
+      properties:
+        # R54-APB02: installs the Keychain guard reporter before any test runs.
+        NSPrincipalClass: PomodoroughKeychainIsolationPrincipal
     dependencies:
-      - target: Pomodorough-macOS
+      - target: PomodoroughMacTestHost
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac.tests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Pomodorough.app/Contents/MacOS/Pomodorough
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PomodoroughTestHost.app/Contents/MacOS/PomodoroughTestHost
         BUNDLE_LOADER: $(TEST_HOST)
   PersistedStateCompatibilityTests:
     type: bundle.unit-test
@@ -292,10 +345,10 @@ targets:
     platform: macOS
     sources: [Tests/PersistedStateDecouplingCompatibilityTests.swift, Tests/Compatibility/LegacyPendingOperationRebase.swift]
     dependencies:
-      - target: Pomodorough-macOS
+      - target: PomodoroughMacTestHost
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac.persisted-state-compatibility.tests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Pomodorough.app/Contents/MacOS/Pomodorough
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PomodoroughTestHost.app/Contents/MacOS/PomodoroughTestHost
         BUNDLE_LOADER: $(TEST_HOST)

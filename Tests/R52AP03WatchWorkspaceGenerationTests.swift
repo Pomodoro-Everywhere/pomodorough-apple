@@ -8,111 +8,135 @@ import Testing
 /// rejected with a fixed bounded reason and a corrective snapshot instead
 /// of mutating the new workspace. Legacy commands (no epoch) stay accepted
 /// live but are rejected deferred.
-@Suite("R52-AP03 deferred Watch settings workspace epoch", .serialized)
+@Suite("R52-AP03 deferred Watch settings workspace epoch", .serialized, .timeLimit(.minutes(1)))
 struct R52AP03WatchWorkspaceGenerationTests {
     @Test @MainActor
     func deferredSettingsAcrossSignOutRejected() async throws {
-        let fixture = try R52AP03Fixture()
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let model = try fixture.model()
-        try await fixture.restoreSignedIn(model)
-        let freshMinutes = model.durationMinutes(for: .focus)
-        let queuedMinutes = freshMinutes == 37 ? 25 : 37
-        let wire = try #require(fixture.queuedWireCommand(
-            model, .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        model.signOut()
-        await fixture.waitForSignOut(model)
-        try #require(!model.isWorking)
-        #expect(model.durationMinutes(for: .focus) == freshMinutes)
-        #expect(!model.applyWatchCommand(wire, isDeferred: true))
-        #expect(model.durationMinutes(for: .focus) == freshMinutes)
-        #expect(model.pendingDurationOperationCount == 0)
-        #expect(!model.applyWatchCommand(wire))
-        #expect(model.durationMinutes(for: .focus) == freshMinutes)
-        #expect(recorded.value.contains("stale_workspace"))
-        let reopened = try fixture.reopened()
-        await reopened.restore()
-        #expect(reopened.durationMinutes(for: .focus) == freshMinutes)
+        try await R52AP03Fixture.run { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            let freshMinutes = model.durationMinutes(for: .focus)
+            let queuedMinutes = freshMinutes == 37 ? 25 : 37
+            let wire = try #require(fixture.queuedWireCommand(
+                model, .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            model.signOut()
+            await fixture.waitForSignOut(model)
+            try #require(!model.isWorking)
+            #expect(model.durationMinutes(for: .focus) == freshMinutes)
+            #expect(!model.applyWatchCommand(wire, isDeferred: true))
+            #expect(model.durationMinutes(for: .focus) == freshMinutes)
+            #expect(model.pendingDurationOperationCount == 0)
+            #expect(!model.applyWatchCommand(wire))
+            #expect(model.durationMinutes(for: .focus) == freshMinutes)
+            #expect(recorded.value.contains("stale_workspace"))
+            let reopened = try await fixture.reopened()
+            await reopened.restore()
+            #expect(reopened.durationMinutes(for: .focus) == freshMinutes)
+        }
+    }
+
+    // R54-APB13 on the reopen path. The reopened model shares the signed-out
+    // model's obligation store, and its restore resumes that store with a
+    // second revocation controller. If both controllers load one obligation,
+    // the first removal ends teardown's drain wait while the second revoke
+    // may still be unsent, and it would reach the invalidated session. The
+    // stub holds the first revoke, so the store must be empty at reopen only
+    // because reopened() drained it. The check runs before any restore, so a
+    // red run never starts the second controller.
+    @Test @MainActor
+    func reopenWaitsForHeldSignOutRevocation() async throws {
+        try await R52AP03Fixture.run(revocation: .heldUntilDrained) { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try await fixture.restoreSignedIn(model)
+            model.signOut()
+            try #require(await TestFixtures.waitForRequest(in: fixture.scenario, path: "/api/v1/auth/logout"))
+            _ = try await fixture.reopened()
+            let pendingAtReopen: [LogoutRevocationObligation] = try fixture.tokens.load()
+            try #require(pendingAtReopen.isEmpty)
+            let logoutEvents = TestFixtures.lifecycleEvents(for: fixture.scenario).filter { $0.hasPrefix("logout ") }
+            #expect(logoutEvents == ["logout response completed"])
+        }
     }
 
     @Test @MainActor
-    func sameWorkspaceDeferredWireRoundTripAccepted() throws {
-        let fixture = try R52AP03Fixture()
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let model = try fixture.model()
-        try #require(model.snapshotLoadFailure == nil)
-        let freshMinutes = model.durationMinutes(for: .focus)
-        let queuedMinutes = freshMinutes == 37 ? 25 : 37
-        let wire = try #require(fixture.queuedWireCommand(
-            model, .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
-        #expect(model.applyWatchCommand(wire, isDeferred: true))
-        #expect(model.durationMinutes(for: .focus) == queuedMinutes)
+    func sameWorkspaceDeferredWireRoundTripAccepted() async throws {
+        try await R52AP03Fixture.run { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try #require(model.snapshotLoadFailure == nil)
+            let freshMinutes = model.durationMinutes(for: .focus)
+            let queuedMinutes = freshMinutes == 37 ? 25 : 37
+            let wire = try #require(fixture.queuedWireCommand(
+                model, .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
+            #expect(model.applyWatchCommand(wire, isDeferred: true))
+            #expect(model.durationMinutes(for: .focus) == queuedMinutes)
+        }
     }
 
     @Test @MainActor
-    func legacyDeferredRejectedLiveAccepted() throws {
-        let fixture = try R52AP03Fixture()
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let model = try fixture.model()
-        try #require(model.snapshotLoadFailure == nil)
-        let freshMinutes = model.durationMinutes(for: .focus)
-        let queuedMinutes = freshMinutes == 37 ? 25 : 37
-        let legacy = try #require(fixture.wireRoundTrip(
-            .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
-        #expect(legacy.workspaceGeneration == nil)
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        #expect(!model.applyWatchCommand(legacy, isDeferred: true))
-        #expect(model.durationMinutes(for: .focus) == freshMinutes)
-        #expect(recorded.value.contains("stale_workspace"))
-        #expect(model.applyWatchCommand(legacy))
-        #expect(model.durationMinutes(for: .focus) == queuedMinutes)
+    func legacyDeferredRejectedLiveAccepted() async throws {
+        try await R52AP03Fixture.run { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try #require(model.snapshotLoadFailure == nil)
+            let freshMinutes = model.durationMinutes(for: .focus)
+            let queuedMinutes = freshMinutes == 37 ? 25 : 37
+            let legacy = try #require(fixture.wireRoundTrip(
+                .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
+            #expect(legacy.workspaceGeneration == nil)
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            #expect(!model.applyWatchCommand(legacy, isDeferred: true))
+            #expect(model.durationMinutes(for: .focus) == freshMinutes)
+            #expect(recorded.value.contains("stale_workspace"))
+            #expect(model.applyWatchCommand(legacy))
+            #expect(model.durationMinutes(for: .focus) == queuedMinutes)
+        }
     }
 
     @Test @MainActor
-    func restartKeepsEpochForSameWorkspaceRetry() throws {
-        let fixture = try R52AP03Fixture()
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let model = try fixture.model()
-        try #require(model.snapshotLoadFailure == nil)
-        let freshMinutes = model.durationMinutes(for: .focus)
-        let queuedMinutes = freshMinutes == 37 ? 25 : 37
-        let wire = try #require(fixture.queuedWireCommand(
-            model, .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
-        let reopened = try fixture.reopened()
-        #expect(reopened.applyWatchCommand(wire, isDeferred: true))
-        #expect(reopened.durationMinutes(for: .focus) == queuedMinutes)
+    func restartKeepsEpochForSameWorkspaceRetry() async throws {
+        try await R52AP03Fixture.run { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try #require(model.snapshotLoadFailure == nil)
+            let freshMinutes = model.durationMinutes(for: .focus)
+            let queuedMinutes = freshMinutes == 37 ? 25 : 37
+            let wire = try #require(fixture.queuedWireCommand(
+                model, .setDuration(minutes: queuedMinutes, forPhaseRawValue: "focus")))
+            let reopened = try await fixture.reopened()
+            #expect(reopened.applyWatchCommand(wire, isDeferred: true))
+            #expect(reopened.durationMinutes(for: .focus) == queuedMinutes)
+        }
     }
 
     @Test @MainActor
-    func roomAdoptRotatesEpoch() throws {
-        let fixture = try R52AP03Fixture()
-        defer { fixture.cleanup() }
-        _ = try fixture.seedAccount()
-        let model = try fixture.model()
-        try #require(model.snapshotLoadFailure == nil)
-        let before = model.makeWatchSnapshot()
-        let stale = try #require(fixture.queuedWireCommand(model, .selectPhase("long_break")))
-        model.adoptRoomWorkspace(PersistedTimerState.fresh())
-        let after = model.makeWatchSnapshot()
-        #expect(after.workspaceGeneration != before.workspaceGeneration)
-        let recorded = LockedTestValue<[String]>([])
-        SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
-        defer { SentryCapture.resetForTesting() }
-        #expect(!model.applyWatchCommand(stale, isDeferred: true))
-        #expect(recorded.value == ["stale_workspace"])
-        #expect(model.selectedPhase == .focus)
-        let retry = try #require(fixture.queuedWireCommand(model, .selectPhase("long_break")))
-        #expect(model.applyWatchCommand(retry, isDeferred: true))
-        #expect(model.selectedPhase == .longBreak)
+    func roomAdoptRotatesEpoch() async throws {
+        try await R52AP03Fixture.run { fixture in
+            _ = try fixture.seedAccount()
+            let model = try fixture.model()
+            try #require(model.snapshotLoadFailure == nil)
+            let before = model.makeWatchSnapshot()
+            let stale = try #require(fixture.queuedWireCommand(model, .selectPhase("long_break")))
+            model.adoptRoomWorkspace(PersistedTimerState.fresh())
+            let after = model.makeWatchSnapshot()
+            #expect(after.workspaceGeneration != before.workspaceGeneration)
+            let recorded = LockedTestValue<[String]>([])
+            SentryCapture.setTestBackend { recorded.value.append($0.localizedDescription) }
+            defer { SentryCapture.resetForTesting() }
+            #expect(!model.applyWatchCommand(stale, isDeferred: true))
+            #expect(recorded.value == ["stale_workspace"])
+            #expect(model.selectedPhase == .focus)
+            let retry = try #require(fixture.queuedWireCommand(model, .selectPhase("long_break")))
+            #expect(model.applyWatchCommand(retry, isDeferred: true))
+            #expect(model.selectedPhase == .longBreak)
+        }
     }
 
     @Test @MainActor
@@ -199,20 +223,33 @@ private final class R52AP03Fixture {
     ))
     let identity = RecordingGoogleIdentityProvider()
     let alarms = RecordingAlarmScheduler()
-    let scenario = "apple-api-coverage-model-local-signout-\(UUID().uuidString)"
-    var session: URLSession!
+    let scenario: String
+    let logout: LogoutDrainingSession
     var url: URL { directory.appendingPathComponent("workspace.json") }
 
-    init() throws {
+    private init(revocation: LogoutRevocationStub) throws {
+        scenario = revocation.scenario("apple-api-coverage-model-local-signout-\(UUID().uuidString)")
         defaults = try #require(RecordingUserDefaults(suiteName: suiteName))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defaults.set(ReplicationMode.offline.rawValue, forKey: "replication-mode-v1")
-        session = TestFixtures.session(for: scenario)
+        logout = LogoutDrainingSession(scenario: scenario, obligations: tokens)
     }
 
-    func cleanup() {
-        TestFixtures.releaseScenario(scenario)
-        session.invalidateAndCancel()
+    // Runs one test body with a fixture it owns and tears the fixture down on
+    // every exit path. A successful sign-out starts a logout revocation, so
+    // LogoutDrainingSession drains it before it invalidates the session.
+    static func run(
+        revocation: LogoutRevocationStub = .immediate,
+        _ body: @MainActor (R52AP03Fixture) async throws -> Void
+    ) async throws {
+        let fixture = try R52AP03Fixture(revocation: revocation)
+        defer { fixture.removeStorage() }
+        try await fixture.logout.run {
+            try await body(fixture)
+        }
+    }
+
+    private func removeStorage() {
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: directory)
     }
@@ -226,23 +263,27 @@ private final class R52AP03Fixture {
     }
 
     func model() throws -> AppModel {
-        AppModel(
-            api: APIClient(session: session, keychain: tokens, logoutRevocationStore: nil),
+        logout.track(AppModel(
+            api: APIClient(session: logout.session, keychain: tokens, logoutRevocationStore: nil),
             defaults: defaults, durableLocalStore: AtomicDurableFileStore(fileURL: url),
             roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
             alarmScheduler: alarms, googleIdentityProvider: identity,
             now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
-        )
+        ))
     }
 
-    func reopened() throws -> AppModel {
-        AppModel(
-            api: APIClient(session: session, keychain: tokens),
-            defaults: defaults, durableLocalStore: AtomicDurableFileStore(fileURL: url),
-            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
-            alarmScheduler: RecordingAlarmScheduler(), googleIdentityProvider: identity,
-            now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
-        )
+    // A relaunch on the same credentials. Its restore resumes the shared
+    // obligation store, so the earlier model's revocation drains first.
+    func reopened() async throws -> AppModel {
+        try await logout.reopen {
+            AppModel(
+                api: APIClient(session: logout.session, keychain: tokens),
+                defaults: defaults, durableLocalStore: AtomicDurableFileStore(fileURL: url),
+                roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
+                alarmScheduler: RecordingAlarmScheduler(), googleIdentityProvider: identity,
+                now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
+            )
+        }
     }
 
     func restoreSignedIn(_ model: AppModel) async throws {

@@ -3,6 +3,80 @@ import SwiftUI
 import Testing
 @testable import Pomodorough
 
+@Suite("Completed focus chart identity")
+struct CompletedFocusChartIdentityTests {
+    @Test(arguments: ["Deleted task", "Deep work"])
+    func duplicateTitlesKeepSeparateCategories(title: String) {
+        let summaries = ["task:a", "task:b"].map {
+            CompletedFocusSummary(id: $0, taskTitle: title, completedPomodoros: 1, timeSpentMs: 60_000)
+        }
+        let entries = CompletedFocusChartEntry.entries(for: summaries)
+        #expect(entries.map(\.id) == ["task:a", "task:b"])
+        #expect(Set(entries.map(\.id)).count == 2)
+        #expect(entries.map(\.summary) == summaries)
+        #expect(entries[0].color != entries[1].color)
+        assertPaletteParity(entries)
+    }
+
+    @Test func reorderedSummariesKeepIdentityAndNumberedPaletteParity() {
+        let summaries = (0..<8).map {
+            CompletedFocusSummary(id: "task:\($0)", taskTitle: "Deleted task", completedPomodoros: 1, timeSpentMs: 60_000)
+        }
+        let original = CompletedFocusChartEntry.entries(for: summaries)
+        let reordered = CompletedFocusChartEntry.entries(for: Array(summaries.reversed()))
+        #expect(reordered.map(\.id) == Array(original.map(\.id).reversed()))
+        #expect(reordered.map(\.index) == Array(0..<8))
+        #expect(reordered.first?.summary == summaries.last)
+        assertPaletteParity(original)
+        assertPaletteParity(reordered)
+    }
+
+    @Test func titleChangesDoNotChangeCategoryIdentity() {
+        let retained = CompletedFocusSummary(id: "task:a", taskTitle: "Deep work", completedPomodoros: 2, timeSpentMs: 120_000)
+        let deleted = CompletedFocusSummary(id: retained.id, taskTitle: "Deleted task", completedPomodoros: 2, timeSpentMs: 120_000)
+        let before = CompletedFocusChartEntry.entries(for: [retained])
+        let after = CompletedFocusChartEntry.entries(for: [deleted])
+        #expect(before[0].id == after[0].id)
+        #expect(before[0].color == after[0].color)
+        #expect(CompletedFocusBreakdownScreen.accessibilityLabel(for: after[0].summary) == "Deleted task")
+        #expect(CompletedFocusChartEntry.entries(for: []).isEmpty)
+    }
+
+    // Badge 7 onward repeats the six shipped fill/label pairs. A wrap that
+    // drifts pairs a dark label with a dark fill (1.25:1 at badge 7).
+    @Test func badgeColorsWrapEverySixPositions() {
+        for index in 0..<13 {
+            #expect(CompletedFocusBreakdownScreen.badgeColor(at: index) == CompletedFocusBreakdownScreen.badgeColor(at: index % 6))
+            #expect(CompletedFocusBreakdownScreen.badgeLabelColor(at: index) == CompletedFocusBreakdownScreen.badgeLabelColor(at: index % 6))
+        }
+    }
+
+    @Test @MainActor func renderedBadgePairsClearAAThroughWraparound() {
+        let environment = EnvironmentValues()
+        for index in 0..<13 {
+            let fill = CompletedFocusBreakdownScreen.badgeColor(at: index).resolve(in: environment)
+            let label = CompletedFocusBreakdownScreen.badgeLabelColor(at: index).resolve(in: environment)
+            #expect(Self.contrastRatio(fill, label) >= 4.5, "badge \(index + 1)")
+        }
+    }
+
+    private static func contrastRatio(_ first: Color.Resolved, _ second: Color.Resolved) -> Double {
+        let luminances = [first, second].map {
+            PomodoroughTheme.relativeLuminance(red: Double($0.red), green: Double($0.green), blue: Double($0.blue))
+        }
+        return PomodoroughTheme.contrastRatio(lighter: luminances.max() ?? 0, darker: luminances.min() ?? 0)
+    }
+
+    private func assertPaletteParity(_ entries: [CompletedFocusChartEntry]) {
+        for (index, entry) in entries.enumerated() {
+            #expect(entry.index == index)
+            #expect(entry.id == entry.summary.id)
+            #expect(entry.color == CompletedFocusBreakdownScreen.badgeColor(at: index))
+            #expect(entry.labelColor == CompletedFocusBreakdownScreen.badgeLabelColor(at: index))
+        }
+    }
+}
+
 // Pins AP99/AP100 layout decisions: the iOS card stretch rule and the
 // portrait top-gap math that keeps the card clear of the toolbar row.
 @Suite("Timer card layout pinning")
@@ -60,18 +134,23 @@ struct AppleHighFindingsTests {
             CompletedFocusBreakdownScreen.accessibilityValue(for: summary)
                 == "2 completed pomodoros, \(TaskTimeText.spoken(summary.timeSpentMs))"
         )
+        let single = CompletedFocusSummary(id: "task-b", taskTitle: "Deep work", completedPomodoros: 1, timeSpentMs: 60_000)
+        #expect(
+            CompletedFocusBreakdownScreen.accessibilityValue(for: single)
+                == "1 completed pomodoro, \(TaskTimeText.spoken(single.timeSpentMs))"
+        )
     }
 
     @Test func macDialDiameterScalesWithGeometry() {
         let wide = TimerMachineCard.macDialDiameter(for: CGSize(width: 800, height: 500))
-        #expect(abs(wide - 480) < 0.01)
+        #expect(abs(wide - 400) < 0.01)
         let short = TimerMachineCard.macDialDiameter(for: CGSize(width: 1000, height: 400))
         #expect(abs(short - 400) < 0.01)
     }
 
     @Test func macDialDiameterAvoidsFixedDeductionCollapse() {
         let narrow = TimerMachineCard.macDialDiameter(for: CGSize(width: 300, height: 400))
-        #expect(abs(narrow - 180) < 0.01)
+        #expect(abs(narrow - 150) < 0.01)
         #expect(TimerMachineCard.macDialDiameter(for: CGSize(width: 0, height: 400)) == 0)
         #expect(TimerMachineCard.macDialDiameter(for: CGSize(width: 300, height: 0)) == 0)
     }
@@ -94,6 +173,46 @@ struct AppleHighFindingsTests {
         #expect(!TimerScreen.usesStackedLandscape(horizontal: .regular, vertical: .compact))
         #expect(!TimerScreen.usesStackedLandscape(horizontal: .compact, vertical: .regular))
         #expect(!TimerScreen.usesStackedLandscape(horizontal: nil, vertical: nil))
+    }
+
+    // IOS18-01: sizes measured on iPhone 12 mini, iOS 18.6, in the frame
+    // where the tab-switch animation stopped. Hiding the navigation bar
+    // moved 44 points from the safe area into the content; a decision
+    // that moves with it flips layout and chrome without end.
+    @Test func phoneLayoutDecisionIgnoresBarVisibility() {
+        let barsShown = TimerScreen.layoutDecisionSize(
+            contentSize: CGSize(width: 530, height: 509),
+            safeAreaInsets: EdgeInsets(top: 44, leading: 50, bottom: 53, trailing: 50),
+            horizontal: .compact, vertical: .compact)
+        let barsHidden = TimerScreen.layoutDecisionSize(
+            contentSize: CGSize(width: 530, height: 553),
+            safeAreaInsets: EdgeInsets(top: 0, leading: 50, bottom: 53, trailing: 50),
+            horizontal: .compact, vertical: .compact)
+        #expect(barsShown == CGSize(width: 630, height: 606))
+        #expect(barsHidden == barsShown)
+        #expect(TimerLayout(size: barsShown) == TimerLayout(size: barsHidden))
+    }
+
+    @Test func phoneLayoutDecisionKeepsSettledOrientations() {
+        let portrait = TimerScreen.layoutDecisionSize(
+            contentSize: CGSize(width: 375, height: 635),
+            safeAreaInsets: EdgeInsets(top: 94, leading: 0, bottom: 83, trailing: 0),
+            horizontal: .compact, vertical: .regular)
+        let landscape = TimerScreen.layoutDecisionSize(
+            contentSize: CGSize(width: 832, height: 409),
+            safeAreaInsets: EdgeInsets(top: 0, leading: 50, bottom: 21, trailing: 50),
+            horizontal: .regular, vertical: .compact)
+        #expect(portrait == CGSize(width: 375, height: 812))
+        #expect(landscape == CGSize(width: 932, height: 430))
+    }
+
+    @Test func regularLayoutDecisionKeepsContentSize() {
+        let content = CGSize(width: 981, height: 930)
+        let size = TimerScreen.layoutDecisionSize(
+            contentSize: content,
+            safeAreaInsets: EdgeInsets(top: 74, leading: 0, bottom: 20, trailing: 0),
+            horizontal: .regular, vertical: .regular)
+        #expect(size == content)
     }
 
     @Test func boardColumnsScaleProportionally() {
@@ -148,9 +267,9 @@ struct AppleHighFindingsTests {
         #endif
     }
 
-    @Test func pickerMenuTitleKeepsUnassignedAndLongTitles() {
-        #expect(TimerTaskPicker.menuTitle(selectedID: nil, tasks: []) == "Unassigned")
-        #expect(TimerTaskPicker.menuTitle(selectedID: UUID(), tasks: []) == "Unassigned")
+    @Test func pickerMenuTitleKeepsNoTaskAndLongTitles() {
+        #expect(TimerTaskPicker.menuTitle(selectedID: nil, tasks: []) == "No task")
+        #expect(TimerTaskPicker.menuTitle(selectedID: UUID(), tasks: []) == "No task")
         guard let short = FocusTask(title: "AP09 short") else {
             Issue.record("short fixture failed")
             return
@@ -162,12 +281,12 @@ struct AppleHighFindingsTests {
             return
         }
         #expect(TimerTaskPicker.menuTitle(selectedID: long.id, tasks: [short, long]) == long.title)
-        #expect(TimerTaskPicker.menuTitle(selectedID: UUID(), tasks: [short, long]) == "Unassigned")
+        #expect(TimerTaskPicker.menuTitle(selectedID: UUID(), tasks: [short, long]) == "No task")
     }
 }
 
 // Pins the Apple MEDIUM/LOW-findings fixes: proportional breakdown chart
-// with a visible legend, landscape fallback geometry, flexible duration
+// with a task-list legend, landscape fallback geometry, flexible duration
 // minimums, geometry-aware history spacing, scaled clock marks, and the
 // proportional backdrop.
 @Suite("Apple medium/low findings")

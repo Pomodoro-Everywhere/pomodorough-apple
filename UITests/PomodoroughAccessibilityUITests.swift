@@ -284,6 +284,62 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Resume"].exists)
     }
 
+    // IOS18-01: iOS 18 animates a newly selected tab from its stale
+    // portrait frame to the rotated size. A layout decision that moved
+    // with bar visibility flipped chrome without end when one animation
+    // frame landed on a near-square size, and the main thread never came
+    // back. Only some frames land there, so every other tab takes two turns.
+    func testPhoneLandscapeTimerTabSelectionShowsResponsiveCard() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeApplication()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_LAYOUT"] = "1"
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+        launchAndWaitForTimer(app)
+        for route in ["Tasks", "Pattern", "Arrivals", "Tasks", "Pattern", "Arrivals"] {
+            waitForHittable(app.buttons[route], timeout: 10)
+            app.buttons[route].tap()
+            XCUIDevice.shared.orientation = .landscapeLeft
+            try selectTimerTabInPhoneLandscape(from: route, in: app)
+            XCUIDevice.shared.orientation = .portrait
+            waitForHittable(app.buttons["Tasks"], timeout: 10)
+            waitForHittable(app.buttons["Account"], timeout: 10)
+        }
+        attachNavigationEvidence("IOS18-01-portrait-after-landscape-tab-selection", in: app)
+    }
+
+    private func selectTimerTabInPhoneLandscape(from route: String, in app: XCUIApplication) throws {
+        let timerTab = app.tabBars.buttons["Timer"]
+        waitForHittable(timerTab, timeout: 10)
+        timerTab.tap()
+        let compactLandscape = try waitForLandscapeEligibility(in: app)
+        try XCTSkipUnless(compactLandscape, "Measured regular x regular landscape keeps native chrome; phone-only assertion is ineligible")
+        XCTAssertFalse(app.buttons["Tasks"].isHittable, "Phone landscape Timer hides the tab bar after \(route)")
+        XCTAssertFalse(app.buttons["Account"].isHittable, "Phone landscape Timer hides the toolbar after \(route)")
+        toggleTimerPrimaryControl(in: app)
+    }
+
+    /// Proves the main thread still serves input: the tapped control must
+    /// turn into its successor. A synthesized tap sometimes reaches UIKit
+    /// without firing the button action, so the control gets a second tap;
+    /// a blocked main thread fails both.
+    private func toggleTimerPrimaryControl(in app: XCUIApplication) {
+        let successors = [("Start focus", "Pause"), ("Pause", "Resume"), ("Resume", "Pause")]
+        guard let (current, successor) = successors.first(where: { app.buttons[$0.0].exists }) else {
+            return XCTFail("Landscape Timer shows no primary control")
+        }
+        for _ in 0..<2 {
+            waitForHittable(app.buttons[current], timeout: 5)
+            app.buttons[current].tap()
+            if app.buttons[successor].waitForExistence(timeout: 5) { return }
+        }
+        XCTFail("\(current) must become \(successor)")
+    }
+
     private func waitForLandscapeEligibility(in app: XCUIApplication) throws -> Bool {
         let probe = app.staticTexts["AP01-layout"]
         XCTAssertTrue(probe.waitForExistence(timeout: 5), "Missing DEBUG layout inputs")
@@ -704,6 +760,10 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
                 chrome += "[side-rail] "
             }
         }
+        if let dock = primaryControlDockFrame(in: app) {
+            bottom = min(bottom, dock.minY)
+            chrome += "dock=\(dock) "
+        }
         let top = max(scroll.frame.minY, navMaxY)
         let viewport = CGRect(x: scroll.frame.minX, y: top,
                               width: right - scroll.frame.minX, height: bottom - top)
@@ -711,9 +771,24 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         return viewport
     }
 
+    /// R54-AU05: at accessibility text sizes the primary control (Start, Pause
+    /// or Resume) is docked above the tab bar, outside the scrolling card.
+    /// The card is readable only above the dock.
+    private func primaryControlDockFrame(in app: XCUIApplication) -> CGRect? {
+        let dock = app.otherElements["timer-primary-control-dock"]
+        return dock.exists ? dock.frame : nil
+    }
+
+    /// A docked control is visible without scrolling and never moves.
+    private func isDocked(_ control: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard let dock = primaryControlDockFrame(in: app) else { return false }
+        return dock.contains(control.frame)
+    }
+
     private func revealAccessibleTimerControl(_ label: String, in app: XCUIApplication) {
         let button = app.buttons[label]
         XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing \(label)")
+        if isDocked(button, in: app) { return }
         // XXXL needs scrolling on short phones and unfolded Duo. Gestures
         // stay inside measured content, clear of navigation and tab/rail
         // chrome; never shrink the user's text.
@@ -890,7 +965,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         createTaskForDeletionTest(named: title, in: app)
         let titleElement = app.staticTexts[title]
         XCTAssertTrue(titleElement.waitForExistence(timeout: 5))
-        let metric = app.staticTexts["0 finished pomodoros"]
+        let metric = app.staticTexts["0 finished pomodoros, 0 minutes spent"]
         XCTAssertTrue(metric.exists)
         XCTAssertGreaterThan(titleElement.frame.width, 150)
         XCTAssertGreaterThanOrEqual(metric.frame.minY, titleElement.frame.maxY)
@@ -909,11 +984,10 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         waitForHittable(row, timeout: 5)
 
         tapRowTrashButton(named: "UI keep me", in: app)
-        summonDeleteDialog(in: app)
-        let cancel = app.buttons["Cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
-        cancel.tap()
-        waitForDisappearance(of: app.buttons["Delete task"], timeout: 5)
+        let undo = summonUndoBanner(for: "UI keep me", in: app)
+        XCTAssertFalse(row.exists, "Pending deletion must leave the board immediately")
+        undo.tap()
+        waitForDisappearance(of: undo, timeout: 5)
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }
 
@@ -929,9 +1003,12 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         waitForHittable(row, timeout: 5)
 
         tapRowTrashButton(named: "UI delete me", in: app)
-        summonDeleteDialog(in: app)
-        app.buttons["Delete task"].tap()
-        XCTAssertFalse(row.waitForExistence(timeout: 5))
+        let undo = summonUndoBanner(for: "UI delete me", in: app)
+        XCTAssertFalse(row.exists, "Pending deletion must leave the board immediately")
+        // The undo window has no time limit; Delete now finishes the deletion.
+        app.buttons["task-deletion.delete-now"].tap()
+        waitForDisappearance(of: undo, timeout: 5)
+        XCTAssertFalse(row.waitForExistence(timeout: 2))
     }
 
     // R49-U02: enabled Add task renders readable text on signal fill.
@@ -1037,7 +1114,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         let field = elements(labelled: "New task", in: app).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let cleared = field.value as? String ?? ""
-        XCTAssertTrue(cleared == "" || cleared == "Write release notes", "Submit must clear the field, got \(cleared)")
+        XCTAssertTrue(cleared == "" || cleared == "Task name", "Submit must clear the field, got \(cleared)")
         XCTAssertFalse(app.buttons["Add task"].isEnabled, "Cleared field must disable Add again")
     }
 
@@ -1110,17 +1187,16 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
                                 dy: frame.midY + (point.dy - 0.5) * height)
         print("AP03 title=\(title) frame=\(frame) tap=\(location)")
         app.coordinate(withNormalizedOffset: .zero).withOffset(location).tap()
-        let alert = app.alerts["Delete “\(title)”?"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "Perimeter tap missed \(title) at \(point)")
-        XCTAssertTrue(alert.buttons["Delete task"].exists)
-        XCTAssertTrue(alert.buttons["Cancel"].exists)
+        let undo = app.buttons["Undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5), "Perimeter tap missed \(title) at \(point)")
+        XCTAssertTrue(app.staticTexts["Deleted “\(title)”"].exists)
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "AP03-\(title)-\(point.dx)-\(point.dy)"
         attachment.lifetime = .keepAlways
         add(attachment)
-        alert.buttons["Cancel"].tap()
-        waitForDisappearance(of: alert, timeout: 5)
-        XCTAssertTrue(app.staticTexts[title].exists)
+        undo.tap()
+        waitForDisappearance(of: undo, timeout: 5)
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
         XCTAssertTrue(button.exists)
     }
 
@@ -1141,11 +1217,13 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         trash.tap()
     }
 
-    private func summonDeleteDialog(in app: XCUIApplication) {
-        // The trash tap presents the delete confirmation alert directly.
-        let delete = app.buttons["Delete task"]
-        XCTAssertTrue(delete.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+    @discardableResult
+    private func summonUndoBanner(for title: String, in app: XCUIApplication) -> XCUIElement {
+        // The trash tap hides the row and shows the undo banner directly.
+        let undo = app.buttons["Undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Deleted “\(title)”"].exists)
+        return undo
     }
 
     private func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval) {
@@ -1228,7 +1306,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         launchAndWaitForTimer(app)
         let unassignedHeight = pickerGlyphHeight(shot: "AP09-XXXL-Unassigned", in: app)
         var picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
-        XCTAssertTrue(picker.label.contains("Unassigned"), "picker must show Unassigned, got \(picker.label)")
+        XCTAssertTrue(picker.label.contains("No task"), "picker must show No task, got \(picker.label)")
         let shortTitle = "AP09 short"
         createTaskForDeletionTest(named: shortTitle, in: app)
         app.buttons["Timer"].tap()
@@ -1247,7 +1325,21 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         XCTAssertTrue(picker.label.contains(longTitle), "picker must show long title, got \(picker.label)")
         let longHeight = pickerGlyphHeight(shot: "AP09-XXXL-long", in: app)
         XCTAssertGreaterThan(longHeight, unassignedHeight, "long wrapping title must grow past the two-line floor")
-        XCTAssertTrue(app.buttons["Start focus"].isHittable, "timer controls must stay reachable")
+        let start = app.buttons["Start focus"]
+        revealPicker(start, in: app)
+        XCTAssertTrue(start.isHittable, "timer controls must stay reachable by scrolling")
+        start.tap()
+        XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 5), "Start must activate the timer")
+        let pause = app.buttons["Pause"]
+        revealPicker(pause, in: app)
+        XCTAssertTrue(pause.isHittable)
+        pause.tap()
+        XCTAssertTrue(app.buttons["Resume"].waitForExistence(timeout: 5))
+        let cancel = app.buttons["Cancel timer"]
+        revealPicker(cancel, in: app)
+        XCTAssertTrue(cancel.isHittable)
+        cancel.tap()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
         print("AP09_OBSERVED unassigned=\(unassignedHeight) short=\(shortHeight) long=\(longHeight)")
     }
 
@@ -1266,7 +1358,7 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         defer { app.terminate() }
         launchAndWaitForTimer(app)
-        try assertPickerAvoidsStart(app, state: "U02-Unassigned", title: "Unassigned")
+        try assertPickerAvoidsStart(app, state: "U02-Unassigned", title: "No task")
         let title = "Write release notes"
         createTaskForDeletionTest(named: title, in: app)
         app.buttons["Timer"].tap()
@@ -1291,40 +1383,79 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
     }
 
     private func pickerGlyphHeight(shot: String, in app: XCUIApplication) -> CGFloat {
-        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        let title = app.descendants(matching: .any).matching(identifier: "Focus task title").firstMatch
+        let picker = title.exists ? title : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "Missing picker Focus task")
         revealPicker(picker, in: app)
-        for _ in 0..<6 where picker.frame.minY < 0 {
-            app.swipeDown()
-        }
-        for _ in 0..<6 where picker.frame.maxY > app.frame.maxY {
-            app.swipeUp()
-        }
-        XCTAssertTrue(picker.isHittable, "picker not hittable at XXXL")
+        if !title.exists { XCTAssertTrue(picker.isHittable, "picker not hittable at XXXL") }
         XCTAssertGreaterThan(picker.frame.width, 0)
         XCTAssertGreaterThan(picker.frame.height, 0)
-        XCTAssertTrue(app.frame.contains(picker.frame), "picker escapes app frame: \(picker.frame) in \(app.frame)")
+        let viewport = pickerViewport(in: app)
+        if picker.frame.height > viewport.height {
+            assertTallPickerEdgesReadable(picker, shot: shot, in: app)
+        } else {
+            XCTAssertTrue(viewport.contains(picker.frame), "picker escapes unobscured viewport: \(picker.frame) in \(viewport)")
+        }
         print("AP09_PICKER shot=\(shot) label=\(picker.label) frame=\(picker.frame) app=\(app.frame)")
         attachNavigationEvidence(shot, in: app)
         return picker.frame.height
     }
 
-    private func revealPicker(_ picker: XCUIElement, in app: XCUIApplication) {
+    private func pickerViewport(in app: XCUIApplication) -> CGRect {
         let scroll = app.scrollViews.firstMatch
         XCTAssertTrue(scroll.exists)
-        for _ in 0..<8 {
-            let top = max(scroll.frame.minY, app.navigationBars.firstMatch.frame.maxY)
-            let bottom = min(scroll.frame.maxY, app.buttons["Timer"].frame.minY)
+        let top = max(scroll.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+        var bottom = min(scroll.frame.maxY, app.buttons["Timer"].frame.minY)
+        if let dock = primaryControlDockFrame(in: app) { bottom = min(bottom, dock.minY) }
+        return CGRect(x: scroll.frame.minX, y: top, width: scroll.frame.width, height: bottom - top)
+    }
+
+    private enum PickerEdge { case top, bottom }
+
+    private func revealPicker(_ picker: XCUIElement, edge: PickerEdge? = nil, in app: XCUIApplication) {
+        if isDocked(picker, in: app) { return }
+        for _ in 0..<30 {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.35))
             let frame = picker.frame
-            if picker.isHittable && frame.minY >= top && frame.maxY <= bottom { return }
-            let viewport = CGRect(x: scroll.frame.minX, y: top, width: scroll.frame.width, height: bottom - top)
+            let viewport = pickerViewport(in: app)
             XCTAssertGreaterThan(viewport.height, 0)
+            let correction: CGFloat
+            if edge == .top {
+                correction = viewport.minY - frame.minY
+            } else if edge == .bottom || frame.height > viewport.height {
+                correction = viewport.maxY - frame.maxY
+            } else {
+                if viewport.contains(frame) { return }
+                correction = viewport.midY - frame.midY
+            }
+            if abs(correction) < 1 { return }
             let origin = app.coordinate(withNormalizedOffset: .zero)
-            let direction: CGFloat = frame.minY < top ? 1 : -1
-            let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
-            let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
-            start.press(forDuration: 0.01, thenDragTo: end)
+            let travel = min(max(abs(correction), 12), viewport.height * 0.15)
+            let direction: CGFloat = correction > 0 ? 1 : -1
+            let gutterX = viewport.minX + viewport.width * 0.06
+            let start = origin.withOffset(.init(dx: gutterX, dy: viewport.midY))
+            let end = origin.withOffset(.init(dx: gutterX, dy: viewport.midY + direction * travel))
+            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: XCUIGestureVelocity(rawValue: 40), thenHoldForDuration: 1)
         }
+    }
+
+    private func assertTallPickerEdgesReadable(_ picker: XCUIElement, shot: String, in app: XCUIApplication) {
+        revealPicker(picker, edge: .top, in: app)
+        var viewport = pickerViewport(in: app)
+        XCTAssertGreaterThanOrEqual(picker.frame.minY, viewport.minY - 1, "first title line must clear navigation")
+        XCTAssertLessThan(picker.frame.minY, viewport.midY, "first title line must be inside viewport")
+        attachNavigationEvidence("\(shot)-first-line", in: app)
+        revealPicker(picker, edge: .bottom, in: app)
+        viewport = pickerViewport(in: app)
+        XCTAssertLessThanOrEqual(picker.frame.maxY, viewport.maxY + 1, "last title line must clear tab bar")
+        XCTAssertGreaterThan(picker.frame.maxY, viewport.midY, "last title line must be inside viewport")
+        attachNavigationEvidence("\(shot)-last-line", in: app)
+        let menu = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Focus task")).firstMatch
+        revealPicker(menu, in: app)
+        XCTAssertTrue(menu.isHittable)
+        menu.tap()
+        XCTAssertTrue(app.buttons["No task"].waitForExistence(timeout: 5), "visible picker must open its menu")
+        app.buttons.matching(NSPredicate(format: "label == %@", "AP09 long task title that wraps past two lines at XXXL")).firstMatch.tap()
     }
 
     private func selectPickerTask(named title: String, in app: XCUIApplication) {

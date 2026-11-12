@@ -207,7 +207,8 @@ struct RetainedRoomRejoinTests {
             _ = try fixture.prepare()
             Issue.record("Secret compensation failure was hidden")
         } catch {
-            let description = error.localizedDescription
+            // The compound detail stays on the diagnostic path.
+            let description = (error as? IrohProtocolError)?.diagnosticDetail ?? ""
             #expect(description.contains(". Room secret cleanup failed: "))
             #expect(!description.contains("%@"))
             #expect(description.components(separatedBy: "Room secret cleanup failed: ").count == 2)
@@ -377,7 +378,10 @@ struct RetainedRoomRejoinTests {
             Issue.record("Expected join failure, got \(result)")
             return
         }
-        #expect(message.contains("joined room has no valid genesis. Room join rollback failed: "))
+        // IOS27-18: both sentences are authored; the protocol reason stays out.
+        #expect(message == "Room data could not be read. Try again. "
+            + "Data from the unfinished join is still saved on this device. Restart Pomodorough, then try again.")
+        #expect(!message.contains("genesis"))
         #expect(captured.value.count == 2)
         // R53-L01: the capture boundary no longer carries failure
         // sentences; join and rollback each arrive as one bounded

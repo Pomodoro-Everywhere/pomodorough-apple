@@ -171,8 +171,8 @@ enum PomodoroughTheme {
         return Color(red: foreground.red, green: foreground.green, blue: foreground.blue)
     }
 
-    /// Small-text foreground: darkened signal on light appearances, vivid
-    /// signal on dark appearances.
+    /// Small-text foreground and the app-wide tint: darkened signal on light
+    /// appearances, vivid signal on dark appearances.
     static var signalText: Color {
 #if os(iOS)
         Color(UIColor { traits in

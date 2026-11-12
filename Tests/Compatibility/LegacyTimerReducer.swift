@@ -110,7 +110,8 @@ extension TimerReducer {
             status: timer.status.rawValue,
             plannedDurationMs: timer.plannedDurationMs,
             completedAt: timer.status == .completed ? timer.anchorAt : nil,
-            endedAt: timer.anchorAt
+            endedAt: timer.anchorAt,
+            elapsedMs: min(timer.plannedDurationMs, max(0, timer.elapsedAtAnchorMs))
         ))
         return history
     }
@@ -132,7 +133,8 @@ extension TimerReducer {
                 status: item.status,
                 plannedDurationMs: item.plannedDurationMs,
                 completedAt: item.completedAt,
-                endedAt: item.endedAt
+                endedAt: item.endedAt,
+                elapsedMs: item.elapsedMs
             )
         }
     }
@@ -293,7 +295,12 @@ extension TimerReducer {
             history: history,
             at: command.occurredAt
         ) else { return (timer, history) }
-        let elapsed = status == .completed ? target.plannedDurationMs : command.observedElapsedMs
+        // Core 0.55.0 ignores a Finish command's observedElapsedMs: a running
+        // session ends at the time measured to the command, and a paused or
+        // ended session keeps its stored elapsed time.
+        let elapsed = status == .completed
+            ? elapsedAt(target, date: command.occurredAt)
+            : command.observedElapsedMs
         let transitioned = updated(target, status: status, elapsed: elapsed, at: command.occurredAt, intent: intent)
         let item = HistoryItem(
             id: history.first(where: { $0.timerId == command.timerId })?.id ?? command.timerId,
@@ -304,7 +311,8 @@ extension TimerReducer {
             status: status.rawValue,
             plannedDurationMs: target.plannedDurationMs,
             completedAt: status == .completed ? command.occurredAt : nil,
-            endedAt: command.occurredAt
+            endedAt: command.occurredAt,
+            elapsedMs: transitioned.elapsedAtAnchorMs
         )
         let priorHistory = activating(target, current: timer, history: history, command: command)
         return (transitioned, [item] + priorHistory)
@@ -325,7 +333,9 @@ extension TimerReducer {
             phase: item.phase,
             status: status,
             plannedDurationMs: item.plannedDurationMs,
-            elapsedAtAnchorMs: status == .completed ? item.plannedDurationMs : 0,
+            // Core 0.55.0 counts a row stored without elapsedMs as its plan
+            // when completed and as zero otherwise.
+            elapsedAtAnchorMs: item.elapsedMs ?? (status == .completed ? item.plannedDurationMs : 0),
             anchorAt: item.endedAt ?? date,
             lastIntent: nil
         )
@@ -354,7 +364,8 @@ extension TimerReducer {
                 status: CanonicalTimer.Status.superseded.rawValue,
                 plannedDurationMs: current.plannedDurationMs,
                 completedAt: nil,
-                endedAt: command.occurredAt
+                endedAt: command.occurredAt,
+                elapsedMs: elapsedAt(current, date: command.occurredAt)
             ), at: 0)
         } else if !result.contains(where: { $0.timerId == current.id }) {
             result.insert(HistoryItem(
@@ -366,7 +377,8 @@ extension TimerReducer {
                 status: current.status.rawValue,
                 plannedDurationMs: current.plannedDurationMs,
                 completedAt: current.status == .completed ? current.anchorAt : nil,
-                endedAt: current.anchorAt
+                endedAt: current.anchorAt,
+                elapsedMs: min(current.plannedDurationMs, max(0, current.elapsedAtAnchorMs))
             ), at: 0)
         }
         return result
@@ -419,9 +431,18 @@ extension TimerReducer {
             status: CanonicalTimer.Status.completed.rawValue,
             plannedDurationMs: timer.plannedDurationMs,
             completedAt: completedAt,
-            endedAt: completedAt
+            endedAt: completedAt,
+            elapsedMs: timer.plannedDurationMs
         )
         return (completed, [completion] + history)
+    }
+
+    /// Mirrors Core `elapsed_at`: a running session counts the time since its anchor.
+    private static func elapsedAt(_ timer: CanonicalTimer, date: Date) -> Int64 {
+        let stored = min(timer.plannedDurationMs, max(0, timer.elapsedAtAnchorMs))
+        guard timer.status == .running else { return stored }
+        let delta = max(0, Int64((date.timeIntervalSince(timer.anchorAt) * 1_000).rounded()))
+        return min(timer.plannedDurationMs, stored + delta)
     }
 
     private static func updated(

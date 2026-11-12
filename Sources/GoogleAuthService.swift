@@ -1,5 +1,6 @@
 import Foundation
 import GoogleSignIn
+import OSLog
 #if os(iOS)
 import UIKit
 #elseif os(macOS)
@@ -29,6 +30,56 @@ struct SystemGoogleIdentityProvider: GoogleIdentityProviding {
     func signOut() {
         GoogleAuthService.signOut()
     }
+}
+
+/// Single source of the `googleIdentityProvider:` default. Release builds
+/// always get Google. A DEBUG test process gets a provider that refuses, so
+/// a test that omits an injected provider can never open the browser, start
+/// real OAuth or reach GoogleSignIn's own Keychain code.
+enum GoogleIdentityProviderDefault {
+    @MainActor
+    static func resolve() -> any GoogleIdentityProviding {
+#if DEBUG
+        return resolve(isTestProcess: KeychainTestProcessGuard.isTestProcess)
+#else
+        return SystemGoogleIdentityProvider()
+#endif
+    }
+
+#if DEBUG
+    @MainActor
+    static func resolve(isTestProcess: Bool) -> any GoogleIdentityProviding {
+        isTestProcess ? TestProcessGoogleIdentityProvider() : SystemGoogleIdentityProvider()
+    }
+#endif
+}
+
+#if DEBUG
+/// The default provider in a test process. Starting a sign-in or handling a
+/// sign-in URL stops the process, so a missed injection fails loudly.
+/// Sign-out does nothing: no real Google session exists in a test process.
+struct TestProcessGoogleIdentityProvider: GoogleIdentityProviding {
+    func identityToken(nonce: String) async throws -> String {
+        preconditionFailure("A test process must inject a Google identity provider; the default would start real sign-in.")
+    }
+
+    @discardableResult
+    func handle(_ url: URL) -> Bool {
+        preconditionFailure("A test process must inject a Google identity provider; the default would handle a real sign-in URL.")
+    }
+
+    func signOut() {}
+}
+#endif
+
+/// The Google consent page sent the person back without an authorization
+/// code. Google's own error text is logged privately and never shown.
+enum GoogleConsentCallbackError: Error, Equatable, Sendable {
+    /// The person declined consent (`error=access_denied`). Treated as a
+    /// cancelled sign-in.
+    case declined
+    /// Google reported another error.
+    case rejected
 }
 
 enum GoogleAuthService {
@@ -96,6 +147,11 @@ struct URLSessionGoogleOAuthTokenExchangeTransport: GoogleOAuthTokenExchangeTran
 }
 
 enum MacGoogleOAuthContract {
+    private static let logger = Logger(
+        subsystem: "me.egigoka.pomodorough",
+        category: "MacGoogleOAuth"
+    )
+
     private struct TokenResponse: Decodable {
         let idToken: String?
 
@@ -138,8 +194,10 @@ enum MacGoogleOAuthContract {
             } ?? [],
             uniquingKeysWith: { first, _ in first }
         )
-        if let message = parameters["error_description"] ?? parameters["error"] {
-            throw AppError.server(message)
+        if let code = parameters["error"] {
+            let detail = parameters["error_description"] ?? ""
+            logger.error("Google consent callback error \(code, privacy: .private): \(detail, privacy: .private)")
+            throw code == "access_denied" ? GoogleConsentCallbackError.declined : GoogleConsentCallbackError.rejected
         }
         guard parameters["state"] == expectedState,
               let code = parameters["code"],

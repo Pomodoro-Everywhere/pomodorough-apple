@@ -61,6 +61,15 @@ enum RoomReplicationTransition: Equatable, Sendable {
     case captured(PersistedTimerState)
     case captureFailed(PersistedTimerState?, message: String, quarantined: Bool)
     case failed(String)
+    // R54-AP01: sign-out revoked the transition lease while the transition
+    // was suspended; the transition rolled back without durable activation.
+    case ownershipRevoked
+}
+
+struct RoomTransitionRevokedError: Error, LocalizedError, Sendable {
+    var errorDescription: String? {
+        String(localized: "Sign-out is in progress. Changes are paused until it finishes.")
+    }
 }
 
 protocol RoomReplicationServing: Sendable {

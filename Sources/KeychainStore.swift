@@ -39,7 +39,7 @@ struct KeychainLogoutRevocationStore: LogoutRevocationStoring {
     private let security: any KeychainSecurityOperating
     private static let mutationLock = NSLock()
 
-    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+    init(security: any KeychainSecurityOperating = KeychainSecurityDefault.resolve()) {
         self.security = security
     }
 
@@ -154,14 +154,19 @@ protocol KeychainSecurityOperating: Sendable {
     func errorMessage(for status: OSStatus) -> String?
 }
 
+/// The only type that calls SecItem*. Every call passes the test-process
+/// guard first; in Release builds the guard compiles to `nil` and the call
+/// goes straight to the system Keychain.
 struct SystemKeychainSecurity: KeychainSecurityOperating {
     func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?) {
+        if let refused = KeychainTestProcessGuard.refusal(.copyMatching, query: query) { return (refused, nil) }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         return (status, result as? Data)
     }
 
     func copyAccounts(_ query: [String: Any]) -> (status: OSStatus, accounts: [String]) {
+        if let refused = KeychainTestProcessGuard.refusal(.copyAccounts, query: query) { return (refused, []) }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         let items = result as? [[String: Any]] ?? []
@@ -169,15 +174,18 @@ struct SystemKeychainSecurity: KeychainSecurityOperating {
     }
 
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus {
-        SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if let refused = KeychainTestProcessGuard.refusal(.update, query: query) { return refused }
+        return SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     }
 
     func add(_ query: [String: Any]) -> OSStatus {
-        SecItemAdd(query as CFDictionary, nil)
+        if let refused = KeychainTestProcessGuard.refusal(.add, query: query) { return refused }
+        return SecItemAdd(query as CFDictionary, nil)
     }
 
     func delete(_ query: [String: Any]) -> OSStatus {
-        SecItemDelete(query as CFDictionary)
+        if let refused = KeychainTestProcessGuard.refusal(.delete, query: query) { return refused }
+        return SecItemDelete(query as CFDictionary)
     }
 
     func errorMessage(for status: OSStatus) -> String? {
@@ -190,7 +198,7 @@ struct KeychainStore: TokenStoring {
     private let account = "token-pair"
     private let security: any KeychainSecurityOperating
 
-    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+    init(security: any KeychainSecurityOperating = KeychainSecurityDefault.resolve()) {
         self.security = security
     }
 
@@ -258,7 +266,7 @@ struct IrohEndpointKeychainStore: IrohEndpointKeyStoring {
     private let account = "endpoint-secret-v1"
     private let security: any KeychainSecurityOperating
 
-    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+    init(security: any KeychainSecurityOperating = KeychainSecurityDefault.resolve()) {
         self.security = security
     }
 
@@ -316,7 +324,7 @@ struct IrohRoomSecretKeychainStore: IrohRoomSecretStoring {
     private let service = "me.egigoka.pomodorough.iroh-room"
     private let security: any KeychainSecurityOperating
 
-    init(security: any KeychainSecurityOperating = SystemKeychainSecurity()) {
+    init(security: any KeychainSecurityOperating = KeychainSecurityDefault.resolve()) {
         self.security = security
     }
 

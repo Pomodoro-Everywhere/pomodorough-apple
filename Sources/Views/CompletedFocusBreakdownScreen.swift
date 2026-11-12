@@ -1,6 +1,19 @@
 import Charts
 import SwiftUI
 
+struct CompletedFocusChartEntry: Identifiable {
+    let summary: CompletedFocusSummary
+    let index: Int
+
+    var id: String { summary.id }
+    var color: Color { CompletedFocusBreakdownScreen.badgeColor(at: index) }
+    var labelColor: Color { CompletedFocusBreakdownScreen.badgeLabelColor(at: index) }
+
+    static func entries(for summaries: [CompletedFocusSummary]) -> [Self] {
+        summaries.enumerated().map { Self(summary: $0.element, index: $0.offset) }
+    }
+}
+
 struct CompletedFocusBreakdownScreen: View {
     let model: AppModel
 
@@ -33,6 +46,7 @@ struct CompletedFocusBreakdownScreen: View {
 
     var body: some View {
         let summaries = model.completedFocusSummaries()
+        let entries = CompletedFocusChartEntry.entries(for: summaries)
         Group {
             if summaries.isEmpty {
                 ContentUnavailableView(
@@ -48,8 +62,8 @@ struct CompletedFocusBreakdownScreen: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         totals(summaries)
-                        chart(summaries)
-                        taskList(summaries)
+                        chart(entries)
+                        taskList(entries)
                     }
                     .padding()
                     .frame(maxWidth: 680)
@@ -90,54 +104,57 @@ struct CompletedFocusBreakdownScreen: View {
         }
     }
 
-    private func chart(_ summaries: [CompletedFocusSummary]) -> some View {
-        chartContent(summaries)
+    private func chart(_ entries: [CompletedFocusChartEntry]) -> some View {
+        chartContent(entries)
             .aspectRatio(Self.chartAspectRatio, contentMode: .fit)
             .frame(minHeight: Self.chartMinHeight, maxHeight: Self.chartMaxHeight)
             .accessibilityLabel("Completed focus time by task")
     }
 
-    private func chartContent(_ summaries: [CompletedFocusSummary]) -> some View {
-        Chart(Array(summaries.enumerated()), id: \.element.id) { entry in
+    private func chartContent(_ entries: [CompletedFocusChartEntry]) -> some View {
+        Chart(entries) { entry in
             SectorMark(
-                angle: .value("Completed focus minutes", Double(entry.element.timeSpentMs) / 60_000),
+                angle: .value("Completed focus minutes", Double(entry.summary.timeSpentMs) / 60_000),
                 angularInset: 1.5
             )
-            .foregroundStyle(by: .value("Task", entry.element.taskTitle))
+            .foregroundStyle(by: .value("Task", entry.id))
             .annotation(position: .overlay) {
-                Text("\(entry.offset + 1)")
+                Text("\(entry.index + 1)")
                     .font(.caption2.monospacedDigit().bold())
-                    .foregroundStyle(Self.badgeLabelColor(at: entry.offset))
+                    .foregroundStyle(entry.labelColor)
                     .accessibilityHidden(true)
             }
-            .accessibilityLabel(entry.element.taskTitle)
-            .accessibilityValue(
-                "\(entry.element.completedPomodoros) completed pomodoros, \(TaskTimeText.spoken(entry.element.timeSpentMs))"
-            )
+            .accessibilityLabel(Self.accessibilityLabel(for: entry.summary))
+            .accessibilityValue(Self.accessibilityValue(for: entry.summary))
         }
         .chartForegroundStyleScale(
-            domain: summaries.map(\.taskTitle),
-            range: summaries.indices.map { Self.badgeColor(at: $0) }
+            domain: entries.map(\.id),
+            range: entries.map(\.color)
         )
-        .chartLegend(position: .bottom, alignment: .center, spacing: 12)
+        // The numbered task list is the legend; duplicate titles retain separate ID-keyed rows.
+        .chartLegend(.hidden)
     }
 
     static func accessibilityLabel(for summary: CompletedFocusSummary) -> String {
         summary.taskTitle
     }
 
+    /// Looks up the catalog plural for `%lld completed pomodoros, %@`; a plain
+    /// String literal is verbatim and would speak "1 completed pomodoros".
     static func accessibilityValue(for summary: CompletedFocusSummary) -> String {
-        "\(summary.completedPomodoros) completed pomodoros, \(TaskTimeText.spoken(summary.timeSpentMs))"
+        let spoken = TaskTimeText.spoken(summary.timeSpentMs)
+        return String(localized: "\(summary.completedPomodoros) completed pomodoros, \(spoken)")
     }
 
-    private func taskList(_ summaries: [CompletedFocusSummary]) -> some View {
+    private func taskList(_ entries: [CompletedFocusChartEntry]) -> some View {
         VStack(spacing: 0) {
-            ForEach(Array(summaries.enumerated()), id: \.element.id) { index, summary in
-                if index > 0 {
+            ForEach(entries) { entry in
+                let summary = entry.summary
+                if entry.index > 0 {
                     Divider()
                 }
                 HStack(spacing: 12) {
-                    ChartBadge(index: index)
+                    ChartBadge(entry: entry)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(summary.taskTitle)
                             .font(.body.weight(.semibold))
@@ -221,14 +238,14 @@ struct CompletedFocusBreakdownScreen: View {
 struct ChartBadge: View {
     @ScaledMetric(relativeTo: .caption2) private var diameter: CGFloat = 22
 
-    let index: Int
+    let entry: CompletedFocusChartEntry
 
     var body: some View {
-        Text("\(index + 1)")
+        Text("\(entry.index + 1)")
             .font(.caption2.monospacedDigit().bold())
-            .foregroundStyle(CompletedFocusBreakdownScreen.badgeLabelColor(at: index))
+            .foregroundStyle(entry.labelColor)
             .frame(width: diameter, height: diameter)
-            .background(CompletedFocusBreakdownScreen.badgeColor(at: index), in: .circle)
+            .background(entry.color, in: .circle)
             .accessibilityHidden(true)
     }
 }

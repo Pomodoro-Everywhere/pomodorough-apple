@@ -248,7 +248,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
         } catch {
             Self.logger.error("deleteAccount failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
             SentryCapture.capture(error)
-            return .unknown(error.localizedDescription)
+            return .unknown(UserFacingFailure.sentence(for: error, during: .deleteAccount))
         }
     }
 
@@ -266,12 +266,20 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
         return (data, http)
     }
 
+    /// The server's text goes to the log only; the person reads an authored sentence.
     private func accountDeletionOutcome(data: Data, response: HTTPURLResponse) -> AccountDeletionOutcome {
         if response.statusCode == 204 { return .committed }
         let message = (try? JSONDecoder.api.decode(APIError.self, from: data).error)
             ?? "Request failed (\(response.statusCode))."
-        if (400..<500).contains(response.statusCode) { return .rejected(message) }
-        return .unknown(message)
+        let status = response.statusCode
+        Self.logger.error("deleteAccount answered \(status, privacy: .public): \(message, privacy: .private)")
+        guard (400..<500).contains(status) else {
+            return .unknown(UserFacingFailure.sentence(for: AppError.server(message), during: .deleteAccount))
+        }
+        return .rejected(String(
+            localized: "account-deletion.rejected",
+            defaultValue: "The server did not accept the account deletion. Check the confirmation, then try again."
+        ))
     }
 
     func clearTokens() throws {
@@ -459,6 +467,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             if http.statusCode == 401 { throw AppError.unauthorized }
             if http.statusCode == 404, reportsMissingRoute { throw MissingRouteError() }
             let message = (try? JSONDecoder.api.decode(APIError.self, from: data).error) ?? "Request failed (\(http.statusCode))."
+            Self.logger.error("\(method, privacy: .public) \(path, privacy: .private) failed \(http.statusCode, privacy: .public): \(message, privacy: .private)")
             if http.statusCode == 409 { throw AppError.conflict(message) }
             throw AppError.server(message)
         }

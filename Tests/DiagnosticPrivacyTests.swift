@@ -44,7 +44,10 @@ struct DiagnosticPrivacyTests {
     func manualIdentitySurvivesFinalHookWithoutUserText() throws {
         let message = Self.canaries.joined(separator: " ")
         let original = AppError.server(message)
-        #expect(original.localizedDescription == message)
+        // The canaries ride the associated value; the person reads an
+        // authored sentence that never carries server text.
+        #expect(original == AppError.server(message))
+        #expect(!original.localizedDescription.contains(message))
         let diagnostic = DiagnosticPrivacy.diagnostic(original, file: "AccountLifecycleController.swift")
         let options = Options()
         DiagnosticPrivacy.install(on: options)
@@ -57,7 +60,7 @@ struct DiagnosticPrivacyTests {
         #expect(exceptions.first?.type == "AppError.server")
         #expect(exceptions.first?.value == "AppError.server (1)")
         #expect(!DiagnosticPrivacy.publicSummary(original).contains(message))
-        #expect(original.localizedDescription == message)
+        #expect(original == AppError.server(message), "the final hook must not rewrite the error itself")
     }
 
     @Test
@@ -203,15 +206,44 @@ struct DiagnosticPrivacyTests {
         }
     }
 
+    /// On macOS the tests run in the test host, not the shipped app. Its
+    /// plist takes the same `$(MARKETING_VERSION)` and
+    /// `$(CURRENT_PROJECT_VERSION)` as the shipped app, so its version@build
+    /// is the shipped release name.
+#if os(macOS)
+    private static let hostBundleIdentifier = DefaultStorageLocation.macTestHostBundleIdentifier
+#else
+    private static let hostBundleIdentifier = "me.egigoka.pomodorough"
+#endif
+
+    /// The version and build every target inherits from project.yml. Only
+    /// the project settings set them, so no target ships other values.
+    private static func shippedVersionAndBuild() throws -> (version: String, build: String) {
+        let project = try String(
+            contentsOf: URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "project.yml"),
+            encoding: .utf8
+        )
+        func setting(_ key: String) throws -> String {
+            let lines = project.components(separatedBy: "\n")
+                .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("\(key): ") }
+            #expect(lines.count == 1, "\(key) is set once, in the project settings")
+            return try #require(lines.first?.components(separatedBy: ": ").last)
+        }
+        return (try setting("MARKETING_VERSION"), try setting("CURRENT_PROJECT_VERSION"))
+    }
+
     @Test
     func appBundleReleaseSurvivesHookWhilePreReleaseFormsDrop() throws {
         // Mirrors SentrySetup.startIfConfigured's version@build composition from
         // the hosting app bundle. A version format the hook rejects fails here
         // instead of silently dropping release attribution in production.
-        #expect(Bundle.main.bundleURL.lastPathComponent == "Pomodorough.app")
+        #expect(Bundle.main.bundleIdentifier == Self.hostBundleIdentifier)
         let info = try #require(Bundle.main.infoDictionary)
         let version = try #require(info["CFBundleShortVersionString"] as? String)
         let build = try #require(info["CFBundleVersion"] as? String)
+        let shipped = try Self.shippedVersionAndBuild()
+        #expect(version == shipped.version && build == shipped.build, "the host carries the shipped version@build")
         let event = contaminatedEvent()
         event.releaseName = "\(version)@\(build)"
         let clean = try scrubWithInstalledHook(event)
@@ -368,7 +400,9 @@ struct DiagnosticPrivacyTests {
             _ = try await client.me()
             Issue.record("Expected server error")
         } catch {
-            #expect(error.localizedDescription == Self.canaries.joined(separator: " "))
+            // The server body reached the error, so the clean event above
+            // proves the hook removed it rather than never seeing it.
+            #expect(error as? AppError == .server(Self.canaries.joined(separator: " ")))
         }
     }
 
@@ -416,31 +450,43 @@ struct DiagnosticPrivacyTests {
         #expect(scanned > 50, "source scan covered nothing")
     }
 
+    /// The person reads an authored sentence that redaction leaves alone;
+    /// the server's raw text still travels on the error to the log and the
+    /// diagnostics path, which redact it.
     @Test @MainActor
     func userFacingFailuresKeepRawTextThroughProductionPaths() async throws {
         let canary = Self.canaries.joined(separator: " ")
-        #expect(AppError.server(canary).localizedDescription == canary)
-        #expect(AppError.conflict(canary).localizedDescription == canary)
-        #expect(!DiagnosticPrivacy.publicSummary(AppError.server(canary)).contains(canary))
-        #expect(!DiagnosticPrivacy.publicSummary(AppError.conflict(canary)).contains(canary))
+        let serverSentence = String(
+            localized: "app-error.server",
+            defaultValue: "The server could not finish the request. Try again later."
+        )
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PrivacyResponseProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         let client = APIClient(session: session, keychain: StaticTokenStore())
+        var rawText: String?
+        do { _ = try await client.challenge() } catch AppError.server(let message) { rawText = message }
+        let reported = LockedTestValue<[NSError]>([])
+        SentryCapture.setTestBackend { reported.value.append($0 as NSError) }
+        defer { SentryCapture.resetForTesting() }
         let controller = AccountLifecycleController(api: client,
             googleIdentityProvider: RecordingGoogleIdentityProvider(),
             revocationStore: TestLogoutRevocationStore())
+
         let transition = await controller.authenticate(controller.currentOperation,
             deviceID: "test-device", platform: "test")
-        guard case .failed(let message) = transition else {
-            Issue.record("Expected failed transition, got \(transition)")
-            return
-        }
-        #expect(message == canary)
-        let diagnostic = DiagnosticPrivacy.diagnostic(AppError.server(canary),
-            file: "AccountLifecycleController.swift")
-        #expect(!DiagnosticPrivacy.publicSummary(diagnostic).contains(canary))
+
+        // The person sees the authored sentence, unchanged by redaction.
+        #expect(transition == .failed(serverSentence) && serverSentence == AppError.server(canary).localizedDescription)
+        // The raw server text reaches the log and diagnostics path, redacted there.
+        let diagnostic = reported.value.first { $0.userInfo["identity"] as? String == "AppError.server" }
+        #expect(rawText == canary
+            && diagnostic?.userInfo["operation"] as? String == DiagnosticOperation.account.rawValue
+            && diagnostic.map { reported in
+                Self.canaries.allSatisfy { !"\(reported) \(reported.userInfo)".contains($0) }
+            } == true
+            && !DiagnosticPrivacy.publicSummary(AppError.server(canary)).contains(canary))
         let guarded = APIClient(session: session, keychain: EmptyTokenStore())
         let outcome = await guarded.deleteAccount(confirmation: "test")
         #expect(outcome == .unknown(AppError.unauthorized.localizedDescription))
@@ -537,7 +583,7 @@ struct DiagnosticPrivacyTests {
     }
 }
 
-private struct OfflineSDKCapture {
+struct OfflineSDKCapture {
     let id: SentryId
     let prepared: [String: Any]
     let header: [String: Any]
@@ -546,6 +592,12 @@ private struct OfflineSDKCapture {
 }
 
 private func captureThroughOfflineSDK(_ event: Event, scope: Scope) throws -> OfflineSDKCapture {
+    try captureThroughOfflineSDK { client in client.capture(event: event, scope: scope) }
+}
+
+// `send` picks the SDK entry point. `capture(error:scope:)` builds the event
+// with the same `SentryEvent(error:)` path as `SentrySDK.capture(error:)`.
+func captureThroughOfflineSDK(_ send: (SentryClient) -> SentryId) throws -> OfflineSDKCapture {
     let host = "r54-\(UUID().uuidString.lowercased()).invalid"
     let session = privacyTransportSession()
     defer { session.invalidateAndCancel() }
@@ -559,7 +611,7 @@ private func captureThroughOfflineSDK(_ event: Event, scope: Scope) throws -> Of
     }
     let client = try #require(SentryClient(options: options))
     defer { client.close() }
-    let id = client.capture(event: event, scope: scope)
+    let id = send(client)
     let bodies = flushUntilDelivered(client, host: host)
     try #require(bodies.count == 1, "expected one offline envelope, got \(bodies.count)")
     let preparedBytes = try #require(prepared.value, "beforeSend never saw a serializable prepared event")

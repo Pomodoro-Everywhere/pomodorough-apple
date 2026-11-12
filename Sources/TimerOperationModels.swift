@@ -143,6 +143,10 @@ struct Acknowledgement: Codable, Equatable, Sendable {
 
 enum TaskOperationType: String, Codable, Sendable {
     case upsert, delete
+    /// From Core 0.56.0: `taskId` names the old identity and `title` the new
+    /// normalized title. Core's rename plan queues the new identity's upsert
+    /// as its own operation.
+    case rename
 }
 
 struct TaskOperation: Codable, Identifiable, Equatable, Sendable {
@@ -157,11 +161,24 @@ struct TaskOperation: Codable, Identifiable, Equatable, Sendable {
     var isValid: Bool {
         !id.isEmpty
             && UUID(uuidString: taskId) != nil
-            && ((type == .delete && title == nil)
-                || (type == .upsert
-                    && title.flatMap(FocusTask.init(title:))?.id == UUID(uuidString: taskId)))
+            && hasValidTitle
             && WireBounds.isValidClock(wallMs: hlcWallMs, counter: hlcCounter)
             && WireBounds.isWithinClockSkew(wallMs: hlcWallMs, occurredAt: occurredAt)
+    }
+
+    /// A delete carries no title. An upsert's title derives its own `taskId`.
+    /// A rename's title derives the new identity, which must differ from
+    /// `taskId`, or the rename would delete the task it keeps.
+    private var hasValidTitle: Bool {
+        let titled = title.flatMap(FocusTask.init(title:))
+        switch type {
+        case .delete:
+            return title == nil
+        case .upsert:
+            return titled?.id == UUID(uuidString: taskId)
+        case .rename:
+            return titled.map { $0.id != UUID(uuidString: taskId) } ?? false
+        }
     }
 }
 

@@ -97,6 +97,9 @@ jobs:
           ios_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Supporting/iOS-Info.plist)"
           macos_marketing="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Supporting/macOS-Info.plist)"
           macos_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Supporting/macOS-Info.plist)"
+          # The macOS tests run in the test host, so its plist must inherit the same versions.
+          testhost_marketing="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Supporting/macOS-TestHost-Info.plist)"
+          testhost_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Supporting/macOS-TestHost-Info.plist)"
           pbx_marketing="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' Pomodorough.xcodeproj/project.pbxproj | sort -u)"
           pbx_build="$(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION = ([0-9]+);/\1/p' Pomodorough.xcodeproj/project.pbxproj | sort -u)"
           dollar='$'
@@ -104,12 +107,14 @@ jobs:
           expected_build_token="${dollar}(CURRENT_PROJECT_VERSION)"
 
           if [[ "$ios_marketing" != "$expected_marketing_token" ]] ||
-            [[ "$macos_marketing" != "$expected_marketing_token" ]]; then
+            [[ "$macos_marketing" != "$expected_marketing_token" ]] ||
+            [[ "$testhost_marketing" != "$expected_marketing_token" ]]; then
             echo "App plists must inherit MARKETING_VERSION" >&2
             exit 1
           fi
           if [[ "$ios_build" != "$expected_build_token" ]] ||
-            [[ "$macos_build" != "$expected_build_token" ]]; then
+            [[ "$macos_build" != "$expected_build_token" ]] ||
+            [[ "$testhost_build" != "$expected_build_token" ]]; then
             echo "App plists must inherit CURRENT_PROJECT_VERSION" >&2
             exit 1
           fi
@@ -420,7 +425,7 @@ jobs:
       - name: Export tested Core provenance
         run: >-
           python3 scripts/verify_shared_core_provenance.py --shard test-macos
-          --product "$DERIVED_DATA_PATH/Build/Products/Debug/Pomodorough.app"
+          --product "$DERIVED_DATA_PATH/Build/Products/Debug/PomodoroughTestHost.app"
           --output "$RUNNER_TEMP/core-provenance"
 
       - name: Upload tested Core provenance

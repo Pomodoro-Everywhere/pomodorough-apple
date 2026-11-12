@@ -105,6 +105,10 @@ struct MainContainer: View {
                 }
             }
             .sheet(isPresented: $showsAccount) { AccountView(model: model) }
+            .onChange(of: showsAccount) { _, isShown in
+                // Account covers the Tasks screen, so the undo window ends.
+                if isShown { model.pendingTaskDeletion.flush() }
+            }
     }
 
     @ViewBuilder
@@ -145,7 +149,7 @@ struct MainContainer: View {
 
     private var macOSWindowTitle: String {
         switch destinationState.selectedTab {
-        case .timer: String(localized: "Pomodorough")
+        case .timer: String(localized: "Timer")
         case .tasks: String(localized: "Tasks")
         case .history: String(localized: "Arrivals")
         case .network: String(localized: "Network")
@@ -218,5 +222,6 @@ struct MainContainer: View {
 #if DEBUG
 #Preview {
     MainContainer(model: AppModel.preview(.populated))
+        .environment(PendingTaskDeletion())
 }
 #endif

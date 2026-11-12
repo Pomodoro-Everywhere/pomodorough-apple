@@ -27,6 +27,7 @@ struct LegacyTabs: View {
 #if DEBUG
 #Preview {
     LegacyTabs(model: AppModel.preview(.populated), selection: .constant(.timer))
+        .environment(PendingTaskDeletion())
 }
 #endif
 #endif

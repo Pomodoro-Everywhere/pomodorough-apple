@@ -31,7 +31,7 @@ final class CentralizedAccountSessionCoordinator {
         lifecycle: AccountLifecycleController,
         synchronization: AccountSynchronization,
         initialPublication: PublicationSnapshot,
-        persistence: AppStatePersistenceCoordinator = AppStatePersistenceCoordinator(defaults: .standard),
+        persistence: AppStatePersistenceCoordinator = AppStatePersistenceCoordinator(defaults: DefaultStorageLocation.defaults),
         roomStore: IrohRoomStore? = nil
     ) {
         self.lifecycle = lifecycle
@@ -106,6 +106,7 @@ extension CentralizedAccountSessionCoordinator {
     enum AuthenticationAction: Equatable, Sendable {
         case stale
         case authenticated(User, Operation)
+        case cancelled
         case failed(String)
     }
 
@@ -176,6 +177,8 @@ extension CentralizedAccountSessionCoordinator {
             publication.sessionState = .signedIn(user)
             publication.isOffline = false
             return transition(.authenticated(user, operation))
+        case .cancelled:
+            return transition(.cancelled)
         case .failed(let message):
             return transition(.failed(message))
         }
@@ -686,7 +689,7 @@ extension CentralizedAccountSessionCoordinator {
         }
         if error is SharedCoreError || error as? AppError == .invalidResponse {
             Self.logger.error("sync failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.captureOnce(key: "centralized-sync-invalid-response", error: error)
+            SentryCapture.captureOnce(key: "centralized-sync-invalid-response", error: error, operation: .sync)
             publication.isOffline = false
             let message = String(localized: "Sync paused because the server response did not match queued changes. \(pendingChangeCount) queued changes remain on this device.")
             return transition(
@@ -904,7 +907,7 @@ extension CentralizedAccountSessionCoordinator {
                 }
             } catch {
                 Self.logger.error("containsCommittedLegacyRecords failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                SentryCapture.capture(error)
+                SentryCapture.capture(error, operation: .persistence)
                 return false
             }
         } else {
@@ -928,7 +931,7 @@ extension CentralizedAccountSessionCoordinator {
             }
         } catch {
             Self.logger.error("containsCommittedLegacyRecords failed: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-            SentryCapture.capture(error)
+            SentryCapture.capture(error, operation: .persistence)
             return false
         }
     }

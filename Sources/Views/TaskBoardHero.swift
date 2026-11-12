@@ -15,29 +15,27 @@ struct TaskBoardHero: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 8) { heroHeading }
-                } else {
-                    HStack(spacing: 12) { heroHeading }
+            if dynamicTypeSize.isAccessibilitySize {
+                // IOS27-16: no decorative clock mark at accessibility sizes,
+                // and the metrics share a line whenever they fit, so the
+                // card leaves the task list on the first screen.
+                VStack(alignment: .leading, spacing: 8) { heroTitle }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 18) { metrics }
+                    VStack(alignment: .leading, spacing: 14) { metrics }
                 }
-            }
-
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 14) {
-                        TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
-                        Divider().overlay(PomodoroughTheme.steel.opacity(0.5))
-                        TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
-                    }
-                } else {
-                    HStack(spacing: 0) {
-                        TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
-                        Divider()
-                            .overlay(PomodoroughTheme.steel.opacity(0.5))
-                            .padding(.horizontal, 18)
-                        TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
-                    }
+            } else {
+                HStack(spacing: 12) {
+                    RouteClockMark(compact: true)
+                    heroTitle
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 0) {
+                    TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
+                    Divider()
+                        .overlay(PomodoroughTheme.steel.opacity(0.5))
+                        .padding(.horizontal, 18)
+                    TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
                 }
             }
         }
@@ -50,13 +48,21 @@ struct TaskBoardHero: View {
         }
         .accessibilityRepresentation {
             Text("Task board")
-                .accessibilityValue(heroAccessibilityValue)
+                .accessibilityValue(Self.accessibilityValue(
+                    finishedPomodoros: finishedPomodoros, timeSpentMs: timeSpentMs, date: date
+                ))
         }
     }
 
     @ViewBuilder
-    private var heroHeading: some View {
-        RouteClockMark(compact: true)
+    private var metrics: some View {
+        TaskBoardMetric(label: "FINISHED", value: "\(finishedPomodoros)")
+            .fixedSize()
+        TaskBoardMetric(label: "FOCUS TIME", value: TaskTimeText.compact(timeSpentMs))
+            .fixedSize()
+    }
+
+    private var heroTitle: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("TASK BOARD")
                 .font(.caption.monospaced().bold())
@@ -65,12 +71,15 @@ struct TaskBoardHero: View {
             Text(date, format: .dateTime.weekday(.wide).month(.abbreviated).day())
                 .font(.title3.weight(.bold))
         }
-        Spacer(minLength: 0)
     }
 
-    private var heroAccessibilityValue: String {
-        "\(date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())), " +
-            "\(finishedPomodoros) finished pomodoros, \(TaskTimeText.spoken(timeSpentMs)) focus time"
+    /// Composed from single-count strings so the pomodoro count pluralizes
+    /// ("1 finished pomodoro", "3 finished pomodoros").
+    static func accessibilityValue(finishedPomodoros: Int, timeSpentMs: Int64, date: Date) -> String {
+        let day = date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        let finished = String(localized: "\(finishedPomodoros) finished pomodoros")
+        let spoken = TaskTimeText.spoken(timeSpentMs)
+        return String(localized: "\(day), \(finished), \(spoken) focus time")
     }
 }
 

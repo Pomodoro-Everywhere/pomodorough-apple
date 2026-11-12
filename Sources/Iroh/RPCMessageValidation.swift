@@ -172,8 +172,8 @@ enum IrohRPCMessageValidation {
         for item in history {
             try exactKeys(item, required: [
                 "id", "timerId", "phase", "status", "plannedDurationMs"
-            ], optional: ["commandId", "taskId", "completedAt", "endedAt"])
-            try rejectNull(item, keys: ["commandId", "taskId", "completedAt", "endedAt"])
+            ], optional: ["commandId", "taskId", "completedAt", "endedAt", "elapsedMs"])
+            try rejectNull(item, keys: ["commandId", "taskId", "completedAt", "endedAt", "elapsedMs"])
             if let taskID = item["taskId"] as? String, !IrohProtocolV1.isValidTaskID(taskID) {
                 throw IrohProtocolError.invalidMessage("history task ID is invalid")
             }

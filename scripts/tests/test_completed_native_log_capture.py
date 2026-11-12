@@ -25,7 +25,7 @@ BASE = "https://api.github.com/repos/example/apple"
 SIGNED = "https://production.blob.core.windows.net/logs/job?signature=fake"
 SUCCESSOR_BOUNDARY = "\n  retain-completed-native-log:\n"
 # Reviewed additions: xcresult/Core exports before both native artifact uploads.
-WORKFLOW_PREFIX_SHA256 = "64332ea39b6e34b9825398c9372fd742baaad6719fb8e80710a3569ac0072e11"
+WORKFLOW_PREFIX_SHA256 = "cba6985ef919cfc4d48e5aad9bc072421b79f932073f15682fa88b1a5071e42d"
 SUCCESSOR_SOURCE = '''    name: <name>
     if: <condition>
     needs: <needs>
@@ -408,21 +408,27 @@ class Client:
     def check(self):
         capture.require(time.monotonic() < self.deadline, "capture deadline expired")
 
+# The caller's timer starts only after the capture blocks SIGALRM, so a slow
+# start under load cannot deliver it before the mask restore (R54-APB09). The
+# long interval keeps a repeat out of the checks that follow.
 original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
-for interval in (0.0, 0.2):
-    delayed, hits = [], []
+for interval in (0.0, 30.0):
+    armed, delayed, hits = [], [], []
     def caller_alarm(signum, frame):
         hits.append(signum)
         raise CallerAlarm("caller alarm")
     def trace(frame, event, argument):
         line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+        if frame.f_code is capture.capture_alarm_context.__code__ and event == "line" \
+                and line.startswith("previous_timer =") and not armed:
+            armed.append(signal.SIGALRM in signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+            signal.setitimer(signal.ITIMER_REAL, 0.01, interval)
         if frame.f_code is capture.claim_capture_alarm.__code__ and event == "line" \
                 and line.startswith("conflict =") and not delayed:
             delayed.append(line)
             time.sleep(0.03)
         return trace
     signal.signal(signal.SIGALRM, caller_alarm)
-    signal.setitimer(signal.ITIMER_REAL, 0.01, interval)
     sys.settrace(trace)
     try:
         with capture.capture_deadline(Client()):
@@ -433,7 +439,7 @@ for interval in (0.0, 0.2):
     finally:
         sys.settrace(None)
     remaining, repeating = signal.getitimer(signal.ITIMER_REAL)
-    assert delayed and hits == [signal.SIGALRM], (delayed, hits)
+    assert armed == [True] and delayed and hits == [signal.SIGALRM], (armed, delayed, hits)
     assert capture.CAPTURE_ALARM_OWNER is None and capture.CAPTURE_ALARM_RESTORE is None
     assert signal.getsignal(signal.SIGALRM) is caller_alarm
     assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask
@@ -441,6 +447,70 @@ for interval in (0.0, 0.2):
     signal.setitimer(signal.ITIMER_REAL, 0)
     with capture.capture_deadline(Client()): pass
 print("raising caller alarms recovered")
+"""
+
+
+# Stands in for a process that is descheduled before it claims ownership.
+SLOW_OWNERSHIP_CLAIM = """
+claim_capture_ownership = capture.claim_capture_ownership
+def slow_claim_capture_ownership(token):
+    time.sleep(0.05)
+    claim_capture_ownership(token)
+capture.claim_capture_ownership = slow_claim_capture_ownership
+"""
+
+
+OWNERSHIP_CLAIM_SWEEP_SOURCE = """
+import dis, signal, sys, time
+sys.path.insert(0, __CAPTURE_MODULE_DIR__)
+import capture_completed_native_log as capture
+
+class CallerAlarm(Exception): pass
+class Client:
+    deadline = time.monotonic() + 60
+    def check(self):
+        capture.require(time.monotonic() < self.deadline, "capture deadline expired")
+
+def caller_alarm(signum, frame):
+    raise CallerAlarm("caller alarm")
+
+def alarm_at(code, offset):
+    hits, entered, notes = [], [], []
+    def trace(frame, event, argument):
+        if frame.f_code is code:
+            frame.f_trace_opcodes = True
+            if event == "opcode" and frame.f_lasti == offset and not hits:
+                hits.append(offset)
+                signal.raise_signal(signal.SIGALRM)
+        return trace
+    sys.settrace(trace)
+    try:
+        with capture.capture_deadline(Client()):
+            entered.append(offset)
+    except CallerAlarm as error:
+        notes.append(getattr(error, "__notes__", []))
+    finally:
+        sys.settrace(None)
+    expected = ([offset], [], [[]]) if hits else ([], [offset], [])
+    assert (hits, entered, notes) == expected, (offset, hits, entered, notes)
+    return bool(hits)
+
+original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+signal.signal(signal.SIGALRM, caller_alarm)
+for function in (capture.claim_capture_ownership, capture.claim_capture_alarm_entry):
+    code = function.__code__
+    alarms = 0
+    for instruction in dis.get_instructions(code):
+        alarms += alarm_at(code, instruction.offset)
+        assert capture.CAPTURE_ALARM_OWNER is None, instruction
+        assert capture.CAPTURE_ALARM_RESTORE is None, instruction
+        assert signal.getsignal(signal.SIGALRM) is caller_alarm, instruction
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == original_mask, instruction
+        assert signal.SIGALRM not in signal.sigpending(), instruction
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), instruction
+        with capture.capture_deadline(Client()): pass
+    assert alarms >= 10, (function.__name__, alarms)
+print("ownership claim alarms released")
 """
 
 
@@ -1263,6 +1333,19 @@ class CompletedNativeLogCaptureTests(unittest.TestCase):
     def test_raising_caller_alarm_during_mask_restore_releases_ownership(self):
         source = capture_subprocess_source(CALLER_RESTORE_RAISE_SOURCE)
         assert_subprocess_success(self, source, "raising caller alarms recovered\n")
+
+    def test_raising_caller_alarm_survives_a_slow_ownership_claim(self):
+        # R54-APB09: under load the caller's timer fired inside
+        # claim_capture_ownership, before the capture blocked SIGALRM.
+        anchor = "import capture_completed_native_log as capture\n"
+        slow = CALLER_RESTORE_RAISE_SOURCE.replace(anchor, anchor + SLOW_OWNERSHIP_CLAIM, 1)
+        self.assertNotEqual(slow, CALLER_RESTORE_RAISE_SOURCE)
+        source = capture_subprocess_source(slow)
+        assert_subprocess_success(self, source, "raising caller alarms recovered\n")
+
+    def test_caller_alarm_inside_ownership_claim_releases_ownership(self):
+        source = capture_subprocess_source(OWNERSHIP_CLAIM_SWEEP_SOURCE)
+        assert_subprocess_success(self, source, "ownership claim alarms released\n", timeout=30)
 
     def test_malformed_alarm_recovery_fails_closed_without_wedge(self):
         source = capture_subprocess_source(MALFORMED_RECOVERY_SOURCE)

@@ -12,12 +12,26 @@ protocol FixedTaxonomyDiagnostic {
     var diagnosticDescription: String { get }
 }
 
+// Static monitoring boundaries. The capturing file picks a default; sites in
+// files that span several boundaries (AppModel) name theirs explicitly so the
+// final hook can tell a durable mutation from a projection or a bootstrap.
+enum DiagnosticOperation: String, CaseIterable, Sendable {
+    case application = "application.failure"
+    case account = "account.failure"
+    case api = "api.failure"
+    case room = "room.failure"
+    case watch = "watch.failure"
+    case persistence = "persistence.failure"
+    case timer = "timer.failure"
+    case mutation = "mutation.failure"
+    case projection = "projection.failure"
+    case bootstrap = "bootstrap.failure"
+    case sync = "sync.failure"
+}
+
 enum DiagnosticPrivacy {
     static let domain = "PomodoroughDiagnostic"
-    static let operations: Set<String> = [
-        "application.failure", "account.failure", "api.failure", "room.failure",
-        "watch.failure", "persistence.failure", "timer.failure"
-    ]
+    static let operations = Set(DiagnosticOperation.allCases.map(\.rawValue))
     static let identities: Set<String> = [
         "AppError.configuration", "AppError.missingPresentationAnchor", "AppError.missingIDToken",
         "AppError.unauthorized", "AppError.conflict", "AppError.server",
@@ -26,12 +40,29 @@ enum DiagnosticPrivacy {
         "WatchCommand.unknown", "WatchCommand.staleWorkspace",
         "WatchRefusal.pause", "WatchRefusal.start", "WatchRefusal.resume", "WatchRefusal.finish",
         "Iroh.foregroundSync", "SignOut.stage", "SignOut.mutationRefused",
-        "Bootstrap.batchPlan", "Sync.boundary", "Widget.decodeFailures"
+        "Bootstrap.batchPlan", "Bootstrap.install", "Sync.boundary", "Widget.decodeFailures",
+        "WorkspaceIntent.coreRejected", "WorkspaceIntent.invalidCoreResponse",
+        "WorkspaceIntent.ignoredRetarget",
+        "AccountSwitch.confirm", "AccountSwitch.cancel", "Iroh.foregroundRefresh",
+        "SharedCoreError.resourceMissing", "SharedCoreError.runtimeInitializationFailed",
+        "SharedCoreError.checksumMismatch", "SharedCoreError.missingExport",
+        "SharedCoreError.invalidExportSignature", "SharedCoreError.inputTooLarge",
+        "SharedCoreError.allocationFailed", "SharedCoreError.memoryOutOfBounds",
+        "SharedCoreError.invalidABIResult", "SharedCoreError.invalidInput",
+        "SharedCoreError.core", "SharedCoreError.invalidResponse"
+    ]
+    // System domains reported by name. Kept apart from `identities` so an
+    // NSError whose domain spells a fixed or Core identity stays OtherError.
+    static let errorDomains: Set<String> = [
+        "NSURLErrorDomain", "NSCocoaErrorDomain", "NSPOSIXErrorDomain", "WCErrorDomain"
     ]
 
     static func identity(_ error: Error) -> String {
         if let fixed = error as? any FixedTaxonomyDiagnostic {
             return fixed.diagnosticIdentity
+        }
+        if let error = error as? SharedCoreError {
+            return coreIdentity(error)
         }
         if let error = error as? AppError {
             switch error {
@@ -47,36 +78,60 @@ enum DiagnosticPrivacy {
             }
         }
         let name = (error as NSError).domain
-        return identities.contains(name) ? name : "OtherError"
+        return errorDomains.contains(name) ? name : "OtherError"
     }
 
-    static func operation(file: StaticString) -> String {
-        let name = String(describing: file).split(separator: "/").last.map(String.init) ?? ""
-        switch name {
-        case "AccountLifecycleController.swift", "SessionRevocationController.swift": return "account.failure"
-        case "APIClient.swift": return "api.failure"
-        case "RoomReplicationController.swift", "IrohReplicationService.swift": return "room.failure"
-        case "WatchSyncService.swift": return "watch.failure"
-        case "PersistedStateLoader.swift", "AppStatePersistenceCoordinator.swift", "IrohRoomStore.swift":
-            return "persistence.failure"
-        case "TimerAlarmScheduler.swift", "TimerSessionController.swift", "TimerLiveActivityCoordinator.swift",
-             "CompletionChimePlayer.swift", "TimerDomainModels.swift", "PersistedTimerState.swift":
-            return "timer.failure"
-        default: return "application.failure"
+    // Case name only. Core payloads can carry raw JSON, task ids or titles, and
+    // workspace snapshots, so no associated value crosses this boundary.
+    private static func coreIdentity(_ error: SharedCoreError) -> String {
+        switch error {
+        case .resourceMissing: return "SharedCoreError.resourceMissing"
+        case .runtimeInitializationFailed: return "SharedCoreError.runtimeInitializationFailed"
+        case .checksumMismatch: return "SharedCoreError.checksumMismatch"
+        case .missingExport: return "SharedCoreError.missingExport"
+        case .invalidExportSignature: return "SharedCoreError.invalidExportSignature"
+        case .inputTooLarge: return "SharedCoreError.inputTooLarge"
+        case .allocationFailed: return "SharedCoreError.allocationFailed"
+        case .memoryOutOfBounds: return "SharedCoreError.memoryOutOfBounds"
+        case .invalidABIResult: return "SharedCoreError.invalidABIResult"
+        case .invalidInput: return "SharedCoreError.invalidInput"
+        case .core: return "SharedCoreError.core"
+        case .invalidResponse: return "SharedCoreError.invalidResponse"
         }
     }
 
-    static func diagnostic(_ error: Error, file: StaticString = #fileID) -> NSError {
+    static func operation(file: StaticString) -> DiagnosticOperation {
+        let name = String(describing: file).split(separator: "/").last.map(String.init) ?? ""
+        switch name {
+        case "AccountLifecycleController.swift", "SessionRevocationController.swift": return .account
+        case "APIClient.swift": return .api
+        case "RoomReplicationController.swift", "IrohReplicationService.swift": return .room
+        case "WatchSyncService.swift": return .watch
+        case "PersistedStateLoader.swift", "AppStatePersistenceCoordinator.swift", "IrohRoomStore.swift":
+            return .persistence
+        case "TimerAlarmScheduler.swift", "TimerSessionController.swift", "TimerLiveActivityCoordinator.swift",
+             "CompletionChimePlayer.swift", "TimerDomainModels.swift", "PersistedTimerState.swift":
+            return .timer
+        default: return .application
+        }
+    }
+
+    static func diagnostic(
+        _ error: Error,
+        operation: DiagnosticOperation? = nil,
+        file: StaticString = #fileID
+    ) -> NSError {
+        let boundary = (operation ?? Self.operation(file: file)).rawValue
+        let code = boundedCode((error as NSError).code)
         if let fixed = error as? any FixedTaxonomyDiagnostic {
-            return NSError(domain: domain, code: boundedCode((error as NSError).code), userInfo: [
-                "identity": fixed.diagnosticIdentity, "operation": operation(file: file),
+            return NSError(domain: domain, code: code, userInfo: [
+                "identity": fixed.diagnosticIdentity, "operation": boundary,
                 NSLocalizedDescriptionKey: fixed.diagnosticDescription
             ])
         }
         let name = identity(error)
-        let code = boundedCode((error as NSError).code)
         return NSError(domain: domain, code: code, userInfo: [
-            "identity": name, "operation": operation(file: file),
+            "identity": name, "operation": boundary,
             NSLocalizedDescriptionKey: "\(name) (\(code))"
         ])
     }
@@ -181,4 +236,31 @@ extension WatchFinishRefusedError: FixedTaxonomyDiagnostic {
 extension WatchStaleWorkspaceError: FixedTaxonomyDiagnostic {
     var diagnosticIdentity: String { "WatchCommand.staleWorkspace" }
     var diagnosticDescription: String { errorDescription ?? diagnosticIdentity }
+}
+
+// WorkspaceIntentAdmission.swift is peer-owned, so the admission identity is
+// classified here at the capture boundary. Only the case name, the static
+// category, and counts cross it: never the Core reason or the provenance.
+extension WorkspaceIntentAdmissionError: FixedTaxonomyDiagnostic {
+    var diagnosticIdentity: String {
+        switch self {
+        case .coreRejected: "WorkspaceIntent.coreRejected"
+        case .invalidCoreResponse: "WorkspaceIntent.invalidCoreResponse"
+        case .ignoredRetarget: "WorkspaceIntent.ignoredRetarget"
+        }
+    }
+
+    var diagnosticDescription: String {
+        let diagnostics: WorkspaceMutationDiagnostics
+        switch self {
+        case .coreRejected(let value), .invalidCoreResponse(let value), .ignoredRetarget(let value):
+            diagnostics = value
+        }
+        let pending = [
+            diagnostics.pendingCommands, diagnostics.pendingTasks, diagnostics.pendingDurations,
+            diagnostics.pendingAutoStart, diagnostics.pendingSelected
+        ].map(String.init).joined(separator: "/")
+        return "\(diagnosticIdentity) category=\(diagnostics.category.rawValue) pending=\(pending) "
+            + "queued=\(diagnostics.queued) applied=\(diagnostics.applied)"
+    }
 }

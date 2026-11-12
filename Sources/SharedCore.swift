@@ -447,7 +447,7 @@ private extension JSONEncoder {
     }
 }
 
-private func sharedCoreTimestamp(for date: Date) throws -> String {
+func sharedCoreTimestamp(for date: Date) throws -> String {
     let seconds = date.timeIntervalSince1970
     let unroundedMilliseconds = seconds * 1_000
     guard seconds.isFinite,
@@ -460,7 +460,7 @@ private func sharedCoreTimestamp(for date: Date) throws -> String {
     // Truncate, never round: the server truncates serverHlcWallMs to the millisecond,
     // and a rounded-up serverTime would put the HLC wall below the parsed server time,
     // failing canonical-response clock-skew validation by one millisecond.
-    let milliseconds = Int64(unroundedMilliseconds.rounded(.towardZero))
+    let milliseconds = truncatedUnixMilliseconds(for: date)
     let wholeSeconds = milliseconds >= 0
         ? milliseconds / 1_000
         : (milliseconds - 999) / 1_000
@@ -469,6 +469,23 @@ private func sharedCoreTimestamp(for date: Date) throws -> String {
     let wholeDate = Date(timeIntervalSince1970: TimeInterval(wholeSeconds))
     let prefix = wholeDate.formatted(Date.ISO8601FormatStyle()).dropLast()
     return "\(prefix).\(paddedFraction)Z"
+}
+
+/// Whole milliseconds since 1970, truncated toward zero, measured on the
+/// 2001 reference epoch that `Date` stores. `timeIntervalSince1970` adds
+/// 978 307 200 s in floating point first, which loses the bits that tell a
+/// stored whole millisecond from the one before it: about 11% of the dates
+/// that `APIDateCodec.parse` reads back would reach Core 1 ms early.
+/// Flooring against representable millisecond boundaries matches
+/// `APIDateCodec.string`, so a stored value round-trips exactly.
+private func truncatedUnixMilliseconds(for date: Date) -> Int64 {
+    let interval = date.timeIntervalSinceReferenceDate
+    let nearest = (interval * 1_000).rounded()
+    let isBelowNearest = interval < nearest / 1_000
+    let floored = Int64(isBelowNearest ? nearest - 1 : nearest) + 978_307_200_000
+    // Before 1970, toward zero is one above the floor unless the date is whole.
+    let isWhole = !isBelowNearest && interval == nearest / 1_000
+    return floored < 0 && !isWhole ? floored + 1 : floored
 }
 
 private extension String {

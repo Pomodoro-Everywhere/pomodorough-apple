@@ -8,7 +8,7 @@
       runPostActionsOnFailure = "NO">
       <BuildActionEntries>
          <BuildActionEntry
-            buildForTesting = "YES"
+            buildForTesting = "NO"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -18,6 +18,20 @@
                BlueprintIdentifier = "7FECCA3328608E810CEF7A7E"
                BuildableName = "Pomodorough.app"
                BlueprintName = "Pomodorough-macOS"
+               ReferencedContainer = "container:Pomodorough.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "20DE458929FE36BC709C9977"
+               BuildableName = "PomodoroughTestHost.app"
+               BlueprintName = "PomodoroughMacTestHost"
                ReferencedContainer = "container:Pomodorough.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,9 +46,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "7FECCA3328608E810CEF7A7E"
-            BuildableName = "Pomodorough.app"
-            BlueprintName = "Pomodorough-macOS"
+            BlueprintIdentifier = "20DE458929FE36BC709C9977"
+            BuildableName = "PomodoroughTestHost.app"
+            BlueprintName = "PomodoroughMacTestHost"
             ReferencedContainer = "container:Pomodorough.xcodeproj">
          </BuildableReference>
       </MacroExpansion>

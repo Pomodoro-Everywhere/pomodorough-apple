@@ -9,6 +9,7 @@ enum WorkspaceIntentCategory: String, Sendable {
     case phase = "phase"
     case taskUpsert = "taskUpsert"
     case taskDelete = "taskDelete"
+    case taskRename = "taskRename"
     case selectTask = "selectTask"
     case setDuration = "setDuration"
     case setAutoStart = "setAutoStart"

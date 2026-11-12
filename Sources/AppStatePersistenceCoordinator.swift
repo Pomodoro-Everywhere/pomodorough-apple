@@ -206,12 +206,19 @@ final class AppStatePersistenceCoordinator {
 
         var errorDescription: String? {
             switch self {
-            case .unreadable(let reason):
-                String(localized: "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry. \(reason)")
+            // The reason names file-system detail for logs only.
+            case .unreadable:
+                String(
+                    localized: "snapshot-load-failure.unreadable",
+                    defaultValue: "The saved workspace could not be read. Nothing was overwritten. Restore file access, then retry."
+                )
             case .corrupt:
                 String(localized: "The saved workspace could not be decoded. Nothing was overwritten. Restore a valid snapshot, then retry.")
-            case .durabilityUncertain(let reason):
-                String(localized: "The workspace may have been replaced, but its durability is unconfirmed. Changes are blocked until the saved snapshot can be read and synchronized. Retry recovery. \(reason)")
+            case .durabilityUncertain:
+                String(
+                    localized: "snapshot-load-failure.durability-uncertain",
+                    defaultValue: "The workspace may not be fully saved. Changes are paused until it can be read again. Retry recovery."
+                )
             }
         }
     }

@@ -922,7 +922,7 @@ actor IrohReplicationService {
         case .authenticationFailed: code = .unauthorized
         case .wrongRoom: code = .wrongRoom
         case .invalidFrame: code = .badFrame
-        case .invalidInvite, .invalidMessage: code = .invalidRequest
+        case .invalidInvite, .invalidMessage, .roomAlreadyActive: code = .invalidRequest
         case .unavailable: code = .internal
         }
         return IrohErrorResponse(
@@ -931,7 +931,7 @@ actor IrohReplicationService {
             requestId: requestID,
             kind: "error",
             code: code,
-            message: error.localizedDescription,
+            message: error.diagnosticDetail,
             retryable: code == .internal
         )
     }

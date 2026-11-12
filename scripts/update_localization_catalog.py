@@ -17,7 +17,7 @@ from typing import Any
 
 ARABIC_CATEGORIES = ("zero", "one", "two", "few", "many", "other")
 COUNT_WORD_RE = re.compile(
-    r"\b(minutes?|hours?|tasks?|entries?|changes?|pomodoros?|peers?|records?|queued|completed|total)\b",
+    r"\b(minutes?|hours?|tasks?|entries?|changes?|pomodoros?|peers?|records?|arrivals?|runs?|queued|completed|total)\b",
     re.IGNORECASE,
 )
 INTEGER_PLACEHOLDER_RE = re.compile(r"%(?:(?:\d+)\$)?(?:ll|l)?[diu]")
@@ -41,6 +41,8 @@ def singular(value: str) -> str:
         "pomodoros": "pomodoro",
         "peers": "peer",
         "records": "record",
+        "arrivals": "arrival",
+        "runs": "run",
     }
     result = value
     for plural, one in replacements.items():

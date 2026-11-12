@@ -426,7 +426,7 @@ struct SentryCaptureTests {
             name: "Secret Room Name",
             environment: sentryRoomEnvironment()
         )
-        #expect(transition == .failed(SentryRoomServiceError.endpointUnavailable.localizedDescription))
+        #expect(transition == .failed("The room was not created. Try again."))
         #expect(fixture.store.activeRoomID == nil)
         #expect(recorded.value.count == 1)
         #expect(!recorded.value[0].contains("Secret Room Name"))
@@ -1461,6 +1461,25 @@ struct SentryCaptureTests {
         #expect(!recorded.value[0].contains("logout-append-refresh"))
     }
 
+    /// An offline model for the AP82 splits: isolated defaults and files, a
+    /// fixture URL session and fake key, revocation and sign-in stores, so
+    /// no AP82 test reaches the Keychain, the network or Google.
+    @MainActor
+    private func makeAP82Model(suite: String, defaults: UserDefaults, directory: URL) -> AppModel {
+        AppModel(
+            api: APIClient(
+                session: TestFixtures.session(for: suite),
+                keychain: StaticTokenStore(),
+                logoutRevocationStore: TestLogoutRevocationStore()
+            ),
+            defaults: defaults,
+            roomStore: TestFixtures.emptyIrohRoomStore(in: directory),
+            endpointKeyStore: PreviewEndpointKeyStore(),
+            alarmScheduler: RecordingAlarmScheduler(),
+            googleIdentityProvider: RecordingGoogleIdentityProvider()
+        )
+    }
+
     // AP82: finish plan keeps clock message, captures core once.
     @Test @MainActor
     func finishPlanClockVsCoreSplit() async throws {
@@ -1476,7 +1495,7 @@ struct SentryCaptureTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Finish-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        let model = makeAP82Model(suite: suite, defaults: defaults, directory: dir)
         model.reportFinishPlanFailure(AppError.invalidLocalClock)
         #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
         #expect(recorded.value.isEmpty)
@@ -1486,7 +1505,8 @@ struct SentryCaptureTests {
         }
         let core = SharedCoreError.core("ap82-finish")
         model.reportFinishPlanFailure(core)
-        #expect(model.errorMessage == core.localizedDescription)
+        #expect(model.errorMessage == "The timer change was not saved. Try again.")
+        #expect(model.errorMessage?.contains("ap82") == false, "the raw core text must not reach the person")
         #expect(recorded.value.count == 1)
         model.reportFinishPlanFailure(SharedCoreError.core("ap82-finish-retry"))
         #expect(recorded.value.count == 1)
@@ -1507,7 +1527,7 @@ struct SentryCaptureTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Central-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        let model = makeAP82Model(suite: suite, defaults: defaults, directory: dir)
         model.reportCentralizedBreakFailure(AppError.invalidLocalClock)
         #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
         #expect(recorded.value.isEmpty)
@@ -1517,7 +1537,8 @@ struct SentryCaptureTests {
         }
         let core = SharedCoreError.core("ap82-central")
         model.reportCentralizedBreakFailure(core)
-        #expect(model.errorMessage == core.localizedDescription)
+        #expect(model.errorMessage == "The timer change was not saved. Try again.")
+        #expect(model.errorMessage?.contains("ap82") == false, "the raw core text must not reach the person")
         #expect(recorded.value.count == 1)
         model.reportCentralizedBreakFailure(SharedCoreError.core("ap82-central-retry"))
         #expect(recorded.value.count == 1)
@@ -1538,7 +1559,7 @@ struct SentryCaptureTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Iroh-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        let model = makeAP82Model(suite: suite, defaults: defaults, directory: dir)
         model.reportIrohBreakFailure(AppError.invalidLocalClock)
         #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
         #expect(recorded.value.isEmpty)
@@ -1548,7 +1569,8 @@ struct SentryCaptureTests {
         }
         let core = SharedCoreError.core("ap82-iroh")
         model.reportIrohBreakFailure(core)
-        #expect(model.errorMessage == core.localizedDescription)
+        #expect(model.errorMessage == "The timer change was not saved. Try again.")
+        #expect(model.errorMessage?.contains("ap82") == false, "the raw core text must not reach the person")
         #expect(recorded.value.count == 1)
         model.reportIrohBreakFailure(SharedCoreError.core("ap82-iroh-retry"))
         #expect(recorded.value.count == 1)
@@ -1569,7 +1591,7 @@ struct SentryCaptureTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AP82Deadline-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let model = AppModel(api: APIClient(keychain: StaticTokenStore()), defaults: defaults, roomStore: TestFixtures.emptyIrohRoomStore(in: dir), alarmScheduler: RecordingAlarmScheduler())
+        let model = makeAP82Model(suite: suite, defaults: defaults, directory: dir)
         model.reportCompletionDeadlineFailure(AppError.invalidLocalClock)
         #expect(model.errorMessage == AppError.invalidLocalClock.localizedDescription)
         #expect(recorded.value.isEmpty)
@@ -1579,7 +1601,8 @@ struct SentryCaptureTests {
         }
         let core = SharedCoreError.core("ap82-deadline")
         model.reportCompletionDeadlineFailure(core)
-        #expect(model.errorMessage == core.localizedDescription)
+        #expect(model.errorMessage == "The timer change was not saved. Try again.")
+        #expect(model.errorMessage?.contains("ap82") == false, "the raw core text must not reach the person")
         #expect(recorded.value.count == 1)
         model.reportCompletionDeadlineFailure(SharedCoreError.core("ap82-deadline-retry"))
         #expect(recorded.value.count == 1)
@@ -1780,7 +1803,7 @@ struct SentryCaptureTests {
         guard case .failed(let message) = transition else {
             Issue.record("Expected failed, got \(transition)"); return
         }
-        #expect(message == SentryRoomServiceError.endpointUnavailable.localizedDescription)
+        #expect(message == "Joining the room did not finish. Check the invite and try again.")
         #expect(recorded.value.count == 1)
         // R53-L01: the capture boundary rebuilds diagnostics from an
         // allowlist, so transport errors arrive collapsed. Exactly one
@@ -1872,9 +1895,7 @@ struct SentryCaptureTests {
         guard case .failed(let message) = transition else {
             Issue.record("Expected failed, got \(transition)"); return
         }
-        let expected = IrohProtocolError.invalidMessage(
-            "Leave the current room before joining another room."
-        ).localizedDescription
+        let expected = IrohProtocolError.roomAlreadyActive.localizedDescription
         #expect(message == expected)
         #expect(message.contains("Leave the current room"))
         #expect(!message.contains("already in this room"))

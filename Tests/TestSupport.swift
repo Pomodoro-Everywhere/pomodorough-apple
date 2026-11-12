@@ -41,6 +41,32 @@ enum TestFixtures {
         )
     }
 
+    /// A terminal timer that pairs with `history(id: timerID, ...)`. Its
+    /// `lastIntent` is the finish or cancel command the row names, because
+    /// Core 0.56.0 rejects a terminal pair whose row names a command the
+    /// timer does not carry.
+    static func terminalTimer(
+        status: CanonicalTimer.Status,
+        elapsed: Int64,
+        timerID: String = "timer-test0001"
+    ) -> CanonicalTimer {
+        CanonicalTimer(
+            id: timerID,
+            taskId: nil,
+            phase: .focus,
+            status: status,
+            plannedDurationMs: 60_000,
+            elapsedAtAnchorMs: elapsed,
+            anchorAt: anchor,
+            lastIntent: TimerIntent(
+                type: status == .completed ? .finish : .cancel,
+                commandId: "command-\(timerID)",
+                occurredAt: anchor,
+                deviceId: nil
+            )
+        )
+    }
+
     static func command(
         _ type: CommandType,
         sequence: Int64,
@@ -68,9 +94,12 @@ enum TestFixtures {
         phase: TimerPhase = .focus,
         status: String = "completed",
         durationMs: Int64,
+        elapsedMs: Int64? = nil,
         date: Date,
         taskID: String? = nil
     ) -> HistoryItem {
+        // A nil elapsedMs is a row stored before Core 0.55. Core projection
+        // fills it, so a test that skips projection passes Core's value here.
         HistoryItem(
             id: id,
             timerId: id,
@@ -80,7 +109,8 @@ enum TestFixtures {
             status: status,
             plannedDurationMs: durationMs,
             completedAt: status == "completed" ? date : nil,
-            endedAt: status == "completed" ? nil : date
+            endedAt: status == "completed" ? nil : date,
+            elapsedMs: elapsedMs
         )
     }
 
@@ -247,6 +277,13 @@ enum TestFixtures {
     static func releaseScenario(_ scenario: String) {
         StubScenarioGate.shared.release(scenario: scenario)
     }
+
+    // Gate that holds a held-revocation scenario's logout revocation apart
+    // from the scenario gate (see LogoutRevocationStub). Release it with
+    // releaseScenario(_:).
+    static func revocationGate(for scenario: String) -> String {
+        "\(scenario)-revocation"
+    }
 }
 
 @MainActor
@@ -308,6 +345,124 @@ final class LogoutRevocationTestSession {
         }
         let remaining = try store.load()
         try #require(!model.isWorking && remaining.isEmpty, "Logout fixture did not drain before teardown")
+    }
+}
+
+// How the stub answers a fixture's logout revocation. A held revocation
+// waits on the scenario's revocation gate, which only
+// LogoutDrainingSession's drain wait releases. The marker is a suffix, so
+// the base scenario keeps its prefix-matched stub routes.
+enum LogoutRevocationStub {
+    case immediate
+    case heldUntilDrained
+
+    static let heldSuffix = "-held-revocation"
+
+    func scenario(_ base: String) -> String {
+        switch self {
+        case .immediate: return base
+        case .heldUntilDrained: return base + Self.heldSuffix
+        }
+    }
+}
+
+// Owns a fixture's stub session and invalidates it only after logout
+// revocation has drained (R54-APB13).
+//
+// Sign-out and account-switch cancellation detach a logout obligation and
+// start SessionRevocationController's retry loop, which outlives the test
+// and keeps using this session. If the session is invalidated while a
+// revoke is in flight, the revoke fails with -999, which maps to .retry.
+// The next pass, five seconds later, creates a task on the invalidated
+// session. URLSession raises "Task created in a session that has been
+// invalidated", an Objective-C exception that aborts the test host.
+//
+// Teardown therefore waits until every tracked model is idle, so any
+// sign-out has appended its obligation and started the loop. It then waits
+// until the obligation store is empty, after which the loop sends nothing
+// more, and only then invalidates. One revocation controller may own the
+// store at a time; reopen(_:) drains it before a second model shares it.
+@MainActor
+final class LogoutDrainingSession {
+    let scenario: String
+    let session: URLSession
+    private let obligations: RecordingTokenStore
+    private var models: [AppModel] = []
+
+    init(scenario: String, obligations: RecordingTokenStore, session: URLSession? = nil) {
+        self.scenario = scenario
+        self.obligations = obligations
+        self.session = session ?? TestFixtures.session(for: scenario)
+    }
+
+    // Registers a model built on this session, so teardown waits for it.
+    func track(_ model: AppModel) -> AppModel {
+        models.append(model)
+        return model
+    }
+
+    // Runs the body, then tears down on every exit path. releaseHolds frees
+    // anything the body parked, so the tracked models can settle.
+    func run(
+        releasingHolds releaseHolds: @MainActor () -> Void = {},
+        _ body: @MainActor () async throws -> Void
+    ) async throws {
+        var bodyError: (any Error)?
+        do {
+            try await body()
+        } catch {
+            bodyError = error
+        }
+        releaseHolds()
+        TestFixtures.releaseScenario(scenario)
+        if let failure = await drainFailure() {
+            // Leave the session valid: a pending obligation would create its
+            // next task on it.
+            Issue.record("\(failure) before fixture teardown")
+        } else {
+            session.invalidateAndCancel()
+            StubRequestRecorder.shared.recordLifecycle("logout session invalidated", scenario: scenario)
+        }
+        if let bodyError { throw bodyError }
+    }
+
+    // Builds a model that shares the obligation store with the tracked
+    // models, after the store has drained. Two controllers can both load one
+    // obligation. When one of them removes it the drain completes, while the
+    // other may not have sent its revoke yet; that revoke would then reach
+    // the invalidated session.
+    func reopen(_ build: @MainActor () throws -> AppModel) async throws -> AppModel {
+        let failure = await drainFailure()
+        try #require(failure == nil, "\(failure ?? "") before the model reopened")
+        return track(try build())
+    }
+
+    private func drainFailure() async -> String? {
+        guard await modelsSettled() else { return "A model was still working" }
+        let revocationGate = TestFixtures.revocationGate(for: scenario)
+        let drained = await obligations.waitUntilLogoutObligationsDrained(whileWaiting: {
+            TestFixtures.releaseScenario(revocationGate)
+        })
+        return drained ? nil : "Logout revocation did not drain"
+    }
+
+    // Polls because AppModel.signOut() returns before its sign-out task ends
+    // and exposes no completion signal. AppModel.persistLogoutThenReset
+    // clears isWorking only after revocations.signOut() has appended the
+    // obligation and started the retry loop, so an idle model has no
+    // obligation left to append.
+    private func modelsSettled() async -> Bool {
+        for _ in 0..<600 {
+            guard models.contains(where: { $0.isWorking }) else { return true }
+            do {
+                try await Task.sleep(for: .milliseconds(10))
+            } catch {
+                // Task.sleep throws only CancellationError, here from the
+                // suite time limit. Stop waiting and report what settled.
+                break
+            }
+        }
+        return !models.contains { $0.isWorking }
     }
 }
 
@@ -428,6 +583,7 @@ final class RecordingTokenStore: TokenStoring, LogoutRevocationStoring, @uncheck
     private var failures: Set<RecordingTokenStoreFailure>
     private var storedTokens: TokenPair?
     private var logoutObligations: [LogoutRevocationObligation] = []
+    private var logoutDrainWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var recordedOperations: [RecordedTokenStoreOperation] = []
 
     init(
@@ -497,7 +653,40 @@ final class RecordingTokenStore: TokenStoring, LogoutRevocationStoring, @uncheck
     }
 
     func remove(id: UUID) throws {
-        lock.withLock { logoutObligations.removeAll { $0.id == id } }
+        let drainedWaiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            logoutObligations.removeAll { $0.id == id }
+            guard logoutObligations.isEmpty else { return [] }
+            let waiters = Array(logoutDrainWaiters.values)
+            logoutDrainWaiters.removeAll()
+            return waiters
+        }
+        drainedWaiters.forEach { $0.resume() }
+    }
+
+    // SessionRevocationController's retry loop sends no request once this
+    // store holds no obligation: its pass reloads the store and ends on
+    // .empty. A fixture may therefore invalidate the URLSession that loop
+    // uses only after this returns true. It returns false when the waiting
+    // task is cancelled first, for example by a test time limit.
+    // `whileWaiting` runs after the wait is registered, or at once when
+    // nothing is pending, so a held revocation that it releases can finish
+    // only while a caller waits for the drain.
+    func waitUntilLogoutObligationsDrained(whileWaiting: @Sendable () -> Void = {}) async -> Bool {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let resumesNow = lock.withLock { () -> Bool in
+                    guard !logoutObligations.isEmpty, !Task.isCancelled else { return true }
+                    logoutDrainWaiters[waiterID] = continuation
+                    return false
+                }
+                whileWaiting()
+                if resumesNow { continuation.resume() }
+            }
+        } onCancel: {
+            lock.withLock { logoutDrainWaiters.removeValue(forKey: waiterID) }?.resume()
+        }
+        return lock.withLock { logoutObligations.isEmpty }
     }
 }
 
@@ -1161,15 +1350,21 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         let body: Data
         let path = request.url?.path
 
-        if let scenario, scenario.hasPrefix("apple-api-coverage-model-logout-gated-"),
+        if let scenario, let gate = Self.heldLogoutGate(for: scenario),
            request.httpMethod == "POST", path == "/api/v1/auth/logout" {
-            DispatchQueue.global().async { self.loadGatedLogout(scenario: scenario) }
+            DispatchQueue.global().async { self.loadGatedLogout(scenario: scenario, gate: gate) }
             return
         }
 
         if let scenario, scenario.hasPrefix("apple-api-coverage-model-restore-gated-"),
            request.httpMethod == "POST", path == "/api/v1/sync" {
             DispatchQueue.global().async { self.loadGatedRestore(scenario: scenario) }
+            return
+        }
+
+        if let scenario, scenario.hasPrefix(Self.staleUnauthorizedSyncPrefix),
+           request.httpMethod == "POST", path == "/api/v1/sync" {
+            DispatchQueue.global().async { self.loadStaleUnauthorizedScenarioSync(scenario, pathAttempt: pathAttempt) }
             return
         }
 
@@ -1493,9 +1688,20 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         StubScenarioGate.shared.wakeWaiters()
     }
 
-    private func loadGatedLogout(scenario: String) {
+    // The model-logout-gated scenarios hold logout on their scenario gate.
+    // A held-revocation scenario holds it on its revocation gate, so
+    // releasing that scenario alone does not let the revocation finish.
+    private static func heldLogoutGate(for scenario: String) -> String? {
+        if scenario.hasPrefix("apple-api-coverage-model-logout-gated-") { return scenario }
+        if scenario.hasSuffix(LogoutRevocationStub.heldSuffix) {
+            return TestFixtures.revocationGate(for: scenario)
+        }
+        return nil
+    }
+
+    private func loadGatedLogout(scenario: String, gate: String) {
         guard StubScenarioGate.shared.wait(
-            scenario: scenario,
+            scenario: gate,
             isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
         ) else { return }
         let response = HTTPURLResponse(
@@ -1521,6 +1727,66 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Self.syncResponse(revision: 0, history: []))
             StubRequestRecorder.shared.recordLifecycle("logout restore response completed", scenario: scenario)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    /// The first sync of a stale-unauthorized scenario waits for the test,
+    /// then answers 401: the late reply to a session that a newer sign-in
+    /// replaced. Later syncs answer with the seeded workspace, and every
+    /// other request follows the local-signout stubs, so the newer session
+    /// syncs normally.
+    static let staleUnauthorizedSyncPrefix = "apple-api-coverage-model-local-signout-stale-sync-401"
+
+    private func loadStaleUnauthorizedScenarioSync(_ scenario: String, pathAttempt: Int) {
+        guard pathAttempt > 1 else { return loadGatedUnauthorizedSync(scenario: scenario) }
+        let body = Self.seededAccountSyncResponse(request: Self.requestObject(Self.bodyData(request)))
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        _ = deliverIfLoading {
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    /// Answers with the account's server state. A delete in the request
+    /// removes its task, as the server would.
+    private static func seededAccountSyncResponse(request: [String: Any]?) -> Data {
+        // A new session's sync returns the account's server state, which is the seeded workspace at revision 10.
+        let seed = TestFixtures.syncContractState(includesPendingOperations: false)
+        let deletedIDs = Set((request?["taskOperations"] as? [[String: Any]] ?? [])
+            .filter { $0["type"] as? String == "delete" }
+            .compactMap { ($0["taskId"] as? String)?.lowercased() })
+        let tasks = seed.tasks.filter { !deletedIDs.contains($0.id.uuidString.lowercased()) }
+        return syncResponse(
+            revision: seed.revision,
+            history: seed.history.map(wireObject),
+            taskAcknowledgements: acknowledgements(from: request, key: "taskOperations", idKey: "operationId"),
+            tasks: tasks.map(wireObject),
+            canonicalTimer: seed.canonicalTimer.map { wireObject($0) as Any } ?? NSNull()
+        )
+    }
+
+    private static func wireObject<Value: Encodable>(_ value: Value) -> [String: Any] {
+        try! JSONSerialization.jsonObject(with: JSONEncoder.api.encode(value)) as! [String: Any]
+    }
+
+    private func loadGatedUnauthorizedSync(scenario: String) {
+        guard StubScenarioGate.shared.wait(
+            scenario: scenario,
+            isCancelled: { self.loadingLock.withLock { self.loadingStopped } }
+        ) else { return }
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 401, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        _ = deliverIfLoading {
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(#"{"error":"Unauthorized"}"#.utf8))
+            StubRequestRecorder.shared.recordLifecycle("stale unauthorized sync completed", scenario: scenario)
             client?.urlProtocolDidFinishLoading(self)
         }
     }
@@ -1809,6 +2075,27 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         ]
     }
 
+    /// The completed timer that `remoteHistory` records. A legacy server
+    /// timer has no lastIntent (omitempty), so it pairs with its row only as
+    /// the pre-0.56 shape that Apple drops before projection.
+    private static func remoteCompletedTimer(legacy: Bool) -> [String: Any] {
+        [
+            "id": "remote-timer",
+            "taskId": NSNull(),
+            "phase": "focus",
+            "status": "completed",
+            "plannedDurationMs": 1_500_000,
+            "elapsedAtAnchorMs": 1_500_000,
+            "anchorAt": "2026-07-20T08:00:00.000Z",
+            "lastIntent": legacy ? NSNull() as Any : [
+                "type": "finish",
+                "commandId": "remote-command",
+                "occurredAt": "2026-07-20T08:00:00.000Z",
+                "deviceId": NSNull()
+            ] as [String: Any] as Any
+        ]
+    }
+
     private static func remoteEndedHistory(id: String, status: String) -> [String: Any] {
         [
             "id": id,
@@ -2016,7 +2303,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         )
         var response = syncResponseObject(
             revision: Int64(20 + pathAttempt),
-            history: scenario == "auto-start-remote-completed"
+            history: scenario.hasPrefix("auto-start-remote-completed")
                 ? [remoteHistory]
                 : [],
             acknowledgements: acknowledgements(from: request, key: "commands", idKey: "commandId"),
@@ -2028,20 +2315,13 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             ),
             autoStartAcknowledgements: autoStartAcknowledgements,
             autoStartBreaks: scenario == "auto-start-remote-preference"
-                || scenario == "auto-start-remote-completed"
+                || scenario.hasPrefix("auto-start-remote-completed")
                 ? true
                 : cumulativeAutoStartValue(for: scenario),
             tasks: [],
-            canonicalTimer: scenario == "auto-start-remote-completed" ? [
-                "id": "remote-timer",
-                "taskId": NSNull(),
-                "phase": "focus",
-                "status": "completed",
-                "plannedDurationMs": 1_500_000,
-                "elapsedAtAnchorMs": 1_500_000,
-                "anchorAt": "2026-07-20T08:00:00.000Z",
-                "lastIntent": NSNull()
-            ] : NSNull()
+            canonicalTimer: scenario.hasPrefix("auto-start-remote-completed")
+                ? remoteCompletedTimer(legacy: scenario == "auto-start-remote-completed-legacy")
+                : NSNull()
         )
         switch scenario {
         case "auto-start-ack-malformed":
@@ -2290,7 +2570,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         } else if rejectsFinish, let focusStart {
             canonicalTimer = runningTimer(from: focusStart)
         } else if let focusFinish {
-            canonicalTimer = completedTimer(finish: focusFinish, start: focusStart)
+            canonicalTimer = provisionalCompletedTimer(finish: focusFinish, start: focusStart, scenario: scenario)
         } else {
             canonicalTimer = NSNull()
         }
@@ -2301,6 +2581,23 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             autoStartBreaks: true,
             canonicalTimer: canonicalTimer
         )
+    }
+
+    /// In the ignored-mismatch scenario the server ignored this Finish, so its
+    /// timer cannot name it as the last intent: a completed timer named by an
+    /// ignored Finish is not a shape the server sends. Core counts that intent as an
+    /// exact completion (`exact_focus_completion_time`) and would release the
+    /// provisional break.
+    private static func provisionalCompletedTimer(
+        finish: [String: Any],
+        start: [String: Any]?,
+        scenario: String
+    ) -> [String: Any] {
+        var completed = completedTimer(finish: finish, start: start)
+        if scenario == "auto-start-provisional-finish-ignored-mismatch" {
+            completed["lastIntent"] = NSNull()
+        }
+        return completed
     }
 
     private static func runningTimer(from start: [String: Any]) -> [String: Any] {
@@ -2328,7 +2625,20 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             "plannedDurationMs": finish["plannedDurationMs"]!,
             "elapsedAtAnchorMs": finish["plannedDurationMs"]!,
             "anchorAt": finish["occurredAt"]!,
-            "lastIntent": NSNull()
+            "lastIntent": finishIntent(finish)
+        ]
+    }
+
+    /// The intent a server records for an accepted Finish. From Core 0.56.0,
+    /// projection keeps a terminal timer next to its own history row only
+    /// when the timer's last intent is the Finish that the row names, so a
+    /// completed mock timer must carry it (see `TestFixtures.terminalTimer`).
+    private static func finishIntent(_ finish: [String: Any]) -> [String: Any] {
+        [
+            "type": "finish",
+            "commandId": finish["id"]!,
+            "occurredAt": finish["occurredAt"]!,
+            "deviceId": finish["deviceId"] ?? NSNull()
         ]
     }
 
@@ -2463,6 +2773,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
                     timer?["status"] = "completed"
                     timer?["elapsedAtAnchorMs"] = duration
                     timer?["anchorAt"] = occurredAt
+                    timer?["lastIntent"] = finishIntent(command)
                     history.removeAll { $0["commandId"] as? String == commandID }
                     history.insert([
                         "id": timerID,

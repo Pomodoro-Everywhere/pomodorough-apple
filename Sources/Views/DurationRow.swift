@@ -77,8 +77,8 @@ struct DurationRow: View {
             VStack(spacing: 4) {
                 minutesLabel
                 HStack(spacing: 0) {
-                    StepButton(title: "Reduce \(phase.title) duration", symbol: "minus") { changeMinutes(minutes - 1) }
-                    StepButton(title: "Increase \(phase.title) duration", symbol: "plus") { changeMinutes(minutes + 1) }
+                    reduceButton
+                    increaseButton
                 }
             }
         }
@@ -89,10 +89,22 @@ struct DurationRow: View {
 
     private var stepperRow: some View {
         HStack(spacing: 0) {
-            StepButton(title: "Reduce \(phase.title) duration", symbol: "minus") { changeMinutes(minutes - 1) }
+            reduceButton
             minutesLabel
-            StepButton(title: "Increase \(phase.title) duration", symbol: "plus") { changeMinutes(minutes + 1) }
+            increaseButton
         }
+    }
+
+    /// Minus is off at the shortest duration and plus at the longest, so a
+    /// press never asks for a value the clamp would ignore.
+    private var reduceButton: some View {
+        StepButton(title: "Reduce \(phase.title) duration", symbol: "minus") { changeMinutes(minutes - 1) }
+            .disabled(!DurationValues.canReduce(minutes: minutes))
+    }
+
+    private var increaseButton: some View {
+        StepButton(title: "Increase \(phase.title) duration", symbol: "plus") { changeMinutes(minutes + 1) }
+            .disabled(!DurationValues.canIncrease(minutes: minutes))
     }
 
     private var minutesLabel: some View {

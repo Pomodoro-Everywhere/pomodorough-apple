@@ -541,7 +541,7 @@ struct UnitPositiveTests {
             .appendingPathComponent("Fixtures/convergence-v1.json")
         let data = try Data(contentsOf: fixtureURL)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        #expect(digest == "51c357d8fd63e7200c1316ef36fc45821bea9ac2fbe11f255832fa21110ea104")
+        #expect(digest == "60ee91bed591a89fb728e6d252cfc47a202ca87cac3adc7f4c4bfab3de7038f3")
 
         let fixture = try JSONDecoder().decode(ConvergenceFixture.self, from: data)
         #expect(fixture.version == 2)
@@ -1535,50 +1535,50 @@ struct UnitPositiveTests {
         let history = [
             TestFixtures.history(
                 id: "writing-25",
-                durationMs: 25 * 60_000,
+                durationMs: 25 * 60_000, elapsedMs: 25 * 60_000,
                 date: TestFixtures.anchor,
                 taskID: writing.id.uuidString
             ),
             TestFixtures.history(
                 id: "writing-10",
-                durationMs: 10 * 60_000,
+                durationMs: 10 * 60_000, elapsedMs: 10 * 60_000,
                 date: TestFixtures.anchor,
                 taskID: writing.id.uuidString
             ),
             TestFixtures.history(
                 id: "review-30",
-                durationMs: 30 * 60_000,
+                durationMs: 30 * 60_000, elapsedMs: 30 * 60_000,
                 date: TestFixtures.anchor,
                 taskID: review.id.uuidString
             ),
             TestFixtures.history(
                 id: "unassigned-15",
-                durationMs: 15 * 60_000,
+                durationMs: 15 * 60_000, elapsedMs: 15 * 60_000,
                 date: TestFixtures.anchor
             ),
             TestFixtures.history(
                 id: "deleted-20",
-                durationMs: 20 * 60_000,
+                durationMs: 20 * 60_000, elapsedMs: 20 * 60_000,
                 date: TestFixtures.anchor,
                 taskID: deletedTaskID
             ),
             TestFixtures.history(
                 id: "other-deleted-20",
-                durationMs: 20 * 60_000,
+                durationMs: 20 * 60_000, elapsedMs: 20 * 60_000,
                 date: TestFixtures.anchor,
                 taskID: otherDeletedTaskID
             ),
             TestFixtures.history(
                 id: "cancelled-focus",
                 status: "cancelled",
-                durationMs: 90 * 60_000,
+                durationMs: 90 * 60_000, elapsedMs: 0,
                 date: TestFixtures.anchor,
                 taskID: writing.id.uuidString
             ),
             TestFixtures.history(
                 id: "completed-break",
                 phase: .shortBreak,
-                durationMs: 60 * 60_000,
+                durationMs: 60 * 60_000, elapsedMs: 60 * 60_000,
                 date: TestFixtures.anchor,
                 taskID: writing.id.uuidString
             )
@@ -1656,7 +1656,8 @@ struct UnitPositiveTests {
         let result = TimerReducer.applying([finish, start, pause], to: nil, history: [])
 
         #expect(result.timer?.status == .completed)
-        #expect(result.timer?.elapsedAtAnchorMs == 60_000)
+        // Core 0.55.0: a Finish while paused keeps the time stored at the pause.
+        #expect(result.timer?.elapsedAtAnchorMs == 12_000)
         #expect(result.history.count == 1)
         #expect(result.history.first?.status == "completed")
     }
@@ -1851,6 +1852,10 @@ struct UnitPositiveTests {
                     elapsed: 0,
                     timerID: "timer-new"
                 )
+                // Core 0.55.0 elapsed rules: a superseded session counts up to
+                // the replacing Start (one second more after a Resume), a
+                // Finish counts from the running anchor to its command time,
+                // and a Cancel keeps its clamped observed elapsed time.
                 let expected = [
                     HistoryItem(
                         id: target.id,
@@ -1861,7 +1866,8 @@ struct UnitPositiveTests {
                         status: CanonicalTimer.Status.superseded.rawValue,
                         plannedDurationMs: target.plannedDurationMs,
                         completedAt: nil,
-                        endedAt: replacement.occurredAt
+                        endedAt: replacement.occurredAt,
+                        elapsedMs: reactivationType == .resume ? 13_000 : 12_000
                     ),
                     HistoryItem(
                         id: current.id,
@@ -1872,7 +1878,8 @@ struct UnitPositiveTests {
                         status: terminalStatus.rawValue,
                         plannedDurationMs: current.plannedDurationMs,
                         completedAt: terminalStatus == .completed ? terminal.occurredAt : nil,
-                        endedAt: terminal.occurredAt
+                        endedAt: terminal.occurredAt,
+                        elapsedMs: terminalType == .finish ? 11_000 : 12_000
                     ),
                     tiedA,
                     tiedZ,
@@ -2373,7 +2380,8 @@ struct UnitPositiveTests {
         #expect(AppError.missingPresentationAnchor.errorDescription == "No window is available for Google Sign-In.")
         #expect(AppError.missingIDToken.errorDescription == "Google did not return an identity token.")
         #expect(AppError.unauthorized.errorDescription == "Session expired. Sign in again.")
-        #expect(AppError.server("Try later.").errorDescription == "Try later.")
+        #expect(AppError.server("Try later.").errorDescription == "The server could not finish the request. Try again later.")
+        #expect(AppError.conflict("Newer revision.").errorDescription == "This change conflicts with a newer change on the server. Try again.")
         #expect(AppError.invalidResponse.errorDescription == "Server returned an invalid response.")
     }
 
@@ -2521,6 +2529,7 @@ private struct ConvergenceHistory: Decodable, Equatable {
     let status: String
     let phase: String
     let durationMs: Int64
+    let elapsedMs: Int64?
     let commandId: String?
     let endedMs: Int64
     let taskId: String?
@@ -2654,6 +2663,7 @@ private func normalizedConvergence(
             status: $0.status,
             phase: $0.phase.rawValue,
             durationMs: $0.plannedDurationMs,
+            elapsedMs: $0.elapsedMs,
             commandId: $0.commandId,
             endedMs: Int64((($0.endedAt ?? $0.completedAt ?? epoch).timeIntervalSince(epoch) * 1_000).rounded()),
             taskId: $0.taskId

@@ -4,6 +4,8 @@ struct ConflictBanner: View {
     let message: String
     let dismiss: () -> Void
 
+    static let dismissIdentifier = "conflict-banner.dismiss"
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.circle.fill")
@@ -17,6 +19,7 @@ struct ConflictBanner: View {
             Button("Dismiss", systemImage: "xmark", action: dismiss)
                 .labelStyle(.iconOnly)
                 .accessibilityLabel(String(localized: "Sync needs attention. \(message). Dismiss"))
+                .accessibilityIdentifier(Self.dismissIdentifier)
         }
         .padding()
         .foregroundStyle(.white)

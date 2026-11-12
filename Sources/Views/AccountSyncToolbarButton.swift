@@ -39,7 +39,7 @@ struct AccountSyncToolbarButton: View {
     private var statusColor: Color {
         if model.conflictMessage != nil || model.isHistoryResolutionBlocking
             || model.isOffline || model.pendingChangeCount > 0 {
-            return PomodoroughTheme.signal
+            return PomodoroughTheme.signalText
         }
         return PomodoroughTheme.platform
     }

@@ -88,6 +88,8 @@ LOG_ONLY_COMPUTED_MEMBERS = {
         "reportWatchUnknownCommand sends this to Logger.error and SentryCapture and never assigns it to user-visible state.",
     ("Sources/TimerLiveActivityCoordinator.swift", "WidgetDecodeCountDiagnostics", "errorDescription"):
         "reportWidgetDecodeFailures sends this to SentryCapture and never assigns it to user-visible state.",
+    ("Sources/DiagnosticPrivacy.swift", "WorkspaceIntentAdmissionError", "diagnosticDescription"):
+        "DiagnosticPrivacy.diagnostic sends this only to SentryCapture and never assigns it to user-visible state.",
 }
 
 

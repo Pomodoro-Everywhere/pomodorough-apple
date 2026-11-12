@@ -91,6 +91,7 @@ enum WorkspaceIntentKind: Encodable, Sendable {
     case selectPhase(TimerPhase)
     case upsertTask(String)
     case deleteTask(String)
+    case renameTask(taskId: String, title: String)
     case selectTask(String?)
     case setDuration(TimerPhase, Int)
     case setAutoStart(Bool)
@@ -128,6 +129,10 @@ enum WorkspaceIntentKind: Encodable, Sendable {
         case .deleteTask(let taskId):
             try container.encode("deleteTask", forKey: .kind)
             try container.encode(taskId, forKey: .taskId)
+        case .renameTask(let taskId, let title):
+            try container.encode("renameTask", forKey: .kind)
+            try container.encode(taskId, forKey: .taskId)
+            try container.encode(title, forKey: .title)
         case .selectTask(let taskId):
             try container.encode("selectTask", forKey: .kind)
             if let taskId {

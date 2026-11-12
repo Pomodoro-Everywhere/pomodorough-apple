@@ -11,6 +11,26 @@ struct TimerTaskPicker: View {
     let layout: TimerLayout
 
     var body: some View {
+        if opensFromWholeRow {
+            // IOS27-05: the whole box is the menu's label, so a tap on the
+            // caption or the padding opens it, not only the title line.
+            taskMenu(label: pickerBox)
+        } else {
+            pickerBox
+        }
+    }
+
+    /// iOS at standard text sizes. Accessibility sizes keep the title
+    /// outside the menu (R54-AU02), and macOS keeps its native pull-down.
+    private var opensFromWholeRow: Bool {
+        #if os(iOS)
+        !dynamicTypeSize.isAccessibilitySize
+        #else
+        false
+        #endif
+    }
+
+    private var pickerBox: some View {
         Group {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 8) {
@@ -27,6 +47,7 @@ struct TimerTaskPicker: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(minHeight: layout == .landscape ? 40 : 48)
         .background(PomodoroughTheme.track.opacity(0.58), in: .rect(cornerRadius: 12))
+        .contentShape(.rect(cornerRadius: 12))
     }
 
     /// Full Dynamic Type range: the menu title wraps at accessibility
@@ -73,14 +94,14 @@ struct TimerTaskPicker: View {
         #endif
     }
 
-    /// Displayed menu title for a selection. Unassigned covers nil and
+    /// Displayed menu title for a selection. No task covers nil and
     /// stale identifiers so the control never renders a blank title.
     /// Long titles pass through verbatim; wrapping is handled by the
     /// multiline label, never by truncation in the model. Pure and
     /// nonisolated so background unit probes never trip MainActor.
     nonisolated static func menuTitle(selectedID: UUID?, tasks: [FocusTask]) -> String {
-        guard let selectedID else { return String(localized: "Unassigned") }
-        return tasks.first(where: { $0.id == selectedID })?.title ?? String(localized: "Unassigned")
+        guard let selectedID else { return String(localized: "No task") }
+        return tasks.first(where: { $0.id == selectedID })?.title ?? String(localized: "No task")
     }
 
     #if os(iOS)
@@ -117,12 +138,16 @@ struct TimerTaskPicker: View {
 
     @ViewBuilder
     private var pickerContent: some View {
-            Label("FOCUS TASK", systemImage: "checklist")
-                .font(.caption.monospaced().bold())
-                .foregroundStyle(PomodoroughTheme.sky)
-                .labelStyle(.titleAndIcon)
-                .accessibilityHidden(true)
+        Label("FOCUS TASK", systemImage: "checklist")
+            .font(.caption.monospaced().bold())
+            .foregroundStyle(PomodoroughTheme.sky)
+            .labelStyle(.titleAndIcon)
+            .accessibilityHidden(true)
+        if opensFromWholeRow {
+            menuLabel
+        } else {
             pickerMenu
+        }
     }
 
     private var selectedTitle: String {
@@ -130,10 +155,40 @@ struct TimerTaskPicker: View {
     }
 
     private var pickerMenu: some View {
+        VStack(alignment: .leading) {
+            if usesSeparateAccessibleTitle {
+                menuLabel
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("Focus task title")
+                    .allowsHitTesting(false)
+            }
+            taskMenu(label: compactMenuLabel)
+        }
+    }
+
+    @ViewBuilder
+    private var compactMenuLabel: some View {
+        if usesSeparateAccessibleTitle {
+            Label("FOCUS TASK", systemImage: "chevron.up.chevron.down")
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        } else {
+            menuLabel
+        }
+    }
+
+    private var usesSeparateAccessibleTitle: Bool {
+        #if os(iOS)
+        dynamicTypeSize.isAccessibilitySize
+        #else
+        false
+        #endif
+    }
+
+    private func taskMenu(label: some View) -> some View {
         Menu {
             menuOptions
         } label: {
-            menuLabel
+            label
         }
         .tint(PomodoroughTheme.ticket)
         .accessibilityLabel(String(localized: "Focus task, \(selectedTitle)"))
@@ -142,7 +197,7 @@ struct TimerTaskPicker: View {
 
     @ViewBuilder
     private var menuOptions: some View {
-        Button("Unassigned") { model.selectedTaskID = nil }
+        Button("No task") { model.selectedTaskID = nil }
         ForEach(model.tasks) { task in
             Button(task.title) { model.selectedTaskID = task.id }
         }
@@ -152,6 +207,7 @@ struct TimerTaskPicker: View {
         HStack(spacing: 6) {
             Text(selectedTitle)
                 .lineLimit(Self.pickerLineLimit(for: dynamicTypeSize))
+                .modifier(AccessibleTaskTitleLines(reservesLines: usesSeparateAccessibleTitle))
                 .minimumScaleFactor(Self.pickerScaleFactor(for: dynamicTypeSize))
                 .allowsTightening(true)
                 .multilineTextAlignment(Self.pickerMultilineAlignment(for: dynamicTypeSize))
@@ -165,6 +221,19 @@ struct TimerTaskPicker: View {
         .frame(maxWidth: .infinity, alignment: Self.pickerAlignment(for: dynamicTypeSize))
         .frame(minHeight: Self.pickerTitleMinHeight(for: dynamicTypeSize))
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct AccessibleTaskTitleLines: ViewModifier {
+    let reservesLines: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reservesLines {
+            content.lineLimit(2...)
+        } else {
+            content
+        }
     }
 }
 

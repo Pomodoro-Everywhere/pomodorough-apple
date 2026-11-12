@@ -11,11 +11,59 @@ struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
     let plannedDurationMs: Int64
     let completedAt: Date?
     let endedAt: Date?
+    /// The time the run counted, pauses excluded, as Core recorded it
+    /// (0 through `plannedDurationMs`). Nil means the row was stored before
+    /// Core 0.55.0. The client never fills it in, and a nil value is left out
+    /// when the row is written, so Core keeps applying its rule for old rows.
+    var elapsedMs: Int64? = nil
 
     var date: Date? { completedAt ?? endedAt }
     var minutes: Int { max(1, Int((plannedDurationMs + 59_999) / 60_000)) }
+    /// Minutes Core recorded, by the rule that totals use too
+    /// (`TaskTimeText.elapsedMinutes`).
+    var elapsedMinutes: Int? { elapsedMs.map(TaskTimeText.elapsedMinutes) }
     var statusText: String {
-        CanonicalTimer.Status(rawValue: status)?.localizedText ?? status.capitalized
+        guard !isFinishedEarly else { return String(localized: "Finished early") }
+        return CanonicalTimer.Status(rawValue: status)?.localizedText ?? status.capitalized
+    }
+
+    /// A completed run that Core recorded as shorter than its plan. Core has
+    /// no separate status for it.
+    var isFinishedEarly: Bool {
+        status == CanonicalTimer.Status.completed.rawValue
+            && elapsedMs.map { $0 < plannedDurationMs } == true
+    }
+
+    /// The time this row adds to totals: the value Core recorded. Core fills
+    /// it on every row it projects, old rows included, so the client has no
+    /// rule of its own. A row that never passed through Core has no recorded
+    /// time and adds nothing.
+    var recordedElapsedMs: Int64 { elapsedMs ?? 0 }
+
+    /// A row with `elapsedMs` shows the time it ran. A cancelled or superseded
+    /// row stored before then has only its plan, and it did not run that
+    /// long, so its minutes are worded as planned.
+    var isPlannedDurationOnly: Bool {
+        elapsedMs == nil
+            && (status == CanonicalTimer.Status.cancelled.rawValue || status == CanonicalTimer.Status.superseded.rawValue)
+    }
+
+    var durationText: String {
+        if let elapsedMinutes { return TaskTimeText.shortMinutes(elapsedMinutes) }
+        guard isPlannedDurationOnly else { return TaskTimeText.shortMinutes(minutes) }
+        return String(localized: "\(minutes) min planned")
+    }
+
+    var spokenDurationText: String {
+        if let elapsedMinutes { return String(localized: "\(elapsedMinutes) minutes") }
+        guard isPlannedDurationOnly else { return String(localized: "\(minutes) minutes") }
+        return String(localized: "\(minutes) minutes planned")
+    }
+
+    /// Core's range for the field: 0 to the plan. A row without it is valid.
+    var hasElapsedWithinPlan: Bool {
+        guard let elapsedMs else { return true }
+        return (0...plannedDurationMs).contains(elapsedMs)
     }
 
     var isValid: Bool {
@@ -34,6 +82,7 @@ struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
             && (commandId == nil || commandId?.isEmpty == false)
             && (taskId == nil || taskId.flatMap(UUID.init(uuidString:)) != nil)
             && DurationValues.isValidWireDuration(plannedDurationMs)
+            && hasElapsedWithinPlan
             && validTerminalDate
             && date.flatMap(WireBounds.physicalMilliseconds(for:)) != nil
             && (endedAt == nil || endedAt.flatMap(WireBounds.physicalMilliseconds(for:)) != nil)
@@ -55,6 +104,17 @@ struct FocusTask: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     var isValid: Bool {
         Self(title: title)?.id == id
+    }
+
+    /// The composer's client-only rule (see core-ownership.md): a draft that
+    /// is empty or only whitespace is not a task. The check trims nothing
+    /// from the title that is sent.
+    static func isBlankDraft(_ draft: String) -> Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func acceptsDraft(_ draft: String) -> Bool {
+        !isBlankDraft(draft) && Self(title: draft) != nil
     }
 
     init(from decoder: Decoder) throws {
@@ -159,7 +219,7 @@ enum HistoryAnalytics {
                 ? String(localized: "Unassigned")
                 : String(localized: "Deleted task"))
             let current = totals[id] ?? (title, 0, 0)
-            totals[id] = (current.title, current.count + 1, current.timeMs + item.plannedDurationMs)
+            totals[id] = (current.title, current.count + 1, current.timeMs + item.recordedElapsedMs)
         }
         return totals.map { id, total in
             CompletedFocusSummary(

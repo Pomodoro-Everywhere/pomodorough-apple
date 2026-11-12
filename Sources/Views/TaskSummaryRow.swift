@@ -7,11 +7,16 @@ struct TaskSummaryRow: View {
 #endif
 
     let summary: TaskDailySummary
+    var isFocusTask = false
+    /// macOS double-click rename; nil hides the affordance.
+    var rename: (() -> Void)? = nil
     let delete: () -> Void
 
     var body: some View {
         Group {
-            if usesStackedLayout {
+            if dynamicTypeSize.isAccessibilitySize {
+                accessibilityRow
+            } else if usesStackedLayout {
                 stackedRow
             } else {
                 columnRow
@@ -26,21 +31,39 @@ struct TaskSummaryRow: View {
     private var stackedRow: some View {
         HStack(spacing: TaskBoardColumns.spacing) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(summary.task.title)
-                    .font(.body.weight(.semibold))
-                Text("\(summary.finishedPomodoros) finished pomodoros")
-                Text(TaskTimeText.spoken(summary.timeSpentMs))
+                titleRow(lineLimit: nil)
+                Text("\(summary.finishedPomodoros) pomodoros · \(TaskTimeText.shortMinutes(spentMinutes))")
+                    .accessibilityLabel(summaryAccessibilityLabel)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             deleteButton
         }
     }
 
-    private var columnRow: some View {
-        HStack(spacing: TaskBoardColumns.spacing) {
+    /// IOS27-13: at accessibility sizes the title takes the full row width.
+    /// The badge, the summary and the trash button follow it on their own
+    /// lines, so the trash button sits at the end of the row, not halfway
+    /// down a long title.
+    private var accessibilityRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(summary.task.title)
                 .font(.body.weight(.semibold))
-                .lineLimit(2)
+#if os(macOS)
+                .onTapGesture(count: 2) { rename?() }
+#endif
+            if isFocusTask {
+                focusBadge
+            }
+            Text("\(summary.finishedPomodoros) pomodoros · \(TaskTimeText.shortMinutes(spentMinutes))")
+                .accessibilityLabel(summaryAccessibilityLabel)
+            deleteControl
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var columnRow: some View {
+        HStack(spacing: TaskBoardColumns.spacing) {
+            titleRow(lineLimit: 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: TaskBoardColumns.spacing) {
                 Text("\(summary.finishedPomodoros)")
@@ -66,8 +89,42 @@ struct TaskSummaryRow: View {
         }
     }
 
+    private func titleRow(lineLimit: Int?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(summary.task.title)
+                .font(.body.weight(.semibold))
+                .lineLimit(lineLimit)
+#if os(macOS)
+                .onTapGesture(count: 2) { rename?() }
+#endif
+            if isFocusTask {
+                focusBadge
+            }
+        }
+    }
+
+    /// Marks the task the timer attributes focus runs to.
+    private var focusBadge: some View {
+        Label("Focus", systemImage: "checkmark.circle.fill")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(PomodoroughTheme.signalText)
+            .accessibilityLabel("Focus task")
+    }
+
+    private var spentMinutes: Int {
+        Int(summary.timeSpentMs / 60_000)
+    }
+
     private var summaryAccessibilityLabel: String {
-        String(localized: "\(summary.finishedPomodoros) finished pomodoros, \(TaskTimeText.spoken(summary.timeSpentMs)) spent")
+        Self.accessibilityLabel(for: summary)
+    }
+
+    /// Composed from single-count strings so the pomodoro count pluralizes
+    /// ("1 finished pomodoro, 25 minutes spent").
+    static func accessibilityLabel(for summary: TaskDailySummary) -> String {
+        let finished = String(localized: "\(summary.finishedPomodoros) finished pomodoros")
+        let spoken = TaskTimeText.spoken(summary.timeSpentMs)
+        return String(localized: "\(finished), \(spoken) spent")
     }
 
     private var usesStackedLayout: Bool {

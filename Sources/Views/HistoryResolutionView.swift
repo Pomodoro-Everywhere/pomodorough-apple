@@ -20,6 +20,7 @@ struct HistoryResolutionView: View {
             .navigationTitle("Choose synchronized state")
             .inlineNavigationTitleIfSupported()
         }
+        .modifier(ErrorMessageAlert(model: model, host: .historyResolutionSheet))
     }
 
     @ViewBuilder

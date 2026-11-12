@@ -7,6 +7,8 @@ struct TimerScreen: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     #endif
     @State private var syncStatusBottom: CGFloat = 0
+    /// Measured height of the docked primary control; zero until measured.
+    @State private var primaryControlDockHeight: CGFloat = 0
 
     @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -77,10 +79,45 @@ struct TimerScreen: View {
             : totalWidth / 3
     }
 
+    /// Size that decides portrait versus landscape. The phone landscape
+    /// card hides the navigation and tab bars. Bars live in the safe area,
+    /// so hiding them grows the content height. A decision made from the
+    /// content height then flips back to portrait, which shows the bars
+    /// again, without end, in any container whose width falls between the
+    /// two heights (IOS18-01: iOS 18 animates a newly selected tab's stale
+    /// frame through such sizes after a rotation). The container with its
+    /// safe area added back does not move with bar visibility. Regular x
+    /// regular never hides chrome and keeps the content size.
+    static func layoutDecisionSize(
+        contentSize: CGSize,
+        safeAreaInsets: EdgeInsets,
+        horizontal: UserInterfaceSizeClass?,
+        vertical: UserInterfaceSizeClass?
+    ) -> CGSize {
+        if usesStackedLandscape(horizontal: horizontal, vertical: vertical) { return contentSize }
+        return CGSize(
+            width: contentSize.width + safeAreaInsets.leading + safeAreaInsets.trailing,
+            height: contentSize.height + safeAreaInsets.top + safeAreaInsets.bottom
+        )
+    }
+
+    private func layoutDecisionSize(in geometry: GeometryProxy) -> CGSize {
+        #if os(iOS)
+        Self.layoutDecisionSize(
+            contentSize: geometry.size,
+            safeAreaInsets: geometry.safeAreaInsets,
+            horizontal: horizontalSizeClass,
+            vertical: verticalSizeClass
+        )
+        #else
+        geometry.size
+        #endif
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let layout = TimerLayout(
-                size: geometry.size,
+                size: layoutDecisionSize(in: geometry),
                 usesAccessibleLayout: dynamicTypeSize.isAccessibilitySize
             )
             let hinge = Self.measuredHinge(in: geometry)
@@ -94,7 +131,7 @@ struct TimerScreen: View {
             #endif
         }
         .background(TimerBackdrop())
-        .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Timer" : "Pomodorough")
+        .navigationTitle("Timer")
         .inlineNavigationTitleIfSupported()
         .refreshable { await model.refreshForPull() }
         .primaryRouteAccountToolbar(model: model)
@@ -122,19 +159,52 @@ struct TimerScreen: View {
                 }
 #endif
             } else {
-                ScrollView {
-                    portraitContent(
-                        compactDial: usesCompactDial(for: geometry.size),
-                        availableHeight: geometry.size.height,
-                        topGap: Self.portraitTopGap(syncStatusBottom: syncStatusBottom, globalMinY: geometry.frame(in: .global).minY),
-                        hinge: hinge
-                    )
-                }
-                .timerChromeHidden(false)
+                portraitScroll(hinge: hinge, geometry: geometry)
             }
 #endif
         }
     }
+
+    #if !os(macOS)
+    /// Portrait card in its scroll view. While the primary control is
+    /// docked (R54-AU05) it sits in a safe-area inset, so the card scrolls
+    /// beside it. A bottom dock also lowers the height the card must fill.
+    /// VoiceOver reads the docked control before the card, in the same
+    /// order as the card reads it when undocked: primary control first.
+    private func portraitScroll(hinge: TimerHingeLayout, geometry: GeometryProxy) -> some View {
+        let dock = TimerPrimaryControlDock.placement(
+            usesAccessibleLayout: dynamicTypeSize.isAccessibilitySize,
+            hinge: hinge,
+            isVerticallyCompact: verticalSizeClass == .compact
+        )
+        return ScrollView {
+            portraitContent(
+                compactDial: usesCompactDial(for: geometry.size),
+                availableHeight: geometry.size.height - (dock == .bottom ? primaryControlDockHeight : 0),
+                topGap: Self.portraitTopGap(syncStatusBottom: syncStatusBottom, globalMinY: geometry.frame(in: .global).minY),
+                hinge: hinge,
+                docksPrimaryControl: dock != nil
+            )
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if dock == .bottom {
+                TimerPrimaryControlDock(model: model, placement: .bottom)
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { primaryControlDockHeight = $0 }
+                    .accessibilitySortPriority(1)
+            }
+        }
+        .safeAreaInset(edge: .trailing, spacing: 0) {
+            if dock == .trailing {
+                TimerPrimaryControlDock(model: model, placement: .trailing)
+                    .frame(width: geometry.size.width * TimerPrimaryControlDock.trailingWidthShare)
+                    .accessibilitySortPriority(1)
+            }
+        }
+        // One container, so the dock's sort priority orders it against the card.
+        .accessibilityElement(children: .contain)
+        .timerChromeHidden(false)
+    }
+    #endif
 
     #if DEBUG && os(iOS)
     // XCTest cannot read the app's SwiftUI size classes. Report raw inputs,
@@ -198,7 +268,13 @@ struct TimerScreen: View {
         max(0, availableHeight - topGap - 23)
     }
 
-    private func portraitContent(compactDial: Bool, availableHeight: CGFloat, topGap: CGFloat, hinge: TimerHingeLayout) -> some View {
+    private func portraitContent(
+        compactDial: Bool,
+        availableHeight: CGFloat,
+        topGap: CGFloat,
+        hinge: TimerHingeLayout,
+        docksPrimaryControl: Bool
+    ) -> some View {
         VStack(spacing: 20) {
             if let conflict = model.conflictMessage {
                 ConflictBanner(message: conflict, dismiss: model.dismissConflict)
@@ -208,10 +284,11 @@ struct TimerScreen: View {
                 layout: .portrait,
                 usesCompactDial: compactDial,
                 minimumHeight: model.conflictMessage == nil ? Self.portraitMinimumHeight(availableHeight: availableHeight, topGap: topGap) : nil,
-                hinge: hinge
+                hinge: hinge,
+                docksPrimaryControl: docksPrimaryControl
             )
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, TimerPortraitSpacing.screenMargin)
         .padding(.top, topGap)
         // The offset card shadow extends seven points below its layout bounds.
         .padding(.bottom, 23)
@@ -269,6 +346,10 @@ private struct TimerScreenIOSLandscapeContent: View {
     var landscapeHeight: CGFloat
     var landscapeWidth: CGFloat
     var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
+    /// IOS27-19: the card hides the tab bar and toolbar until the person
+    /// asks for them. A choice, not a measurement, so showing the bars
+    /// cannot feed back into the layout decision (IOS18-01).
+    @State private var showsChrome = false
 
     var body: some View {
         // Scroll recovery: landscape height on small phones can
@@ -276,6 +357,9 @@ private struct TimerScreenIOSLandscapeContent: View {
         // of extending past the visible area.
         ScrollView {
             VStack(spacing: 10) {
+                if !showsChrome {
+                    TimerShowChromeButton { showsChrome = true }
+                }
                 if let conflict = model.conflictMessage {
                     ConflictBanner(message: conflict, dismiss: { model.dismissConflict() })
                 }
@@ -292,7 +376,28 @@ private struct TimerScreenIOSLandscapeContent: View {
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
-        .timerChromeHidden(true)
+        .timerChromeHidden(!showsChrome)
+    }
+}
+
+/// The phone landscape Timer's way back to the tabs without rotating.
+private struct TimerShowChromeButton: View {
+    static let identifier = "timer.show-tabs"
+    let show: () -> Void
+
+    var body: some View {
+        Button(action: show) {
+            Label(
+                String(localized: "timer.show-tabs", defaultValue: "Show tabs"),
+                systemImage: "menubar.dock.rectangle"
+            )
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityHint(String(localized: "Shows the tab bar and the toolbar"))
+        .accessibilityIdentifier(Self.identifier)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

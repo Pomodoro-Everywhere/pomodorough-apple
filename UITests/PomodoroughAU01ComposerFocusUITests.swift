@@ -6,7 +6,8 @@ import XCTest
 // observable outcomes pin here: T5 tap focuses and the full string
 // persists; T4 submit commits the full title, clears the composer, and
 // disables Add; T4b navigating away commits ahead-of-binding text so Add
-// still creates the full title without refocusing.
+// still creates the full title without refocusing. R54-AU03: Add collects
+// the input the keyboard still holds before it stores the title.
 @MainActor
 final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
     func testAU01TapFocusesAndFullStringPersists() {
@@ -40,16 +41,33 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         let matches = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU01 resign T4"))
         XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(matches.count, 1, "Add creates exactly one task")
-        // addTask clears asynchronously (await model.addTask, then title=""),
-        // so poll for the push into the field instead of a single-shot read.
-        var cleared = ""
-        let deadline = Date(timeIntervalSinceNow: 10)
-        repeat {
-            cleared = (au01FieldValue(in: app).value as? String) ?? ""
-            if cleared == "" || cleared == "Write release notes" { break }
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        } while Date() < deadline
-        XCTAssertTrue(cleared == "" || cleared == "Write release notes", "value=\(cleared)")
+        au01WaitForClearedComposer(in: app)
+        XCTAssertFalse(app.buttons["Add task"].isEnabled)
+    }
+
+    // The keyboard's lag is timing that XCUITest cannot force, so the
+    // composer's POMODOROUGH_UI_TEST_HELD_INPUT stand-in holds "robe" and
+    // delivers it, as a composition that is then committed, only inside
+    // the field's first resign. An Add that stores the title before it
+    // resigns keeps "AU03 held p".
+    func testAU03AddCollectsHeldInputBeforeStoringTitle() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = makeAU01App()
+        app.launchEnvironment["POMODOROUGH_UI_TEST_HELD_INPUT"] = "robe"
+        defer { app.terminate() }
+        launchAU01(app)
+        let field = au01Field(in: app)
+        field.tap()
+        field.typeText("AU03 held p")
+        au01Wait(field, "value == %@", "AU03 held p", message: "typed text must reach the field before Add")
+        app.buttons["Add task"].tap()
+        let full = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU03 held probe"))
+        XCTAssertTrue(full.firstMatch.waitForExistence(timeout: 10), "Add must store the held input")
+        XCTAssertEqual(full.count, 1, "Add creates exactly one task")
+        let short = app.staticTexts.matching(NSPredicate(format: "label == %@", "AU03 held p"))
+        XCTAssertEqual(short.count, 0, "Add must not store the title without the held input")
+        au01WaitForClearedComposer(in: app)
         XCTAssertFalse(app.buttons["Add task"].isEnabled)
     }
 
@@ -91,6 +109,19 @@ final class PomodoroughAU01ComposerFocusUITests: XCTestCase {
         let predicate = NSPredicate(format: format, argumentArray: args)
         let condition = XCTNSPredicateExpectation(predicate: predicate, object: element)
         XCTAssertEqual(XCTWaiter().wait(for: [condition], timeout: 15), .completed, message)
+    }
+
+    // addTask clears asynchronously (await model.addTask, then title=""),
+    // so poll for the push into the field instead of a single-shot read.
+    private func au01WaitForClearedComposer(in app: XCUIApplication) {
+        var cleared = ""
+        let deadline = Date(timeIntervalSinceNow: 10)
+        repeat {
+            cleared = (au01FieldValue(in: app).value as? String) ?? ""
+            if cleared == "" || cleared == "Task name" { break }
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        } while Date() < deadline
+        XCTAssertTrue(cleared == "" || cleared == "Task name", "value=\(cleared)")
     }
 
     private func makeAU01App() -> XCUIApplication {

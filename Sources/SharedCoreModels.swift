@@ -267,15 +267,33 @@ struct CoreProjectionBase: Encodable, Sendable {
         autoStartBreaks: Bool,
         selectedTaskId: String?
     ) {
-        // Core rejects duplicated terminal state. Older Apple snapshots kept both.
-        self.canonicalTimer = history.contains(where: { $0.timerId == canonicalTimer?.id })
-            ? nil
-            : canonicalTimer
+        // From Core 0.56.0, projection accepts a terminal timer that its own
+        // history row pairs with, and the row takes the timer's elapsed time.
+        // Legacy pre-0.56 snapshots and omitempty server timers carry no
+        // lastIntent. Core 0.56 rejects such a pair with "canonical timer
+        // overlaps timer history", so the legacy timer is dropped as before.
+        // The account path drops every pair before this init (see
+        // TimerSessionController.projectionBase); room genesis records that
+        // pre-0.56 builds or peers stored can still carry a legacy pair.
+        // Pre-0.56 rooms can also hold a genesis timer whose anchorAt was
+        // shifted to the physical clock while its row kept trusted time.
+        // Core 0.56 rejects that pair too, so it is dropped the same way and
+        // the room keeps syncing. Storing the pair in one clock is a backlog
+        // follow-up.
+        self.canonicalTimer = Self.isUnpairableOverlap(canonicalTimer, history: history) ? nil : canonicalTimer
         self.history = history
         self.tasks = tasks
         self.durationsMs = durationsMs
         self.autoStartBreaks = autoStartBreaks
         self.selectedTaskId = selectedTaskId
+    }
+
+    /// True when the timer shares a history row but is not the one pair shape
+    /// Core 0.56 accepts: a lastIntent and an anchorAt equal to the row's end
+    /// (`workspace::validate_pair`).
+    private static func isUnpairableOverlap(_ timer: CanonicalTimer?, history: [HistoryItem]) -> Bool {
+        guard let timer, let row = history.first(where: { $0.timerId == timer.id }) else { return false }
+        return timer.lastIntent == nil || (row.completedAt ?? row.endedAt) != timer.anchorAt
     }
 }
 
@@ -690,7 +708,7 @@ struct CoreProjectionOutput: Decodable, Equatable, Sendable {
             switch operation.type {
             case .upsert:
                 projected[target.lowercased()]?.title == operation.title
-            case .delete:
+            case .delete, .rename:
                 projected[target.lowercased()] == nil
             }
         }
@@ -1147,6 +1165,7 @@ struct CoreReconcileOutput: Decodable, Equatable, Sendable {
                 && lhs.plannedDurationMs == rhs.plannedDurationMs
                 && wireDatesEqual(lhs.completedAt, rhs.completedAt)
                 && wireDatesEqual(lhs.endedAt, rhs.endedAt)
+                && lhs.elapsedMs == rhs.elapsedMs
         }
     }
 

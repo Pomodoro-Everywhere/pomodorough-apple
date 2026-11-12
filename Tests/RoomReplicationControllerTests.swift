@@ -163,7 +163,10 @@ struct RoomReplicationControllerTests {
             return
         }
         #expect(restored == durable)
-        #expect(message == "Room contains two different operations with the same immutable ID.")
+        // The person reads the authored sentence; the protocol detail stays
+        // in diagnostics.
+        #expect(message == IrohProtocolError.immutableConflict.localizedDescription)
+        #expect(message != IrohProtocolError.immutableConflict.diagnosticDetail)
         #expect(quarantined)
         #expect(fixture.store.activeSnapshot?.conflict != nil)
         await waitUntil { await fixture.service.markedConflictRoomIDs.count == 1 }
@@ -433,7 +436,8 @@ struct RoomReplicationControllerTests {
             environment: environment()
         )
 
-        #expect(transition == .failed(TestRoomServiceError.endpointUnavailable.localizedDescription))
+        // IOS27-18: the person reads an authored sentence, not the error text.
+        #expect(transition == .failed("The room was not created. Try again."))
         #expect(fixture.store.activeRoomID == nil)
         #expect(await fixture.service.stopCount == 1)
         await waitUntil {
@@ -539,7 +543,7 @@ struct RoomReplicationControllerTests {
         await fixture.service.setTicketError(.endpointUnavailable)
 
         let failed = await fixture.controller.refreshInvite(environment: environment(for: roomState))
-        #expect(failed == .failed(TestRoomServiceError.endpointUnavailable.localizedDescription))
+        #expect(failed == .failed("The invite was not created. Try again."))
     }
 
     @Test @MainActor
@@ -560,7 +564,7 @@ struct RoomReplicationControllerTests {
     func completedRoomProjectionAdvancesDefaultPhaseAndPersistsDerivedSelection() throws {
         let fixture = makeFixture(mode: .iroh)
         var completed = PersistedTimerState.fresh()
-        completed.canonicalTimer = TestFixtures.timer(status: .completed, elapsed: 60_000)
+        completed.canonicalTimer = TestFixtures.terminalTimer(status: .completed, elapsed: 60_000)
         completed.history = [TestFixtures.history(
             id: completed.canonicalTimer!.id,
             durationMs: 60_000,
@@ -600,7 +604,7 @@ struct RoomReplicationControllerTests {
             }
         )
         var completed = PersistedTimerState.fresh()
-        completed.canonicalTimer = TestFixtures.timer(status: .completed, elapsed: 60_000)
+        completed.canonicalTimer = TestFixtures.terminalTimer(status: .completed, elapsed: 60_000)
         completed.history = [TestFixtures.history(
             id: completed.canonicalTimer!.id,
             durationMs: 60_000,
@@ -718,7 +722,7 @@ struct RoomReplicationControllerTests {
             }
         )
         var completed = PersistedTimerState.fresh()
-        completed.canonicalTimer = TestFixtures.timer(status: .completed, elapsed: 60_000)
+        completed.canonicalTimer = TestFixtures.terminalTimer(status: .completed, elapsed: 60_000)
         completed.history = [TestFixtures.history(
             id: completed.canonicalTimer!.id,
             durationMs: 60_000,

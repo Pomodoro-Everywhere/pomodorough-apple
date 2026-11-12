@@ -77,13 +77,24 @@ struct MacOSTests {
         #expect(throws: AppError.self) {
             try MacGoogleOAuthContract.authorizationCode(from: missingCode, expectedState: "expected")
         }
-        let providerError = try #require(URL(string: "com.example:/oauth2callback?error=access_denied&error_description=User%20cancelled"))
-        do {
-            _ = try MacGoogleOAuthContract.authorizationCode(from: providerError, expectedState: "expected")
-            Issue.record("Expected provider error")
-        } catch let error as AppError {
-            #expect(error.localizedDescription == "User cancelled")
+        let declined = try #require(URL(string: "com.example:/oauth2callback?error=access_denied&error_description=User%20cancelled"))
+        #expect(throws: GoogleConsentCallbackError.declined) {
+            try MacGoogleOAuthContract.authorizationCode(from: declined, expectedState: "expected")
         }
+        let rejected = try #require(URL(string: "com.example:/oauth2callback?error=server_error&error_description=Private%20detail"))
+        #expect(throws: GoogleConsentCallbackError.rejected) {
+            try MacGoogleOAuthContract.authorizationCode(from: rejected, expectedState: "expected")
+        }
+    }
+
+    /// L2: declining Google consent is a cancelled sign-in, so nothing is
+    /// shown; any other Google error shows the authored sentence, never
+    /// Google's text.
+    @Test func googleConsentCallbackErrorsShowNoProviderText() {
+        #expect(UserFacingFailure.isCancelledSignIn(GoogleConsentCallbackError.declined))
+        #expect(!UserFacingFailure.isCancelledSignIn(GoogleConsentCallbackError.rejected))
+        let sentence = UserFacingFailure.sentence(for: GoogleConsentCallbackError.rejected, during: .signIn)
+        #expect(sentence == "Sign-in did not finish. Try again.")
     }
 
     @Test func googleOAuthTokenRequestUsesSortedEscapedFormContract() throws {

@@ -89,7 +89,18 @@ final class PomodoroughAddTaskU03ContrastUITests: XCTestCase {
         let field = u03Elements(labelled: "New task", in: app).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         for _ in 0..<4 where !field.isHittable { app.swipeUp() }
+        // The Add button sits below the field; at accessibility sizes the
+        // field can be on screen while Add is still under the tab bar. Short
+        // drags keep the field below the floating header, where taps reach it.
+        let add = app.buttons["Add task"]
+        for _ in 0..<8 where !add.isHittable { nudgeU03ContentUp(app) }
         XCTAssertTrue(field.isHittable)
+    }
+
+    private func nudgeU03ContentUp(_ app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
     private func assertU03AddDisabled(_ app: XCUIApplication) {
@@ -161,7 +172,7 @@ final class PomodoroughAddTaskU03ContrastUITests: XCTestCase {
         let field = u03Elements(labelled: "New task", in: app).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         let cleared = field.value as? String ?? ""
-        XCTAssertTrue(cleared == "" || cleared == "Write release notes")
+        XCTAssertTrue(cleared == "" || cleared == "Task name")
         XCTAssertFalse(app.buttons["Add task"].isEnabled)
     }
 

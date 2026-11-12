@@ -15,9 +15,19 @@ struct TimerControls: View {
         case paused
     }
 
+    /// The controls one instance shows. The primary control is Start, Pause
+    /// or Resume. While the screen docks the primary control (R54-AU05), the
+    /// dock shows `primaryOnly` and the card shows `secondaryOnly`.
+    enum ControlGroup: Sendable {
+        case all
+        case primaryOnly
+        case secondaryOnly
+    }
+
     let model: AppModel
     let layout: TimerLayout
     var compact = false
+    var group = ControlGroup.all
     var hinge = TimerHingeLayout(containerSize: .zero, divisions: [])
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -104,9 +114,26 @@ struct TimerControls: View {
 
     @ViewBuilder
     private func controls(glass: Bool) -> some View {
+        switch group {
+        case .all:
+            allControls(glass: glass)
+        case .primaryOnly:
+            primaryButton(glass: glass)
+        case .secondaryOnly:
+            VStack(spacing: 14) {
+                secondaryStackedButtons(glass: glass)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func allControls(glass: Bool) -> some View {
         if singleRow {
             // One row when the buttons fit side by side, stacked rows
             // when they don't (large text, narrow multitasking width).
+            // The macOS aside column can be too narrow even for the
+            // Finish/Cancel pair, so it falls through to one button per
+            // row instead of truncating the labels to "Fi…" and "C…".
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 14) {
                     primaryButton(glass: glass)
@@ -116,6 +143,12 @@ struct TimerControls: View {
                     primaryButton(glass: glass)
                     secondaryStackedButtons(glass: glass)
                 }
+                #if os(macOS)
+                VStack(spacing: 14) {
+                    primaryButton(glass: glass)
+                    secondaryStackedButtons(glass: glass, pairInline: false)
+                }
+                #endif
             }
         } else {
             VStack(spacing: 14) {
@@ -126,10 +159,15 @@ struct TimerControls: View {
     }
 
     @ViewBuilder
+    private func finishCancelButtons(glass: Bool) -> some View {
+        controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
+        controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+    }
+
+    @ViewBuilder
     private func secondaryInlineButtons(glass: Bool) -> some View {
         if model.isTimerActive {
-            controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-            controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+            finishCancelButtons(glass: glass)
             if model.hasActiveCompletionAlert {
                 controlButton(stopSoundTitle, symbol: "speaker.slash", glassID: .stopSound, prominent: false, glass: glass, action: model.stopSound)
             }
@@ -142,13 +180,17 @@ struct TimerControls: View {
         }
     }
 
+    /// Second row(s) under the primary control. `pairInline` keeps
+    /// Finish/Cancel side by side; false gives each its own row for
+    /// columns too narrow to show both labels.
     @ViewBuilder
-    private func secondaryStackedButtons(glass: Bool) -> some View {
-        if model.isTimerActive {
+    private func secondaryStackedButtons(glass: Bool, pairInline: Bool = true) -> some View {
+        if model.isTimerActive, pairInline {
             HStack(spacing: 14) {
-                controlButton(String(localized: "Finish"), symbol: "checkmark", glassID: .finish, prominent: false, glass: glass) { model.finish() }
-                controlButton(String(localized: "Cancel"), symbol: "xmark", glassID: .cancel, prominent: false, glass: glass) { model.cancel() }
+                finishCancelButtons(glass: glass)
             }
+        } else if model.isTimerActive {
+            finishCancelButtons(glass: glass)
         }
         if model.isTimerActive {
             if model.hasActiveCompletionAlert {

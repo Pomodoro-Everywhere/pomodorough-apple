@@ -553,10 +553,20 @@ struct IntegrationPositiveTests {
         restored.resume(at: paused.anchorAt.addingTimeInterval(5))
         let resumed = try #require(restored.canonicalTimer)
         restored.finish(at: resumed.anchorAt.addingTimeInterval(20))
+        // Core 0.55.0 takes a Finish's elapsed time from the trusted command
+        // time, not from the observed value, so pin the stored result.
+        let finished = try #require(restored.canonicalTimer)
+        #expect(finished.elapsedAtAnchorMs >= paused.elapsedAtAnchorMs)
+        #expect(finished.elapsedAtAnchorMs < 60_000)
+        #expect(restored.history.first?.elapsedMs == finished.elapsedAtAnchorMs)
 
         let finalModel = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
         #expect(finalModel.canonicalTimer?.status == .completed)
-        #expect(finalModel.canonicalTimer?.elapsedAtAnchorMs == 60_000)
+        let reloadedElapsed = try #require(finalModel.canonicalTimer?.elapsedAtAnchorMs)
+        #expect(finalModel.history.first?.elapsedMs == reloadedElapsed)
+        // The reload replays the pending commands from their stored dates,
+        // which reach Core exactly (see SharedCoreTimestampTests).
+        #expect(reloadedElapsed == finished.elapsedAtAnchorMs)
         #expect(finalModel.history.count == 1)
         #expect(finalModel.pendingCommandCount == 4)
     }
@@ -760,10 +770,21 @@ struct IntegrationPositiveTests {
         #expect(model.tasks.count == 1)
         model.selectedTaskID = task.id
         model.setDurationMinutes(1, for: .focus)
+        let wallStart = Date()
         model.start()
         let timer = try #require(model.canonicalTimer)
         #expect(model.task(forTimerID: timer.id) == task)
+        // A known wait gives the stored elapsed time a lower bound, so a zero
+        // or a default cannot pass.
+        try await Task.sleep(for: .milliseconds(50))
         model.finish(at: timer.anchorAt.addingTimeInterval(60))
+        let wallMs = Int64(Date().timeIntervalSince(wallStart) * 1_000) + 1
+        // The Finish runs on the real clock, so Core records the real elapsed
+        // time, not the plan; the summaries must carry that stored value.
+        let spentMs = try #require(model.history.first?.elapsedMs)
+        #expect(spentMs >= 50)
+        #expect(spentMs <= wallMs)
+        #expect(spentMs < 60_000)
 
         model.deleteTask(id: task.id)
         #expect(model.tasks.isEmpty)
@@ -773,7 +794,7 @@ struct IntegrationPositiveTests {
                 id: task.id.uuidString.lowercased(),
                 taskTitle: task.title,
                 completedPomodoros: 1,
-                timeSpentMs: 60_000
+                timeSpentMs: spentMs
             )
         ])
         let deletedRestore = AppModel(defaults: defaults, alarmScheduler: RecordingAlarmScheduler())
@@ -788,7 +809,7 @@ struct IntegrationPositiveTests {
         #expect(restored.task(forTimerID: timer.id) == task)
         #expect(restored.completedFocusSummaries().first?.taskTitle == task.title)
         #expect(summary.finishedPomodoros == 1)
-        #expect(summary.timeSpentMs == 60_000)
+        #expect(summary.timeSpentMs == spentMs)
     }
 
     @Test @MainActor
@@ -5035,7 +5056,20 @@ struct IntegrationPositiveTests {
 
     @Test @MainActor
     func remoteCompletedFocusNeverAutoStartsLocalBreak() async throws {
-        let scenario = "auto-start-remote-completed"
+        try await expectRemoteCompletedFocusWithoutLocalBreak(scenario: "auto-start-remote-completed")
+    }
+
+    /// Legacy pre-0.56 snapshots and omitempty server timers pair a completed
+    /// timer that has no lastIntent with its own history row. Core 0.56 rejects
+    /// that pair as an overlap, so the commit must drop the legacy timer from
+    /// the projection input instead of pausing sync.
+    @Test @MainActor
+    func legacyCompletedTimerWithoutIntentStillCommitsTheSync() async throws {
+        try await expectRemoteCompletedFocusWithoutLocalBreak(scenario: "auto-start-remote-completed-legacy")
+    }
+
+    @MainActor
+    private func expectRemoteCompletedFocusWithoutLocalBreak(scenario: String) async throws {
         let suiteName = "PomodoroughTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -5058,6 +5092,7 @@ struct IntegrationPositiveTests {
         #expect(model.canonicalTimer?.phase == .focus)
         #expect(model.completedFocusCount == 1)
         #expect(model.pendingCommandCount == 0)
+        #expect(model.errorMessage == nil)
         #expect(scheduler.operations.isEmpty)
     }
 
