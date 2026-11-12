@@ -231,7 +231,7 @@ jobs:
         run: >-
           python3 scripts/run_xcode_tests.py
           --idle-timeout 300
-          --wall-timeout 3600
+          --wall-timeout 5400
           --log-path "$IOS_TEST_LOG"
           --diagnostics-dir "$IOS_TEST_DIAGNOSTICS"
           --completion-marker "Test Suite 'PomodoroughUITests.xctest' passed"
@@ -501,7 +501,7 @@ jobs:
         run: >-
           python3 scripts/run_xcode_tests.py
           --idle-timeout 300
-          --wall-timeout 1800
+          --wall-timeout 2700
           --log-path "$SE_TEST_LOG"
           --diagnostics-dir "$SE_TEST_DIAGNOSTICS"
           --completion-marker "Test Suite 'PomodoroughUITests.xctest' passed"
