@@ -804,30 +804,23 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         var before = button.frame
         let scroll = app.scrollViews.firstMatch
         // Drags travel a bounded share of the viewport, so a short phone needs
-        // more of them than four. Element swipes are only the fallback for a
-        // drag that did not move the content: on SE iOS 18 they left it still
-        // with Skip behind the dock and a third of the scroll range unused.
-        var dragMoves = true
+        // more of them than four. An element swipe only follows a drag that
+        // did not move the content, and the next attempt drags again.
+        var lastDragMoved = true
         for attempt in 0..<8 {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.35))
             let frame = button.frame
             let inside = frame.minX >= viewport.minX && frame.maxX <= viewport.maxX
                 && frame.minY >= viewport.minY && frame.maxY <= viewport.maxY
             if button.isHittable && inside { return }
             let below = frame.midY >= viewport.midY
-            var method = "drag"
-            if dragMoves || !scroll.exists {
-                let origin = app.coordinate(withNormalizedOffset: .zero)
-                let direction: CGFloat = below ? -1 : 1
-                let start = origin.withOffset(.init(dx: viewport.midX, dy: viewport.midY))
-                let end = start.withOffset(.init(dx: 0, dy: direction * viewport.height * 0.35))
-                start.press(forDuration: 0.01, thenDragTo: end)
-            } else {
-                method = "element-swipe"
-                if below { scroll.swipeUp() } else { scroll.swipeDown() }
-            }
+            let method = lastDragMoved || !scroll.exists ? "drag" : "element-swipe"
+            if method == "drag" {
+                dragTimerContent(app, within: viewport, up: below)
+            } else if below { scroll.swipeUp() } else { scroll.swipeDown() }
             let after = button.frame
             let didMove = abs(after.minX - before.minX) > 0.5 || abs(after.minY - before.minY) > 0.5
-            if method == "drag" { dragMoves = didMove }
+            lastDragMoved = method == "drag" ? didMove : true
             moved = moved || didMove
             print("AP10_GESTURE label=\(label) attempt=\(attempt) method=\(method) before=\(before) after=\(after) moved=\(didMove) viewport=\(viewport)")
             before = after
@@ -838,6 +831,19 @@ final class PomodoroughAccessibilityUITests: XCTestCase {
         } else {
             XCTFail("AP10 gesture delivery failure: content did not move after 8 synthesized gestures for \(label). Infra/adapter blocker, not proof the control is unreachable.")
         }
+    }
+
+    /// Drags the timer card by 35% of the viewport in the side gutter, the
+    /// same slow press-drag-hold that revealPicker uses. On SE iOS 18 a quick
+    /// drag from the countdown left the card still; this one moved it.
+    /// The hold before release stops momentum, so each step is bounded.
+    private func dragTimerContent(_ app: XCUIApplication, within viewport: CGRect, up: Bool) {
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let gutterX = viewport.minX + viewport.width * 0.06
+        let half = viewport.height * 0.35 / 2 * (up ? 1 : -1)
+        let start = origin.withOffset(.init(dx: gutterX, dy: viewport.midY + half))
+        let end = origin.withOffset(.init(dx: gutterX, dy: viewport.midY - half))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: XCUIGestureVelocity(rawValue: 40), thenHoldForDuration: 1)
     }
 
     func testNetworkSectionExposesModesRoomActionsAndPrivacyCopy() {

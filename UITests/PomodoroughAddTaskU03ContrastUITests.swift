@@ -132,14 +132,30 @@ final class PomodoroughAddTaskU03ContrastUITests: XCTestCase {
         let keyboard = app.keyboards.element
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10))
         // At XXXL the keyboard can cover Add, which sits below the field.
-        // The content scrolls above the keyboard; the measurement needs Add
-        // on screen, so lift it within the band the keyboard leaves visible.
-        for _ in 0..<8 where !add.isHittable && keyboard.exists {
+        // The content scrolls above the keyboard; the measurement needs all
+        // of Add on screen, so lift it within the band the keyboard leaves
+        // visible. isHittable is no guide here: it ignores the keyboard.
+        for _ in 0..<8 where keyboard.exists && add.frame.maxY > u03KeyboardTop(keyboard, in: app) {
+            let top = u03KeyboardTop(keyboard, in: app)
             let visible = CGRect(x: app.frame.minX, y: app.frame.minY,
-                width: app.frame.width, height: keyboard.frame.minY - app.frame.minY)
+                width: app.frame.width, height: top - app.frame.minY)
             dragU03Content(app, by: -0.1, within: visible)
         }
         XCTAssertTrue(add.isHittable)
+        if keyboard.exists {
+            XCTAssertLessThanOrEqual(add.frame.maxY, u03KeyboardTop(keyboard, in: app), "Add is clear of the keyboard")
+        }
+    }
+
+    /// Top edge of what the keyboard covers. On iOS 18 the predictions bar
+    /// (SystemInputAssistantView) sits above the Keyboard element's frame,
+    /// so the keyboard frame alone left Add half under the bar at XXXL.
+    private func u03KeyboardTop(_ keyboard: XCUIElement, in app: XCUIApplication) -> CGFloat {
+        let assistant = app.otherElements["SystemInputAssistantView"]
+        let bar = assistant.exists ? assistant.frame : .null
+        // Only a bar resting on (or inside) the keyboard covers content.
+        guard !bar.isEmpty, bar.maxY >= keyboard.frame.minY - 1 else { return keyboard.frame.minY }
+        return min(keyboard.frame.minY, bar.minY)
     }
 
     @discardableResult
