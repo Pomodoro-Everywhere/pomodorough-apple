@@ -742,11 +742,19 @@ jobs:
           --product "$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator/Pomodorough.app"
           --output "$RUNNER_TEMP/core-provenance"
 
+      # upload-artifact drops symlinks and executable bits, so the app
+      # travels as a ditto archive that keeps both (R54-APB16).
+      - name: Archive iOS simulator app
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          "$DERIVED_DATA_PATH/Build/Products/Release-iphonesimulator/Pomodorough.app"
+          "$RUNNER_TEMP/release-ios-simulator-app.zip"
+
       - name: Upload iOS simulator app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-ios-simulator-app
-          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products/Release-iphonesimulator/Pomodorough.app
+          path: ${{ runner.temp }}/release-ios-simulator-app.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -873,11 +881,19 @@ jobs:
           --product "$DERIVED_DATA_PATH/Build/Products/Release-iphoneos/Pomodorough.app"
           --output "$RUNNER_TEMP/core-provenance"
 
+      # upload-artifact drops symlinks and executable bits, so the app
+      # travels as a ditto archive that keeps both (R54-APB16).
+      - name: Archive iOS device app
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          "$DERIVED_DATA_PATH/Build/Products/Release-iphoneos/Pomodorough.app"
+          "$RUNNER_TEMP/release-ios-device-app.zip"
+
       - name: Upload iOS device app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-ios-device-app
-          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products/Release-iphoneos/Pomodorough.app
+          path: ${{ runner.temp }}/release-ios-device-app.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -1005,11 +1021,19 @@ jobs:
           --product "$DERIVED_DATA_PATH/Build/Products/Release/Pomodorough.app"
           --output "$RUNNER_TEMP/core-provenance"
 
+      # upload-artifact drops symlinks and executable bits, so the app
+      # travels as a ditto archive that keeps both (R54-APB16).
+      - name: Archive macOS app
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          "$DERIVED_DATA_PATH/Build/Products/Release/Pomodorough.app"
+          "$RUNNER_TEMP/release-macos-app.zip"
+
       - name: Upload macOS app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-macos-app
-          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products/Release/Pomodorough.app
+          path: ${{ runner.temp }}/release-macos-app.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -1112,19 +1136,19 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-ios-simulator-app
-          path: ${{ runner.temp }}/build-ios-simulator-app
+          path: ${{ runner.temp }}/build-ios-simulator-app-archive
 
       - name: Download iOS device app
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-ios-device-app
-          path: ${{ runner.temp }}/build-ios-device-app
+          path: ${{ runner.temp }}/build-ios-device-app-archive
 
       - name: Download macOS app
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-macos-app
-          path: ${{ runner.temp }}/build-macos-app
+          path: ${{ runner.temp }}/build-macos-app-archive
 
       - name: Download shared core provenance
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -1161,9 +1185,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          ios_simulator_app="$RUNNER_TEMP/build-ios-simulator-app"
-          ios_device_app="$RUNNER_TEMP/build-ios-device-app"
-          macos_app="$RUNNER_TEMP/build-macos-app"
+          for shard in ios-simulator ios-device macos; do
+            rm -rf "$RUNNER_TEMP/build-$shard-app"
+            mkdir -p "$RUNNER_TEMP/build-$shard-app"
+            ditto -x -k "$RUNNER_TEMP/build-$shard-app-archive/release-$shard-app.zip" \
+              "$RUNNER_TEMP/build-$shard-app"
+          done
+          ios_simulator_app="$RUNNER_TEMP/build-ios-simulator-app/Pomodorough.app"
+          ios_device_app="$RUNNER_TEMP/build-ios-device-app/Pomodorough.app"
+          macos_app="$RUNNER_TEMP/build-macos-app/Pomodorough.app"
           ios_simulator_staged_app="$RUNNER_TEMP/Pomodorough-iOS-Simulator/Pomodorough.app"
           ios_device_staging="$RUNNER_TEMP/Pomodorough-iOS-Device"
           ios_device_staged_app="$ios_device_staging/Payload/Pomodorough.app"
@@ -1260,6 +1290,31 @@ jobs:
             exit 1
           fi
           xcrun simctl terminate "$device_id" "$bundle_id"
+
+      - name: Smoke-test release archive bundle structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Mirrors pomodorough-helpers install_apple.py: an unsigned macOS
+          # download must keep framework symlinks and executable bits so a
+          # local ad-hoc signature seals it (R54-APB16).
+          extracted="$RUNNER_TEMP/release-structure-smoke"
+          rm -rf "$extracted"
+          mkdir -p "$extracted/macos" "$extracted/ios-simulator" "$extracted/ios-device"
+          ditto -x -k "$RELEASE_DIR/Pomodorough-macOS-unsigned-non-notarized-${RELEASE_TAG}.zip" "$extracted/macos"
+          ditto -x -k "$RELEASE_DIR/Pomodorough-iOS-Simulator-ad-hoc-signed-non-notarized-${RELEASE_TAG}.zip" "$extracted/ios-simulator"
+          ditto -x -k "$RELEASE_DIR/Pomodorough-iOS-unsigned-${RELEASE_TAG}.ipa" "$extracted/ios-device"
+          macos_app="$extracted/macos/Pomodorough.app"
+          test -x "$macos_app/Contents/MacOS/Pomodorough"
+          test -x "$extracted/ios-simulator/Pomodorough.app/Pomodorough"
+          test -x "$extracted/ios-device/Payload/Pomodorough.app/Pomodorough"
+          shopt -s nullglob
+          for framework in "$macos_app"/Contents/Frameworks/*.framework; do
+            test -L "$framework/Versions/Current"
+            codesign --force --sign - "$framework"
+          done
+          codesign --force --sign - "$macos_app"
+          codesign --verify --deep --strict "$macos_app"
 
       - name: Refresh checksums with SBOM
         shell: bash

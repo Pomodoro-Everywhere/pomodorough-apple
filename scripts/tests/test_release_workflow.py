@@ -106,6 +106,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('wait "$device_pid"', packaging)
         self.assertIn('wait "$macos_pid"', packaging)
 
+    def test_release_apps_cross_jobs_as_archives_that_keep_bundle_structure(self) -> None:
+        # R54-APB16: upload-artifact dropped symlinks and executable bits, so
+        # every published app shipped a non-executable binary and the macOS
+        # Sentry.framework lost Versions/Current.
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertNotIn("/Pomodorough.app\n          if-no-files-found", workflow)
+        for shard in ("ios-simulator", "ios-device", "macos"):
+            self.assertIn(f'"$RUNNER_TEMP/release-{shard}-app.zip"', workflow)
+            self.assertIn(f"path: ${{{{ runner.temp }}}}/release-{shard}-app.zip\n", workflow)
+            self.assertIn(f"path: ${{{{ runner.temp }}}}/build-{shard}-app-archive\n", workflow)
+        packaging = workflow.split("Package simulator and unsigned non-notarized apps")[1]
+        self.assertIn('ditto -x -k "$RUNNER_TEMP/build-$shard-app-archive/release-$shard-app.zip"', packaging)
+        smoke = workflow.split("- name: Smoke-test release archive bundle structure")[1].split(
+            "- name: Refresh checksums with SBOM")[0]
+        for gate in (
+            'test -x "$macos_app/Contents/MacOS/Pomodorough"',
+            'test -x "$extracted/ios-simulator/Pomodorough.app/Pomodorough"',
+            'test -x "$extracted/ios-device/Payload/Pomodorough.app/Pomodorough"',
+            'test -L "$framework/Versions/Current"',
+            'codesign --verify --deep --strict "$macos_app"',
+        ):
+            self.assertIn(gate, smoke)
+
 
 if __name__ == "__main__":
     unittest.main()
