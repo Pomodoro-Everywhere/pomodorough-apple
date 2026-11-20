@@ -38,6 +38,11 @@ struct TasksScreen: View {
                         add: addTask
                     )
                     taskBoard
+#if os(iOS)
+                    if coreCapabilities.supportsTaskRename && !summaries.isEmpty {
+                        TaskBoardRenameHint()
+                    }
+#endif
                 }
                 .padding()
                 .padding(.bottom, TabBarScrollInset.bottom(
@@ -48,6 +53,7 @@ struct TasksScreen: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        .avoidsDisplayDivisions()
         .background(TimerBackdrop())
         .navigationTitle("Tasks")
         .inlineNavigationTitleIfSupported()

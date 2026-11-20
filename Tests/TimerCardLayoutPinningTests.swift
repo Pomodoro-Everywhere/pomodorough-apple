@@ -292,15 +292,30 @@ struct AppleHighFindingsTests {
 @Suite("Apple medium/low findings")
 struct AppleMediumLowFindingsTests {
     @Test func breakdownChartHeightScalesWithWidth() {
-        #expect(abs(CompletedFocusBreakdownScreen.chartHeight(forWidth: 390) - 390 / 1.35) < 0.01)
-        #expect(CompletedFocusBreakdownScreen.chartHeight(forWidth: 500) < CompletedFocusBreakdownScreen.chartHeight(forWidth: 600))
+        let tall: CGFloat = 800
+        let height = { CompletedFocusBreakdownScreen.chartHeight(for: CGSize(width: $0, height: tall)) }
+        #expect(abs(height(390) - 390 / 1.35) < 0.01)
+        #expect(height(400) < height(480))
     }
 
     @Test func breakdownChartHeightStaysBounded() {
-        #expect(CompletedFocusBreakdownScreen.chartHeight(forWidth: 0) == 220)
-        #expect(CompletedFocusBreakdownScreen.chartHeight(forWidth: -10) == 220)
-        #expect(CompletedFocusBreakdownScreen.chartHeight(forWidth: 200) == 220)
-        #expect(CompletedFocusBreakdownScreen.chartHeight(forWidth: 2000) == 380)
+        let tall: CGFloat = 800
+        let height = { CompletedFocusBreakdownScreen.chartHeight(for: CGSize(width: $0, height: tall)) }
+        #expect(CompletedFocusBreakdownScreen.chartHeight(for: .zero) == 0)
+        #expect(CompletedFocusBreakdownScreen.chartHeight(for: CGSize(width: -10, height: tall)) == 0)
+        #expect(height(200) == 220)
+        #expect(height(2000) == 380)
+    }
+
+    /// IOS27-20: a landscape SE shows about 667 x 320 pt below the bar.
+    /// Width alone gave a 380 pt pie; the visible height now caps it.
+    @Test(arguments: [
+        CGSize(width: 667, height: 320), CGSize(width: 932, height: 370), CGSize(width: 568, height: 260)
+    ])
+    func breakdownChartFitsTheVisibleHeightInLandscape(container: CGSize) {
+        let height = CompletedFocusBreakdownScreen.chartHeight(for: container)
+        #expect(height <= container.height * 0.8 + 0.01)
+        #expect(height > 0)
     }
 
     @Test func breakdownBadgesClearAAOnEverySlice() {

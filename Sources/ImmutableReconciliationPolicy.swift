@@ -50,6 +50,10 @@ extension PersistedTimerState {
         canonicalHeadCounter = counter
     }
 
+    mutating func storeCanonicalHead(_ head: CoreHLC) {
+        storeCanonicalHead(wallMs: head.wallMs, counter: head.counter)
+    }
+
     var canonicalHead: (wallMs: Int64, counter: Int64) {
         ((canonicalHeadWallMs ?? 0), (canonicalHeadCounter ?? 0))
     }

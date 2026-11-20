@@ -64,7 +64,7 @@ struct IrohReplicationTests {
             refreshToken: "delete-refresh",
             refreshTokenExpiresAt: .distantFuture
         ))
-        let model = AppModel(
+        let model = try isolatedModel(
             api: APIClient(session: session, keychain: tokenStore),
             defaults: defaults,
             roomStore: roomStore,
@@ -95,7 +95,7 @@ struct IrohReplicationTests {
             defaults.ignoredSetKeys = []
         }
         let reopenedStore = IrohRoomStore(fileURL: fileURL, secretStore: secretStore)
-        let reopened = restarts ? AppModel(
+        let reopened = try restarts ? isolatedModel(
             api: APIClient(session: session, keychain: tokenStore),
             defaults: defaults,
             roomStore: reopenedStore,
@@ -144,7 +144,7 @@ struct IrohReplicationTests {
         state.tasks = [task]
         state.knownTasks = [task]
         defaults.set(try JSONEncoder.api.encode(state), forKey: "timer-state-v2")
-        let model = AppModel(
+        let model = try isolatedModel(
             api: APIClient(session: session, keychain: RecordingTokenStore(tokens: nil)),
             defaults: defaults,
             accountDeletionJournal: AccountDeletionJournal(fileURL: journalURL),
@@ -191,7 +191,8 @@ struct IrohReplicationTests {
         defaults.set("prepared", forKey: "account-deletion-state-v1")
         defaults.set(try JSONEncoder().encode([roomID]), forKey: "account-deletion-room-ids-v1")
 
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -273,8 +274,8 @@ struct IrohReplicationTests {
         defaults.set(Data("not-json".utf8), forKey: "account-deletion-room-ids-v1")
         secretStore.setDeleteFailure(false, roomID: roomID)
 
-        let model = AppModel(
-            api: APIClient(keychain: RecordingTokenStore(tokens: nil)),
+        let model = try isolatedModel(
+            api: APIClient(session: TestFixtures.session(for: suiteName), keychain: RecordingTokenStore(tokens: nil)),
             defaults: defaults,
             roomStore: roomStore,
             alarmScheduler: RecordingAlarmScheduler()
@@ -315,7 +316,8 @@ struct IrohReplicationTests {
                 hlcCounter: 0
             )
         )
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -361,15 +363,16 @@ struct IrohReplicationTests {
                 hlcCounter: 0
             )
         )
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
         )
         model.requestIrohRoomLeave()
 
-        await model.confirmIrohRoomLeave()
-        await model.confirmIrohRoomLeave()
+        await model.confirmIrohRoomLeave()?.value
+        await model.confirmIrohRoomLeave()?.value
 
         #expect(!model.isIrohRoomLeaveConfirmationPresented)
         #expect(!model.isLeavingIrohRoom)
@@ -379,6 +382,85 @@ struct IrohReplicationTests {
         let retainedRoom = try #require(store.roomSnapshot(roomID: roomID))
         #expect(retainedRoom.roomName == "Retained room log")
         #expect(retainedRoom.operationCount > 0)
+        #expect(TestFixtures.recordedRequests(for: suiteName).isEmpty)
+    }
+
+    // IOS18-02: SwiftUI reports the dialog's dismissal to the binding and
+    // runs the Leave button's action in an order that is not a contract.
+    // The old dismissal handler cancelled the request, so the confirmation
+    // did nothing. The leave must happen in either order.
+    @Test(arguments: [true, false]) @MainActor
+    func confirmedRoomLeaveSurvivesTheDialogDismissal(dismissalComesFirst: Bool) async throws {
+        let room = try leaveDialogRoom()
+        defer { room.defaults.removePersistentDomain(forName: room.suiteName) }
+        let model = room.model
+        model.requestIrohRoomLeave()
+
+        if dismissalComesFirst { model.dismissIrohRoomLeaveConfirmation() }
+        let leave = model.confirmIrohRoomLeave()
+        if !dismissalComesFirst { model.dismissIrohRoomLeaveConfirmation() }
+        await leave?.value
+
+        #expect(leave != nil)
+        #expect(!model.isIrohRoomLeaveConfirmationPresented)
+        #expect(!model.isLeavingIrohRoom)
+        #expect(model.replicationMode == .offline)
+        #expect(model.tasks == [room.returnTask])
+        #expect(model.activeRoom == nil)
+        #expect(model.errorMessage == nil)
+        #expect(TestFixtures.recordedRequests(for: room.suiteName).isEmpty)
+    }
+
+    /// Cancel still ends the request: a confirmation that arrives after it,
+    /// with or without the dismissal in between, leaves nothing.
+    @Test(arguments: [true, false]) @MainActor
+    func cancelledRoomLeaveCannotBeConfirmed(dismissalComesFirst: Bool) async throws {
+        let room = try leaveDialogRoom()
+        defer { room.defaults.removePersistentDomain(forName: room.suiteName) }
+        let model = room.model
+        model.requestIrohRoomLeave()
+
+        if dismissalComesFirst { model.dismissIrohRoomLeaveConfirmation() }
+        model.cancelIrohRoomLeave()
+        if !dismissalComesFirst { model.dismissIrohRoomLeaveConfirmation() }
+
+        #expect(model.confirmIrohRoomLeave() == nil)
+        #expect(!model.isIrohRoomLeaveConfirmationPresented)
+        #expect(model.replicationMode == .iroh)
+        #expect(model.activeRoom != nil)
+        #expect(TestFixtures.recordedRequests(for: room.suiteName).isEmpty)
+    }
+
+    private struct LeaveDialogRoom {
+        let model: AppModel
+        let returnTask: FocusTask
+        let defaults: UserDefaults
+        let suiteName: String
+    }
+
+    @MainActor
+    private func leaveDialogRoom() throws -> LeaveDialogRoom {
+        let suiteName = "PomodoroughTests.IrohLeaveDismissal.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.set(ReplicationMode.iroh.rawValue, forKey: "replication-mode-v1")
+        let store = temporaryStore()
+        let returnTask = try #require(FocusTask(title: "Previous workspace"))
+        var returnState = PersistedTimerState.fresh()
+        returnState.tasks = [returnTask]
+        returnState.knownTasks = [returnTask]
+        let secret = Data(0...31)
+        _ = try store.createRoom(
+            roomID: try IrohProtocolV1.roomID(for: secret),
+            roomSecret: secret,
+            name: "Dismissed dialog room",
+            returnState: returnState,
+            genesis: IrohGenesis(
+                canonicalTimer: nil, history: [], tasks: [], durationsMs: .defaults,
+                autoStartBreaks: false, hlcWallMs: 0, hlcCounter: 0
+            )
+        )
+        let model = try isolatedModel(api: stubAPI(suiteName), defaults: defaults, roomStore: store)
+        return LeaveDialogRoom(model: model, returnTask: returnTask, defaults: defaults, suiteName: suiteName)
     }
 
     @Test @MainActor
@@ -387,7 +469,8 @@ struct IrohReplicationTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = temporaryStore()
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -395,7 +478,8 @@ struct IrohReplicationTests {
 
         await model.setReplicationMode(.offline)
 
-        let restored = AppModel(
+        let restored = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -492,8 +576,10 @@ struct IrohReplicationTests {
             }
             return LoopbackHTTPResponse(statusCode: 404, body: Data())
         }
-        let model = AppModel(
-            api: APIClient(baseURL: server.baseURL, keychain: StaticTokenStore()),
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let model = try isolatedModel(
+            api: APIClient(baseURL: server.baseURL, session: session, keychain: StaticTokenStore()),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -539,9 +625,10 @@ struct IrohReplicationTests {
         let session = TestFixtures.session(for: scenario)
         defer { session.invalidateAndCancel() }
         let identity = RecordingGoogleIdentityProvider()
-        let model = AppModel(
+        let model = try isolatedModel(
             api: APIClient(session: session, keychain: RecordingTokenStore()),
             defaults: defaults,
+            roomStore: temporaryStore(),
             alarmScheduler: RecordingAlarmScheduler(),
             googleIdentityProvider: identity
         )
@@ -1052,7 +1139,8 @@ struct IrohReplicationTests {
                 hlcCounter: 0
             )
         )
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -1063,7 +1151,8 @@ struct IrohReplicationTests {
         #expect(store.activeRoomState?.selectedTaskID == task.id)
         #expect(store.activeRoomState?.pendingSelectedTaskOperations.isEmpty == true)
 
-        let restarted = AppModel(
+        let restarted = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -1113,7 +1202,8 @@ struct IrohReplicationTests {
             )
         )
         let scheduler = RecordingAlarmScheduler()
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: scheduler
@@ -1121,7 +1211,7 @@ struct IrohReplicationTests {
         #expect(model.canonicalTimer?.id == roomTimer.id)
         #expect(model.canonicalTimer?.status == .running)
         model.requestIrohRoomLeave()
-        await model.confirmIrohRoomLeave()
+        await model.confirmIrohRoomLeave()?.value
         await model.waitForAlarmOperations()
         #expect(scheduler.operations.contains(.cancel(timerID: roomTimer.id)))
     }
@@ -1176,7 +1266,8 @@ struct IrohReplicationTests {
             )
         )
         let scheduler = RecordingAlarmScheduler()
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: scheduler,
@@ -1189,7 +1280,7 @@ struct IrohReplicationTests {
         let previousOperationCount = scheduler.operations.count
 
         model.requestIrohRoomLeave()
-        await model.confirmIrohRoomLeave()
+        await model.confirmIrohRoomLeave()?.value
         await model.waitForAlarmOperations()
 
         #expect(model.replicationMode == .offline)
@@ -1231,7 +1322,7 @@ struct IrohReplicationTests {
             refreshToken: "return-refresh", refreshTokenExpiresAt: .distantFuture
         ))
         let logout = LogoutDrainingSession(scenario: "apple-api-coverage-model-local-signout", obligations: tokens)
-        let model = logout.track(AppModel(
+        let model = try logout.track(isolatedModel(
             api: APIClient(session: logout.session, keychain: tokens), defaults: defaults,
             roomStore: store, alarmScheduler: RecordingAlarmScheduler()
         ))
@@ -1255,7 +1346,7 @@ struct IrohReplicationTests {
             #expect(reopened.activeReturnState?.cachedUser == nil)
             #expect(reopened.activeReturnState?.history.isEmpty == true)
             model.requestIrohRoomLeave()
-            await model.confirmIrohRoomLeave()
+            await model.confirmIrohRoomLeave()?.value
             #expect(model.replicationMode == .offline)
             #expect(model.user == nil)
             #expect(model.history.isEmpty)
@@ -1298,7 +1389,8 @@ struct IrohReplicationTests {
                 hlcCounter: 0
             )
         )
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler()
@@ -2279,18 +2371,52 @@ struct IrohReplicationTests {
     /// A signed-out model with no network, Keychain or Iroh endpoint access.
     @MainActor
     private func offsetAccountModel(defaults: UserDefaults, store: IrohRoomStore) throws -> AppModel {
-        let ticket = try EndpointTicket.fromAddr(addr: EndpointAddr(
+        try isolatedModel(
+            api: stubAPI("PomodoroughTests.GenesisClock.\(UUID().uuidString)"),
+            defaults: defaults, roomStore: store,
+            now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
+        )
+    }
+
+    /// A model on fakes for every secret store, the Google provider and the
+    /// Iroh service. A leave, a mode change, a capture or an account change
+    /// creates the room service lazily; with no factory that is the real
+    /// service on the Keychain endpoint store.
+    @MainActor
+    private func isolatedModel(
+        api: APIClient,
+        defaults: UserDefaults,
+        accountDeletionJournal: AccountDeletionJournal? = nil,
+        durableLocalStore: AtomicDurableFileStore? = nil,
+        roomStore: IrohRoomStore,
+        alarmScheduler: any TimerAlarmScheduling = RecordingAlarmScheduler(),
+        googleIdentityProvider: any GoogleIdentityProviding = RecordingGoogleIdentityProvider(),
+        now: @escaping () -> Date = { .now },
+        uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) throws -> AppModel {
+        let ticket = try noPeerEndpointTicket()
+        return AppModel(
+            api: api, defaults: defaults, accountDeletionJournal: accountDeletionJournal,
+            durableLocalStore: durableLocalStore, roomStore: roomStore,
+            endpointKeyStore: PreviewEndpointKeyStore(),
+            roomServiceFactory: { _ in GenesisClockRoomService(ticket: ticket) },
+            alarmScheduler: alarmScheduler, googleIdentityProvider: googleIdentityProvider,
+            now: now, uptime: uptime
+        )
+    }
+
+    /// An API client on the stub session, so a request is recorded and never
+    /// leaves the process, with an empty token store instead of the Keychain.
+    private func stubAPI(_ scenario: String) -> APIClient {
+        APIClient(session: TestFixtures.session(for: scenario), keychain: EmptyTokenStore())
+    }
+
+    /// A valid ticket for an endpoint that never comes online.
+    private func noPeerEndpointTicket() throws -> String {
+        try EndpointTicket.fromAddr(addr: EndpointAddr(
             id: try SecretKey.fromBytes(bytes: Data(repeating: 41, count: 32)).public(),
             relayUrl: nil, addresses: []
         )).description
-        return AppModel(
-            api: APIClient(session: URLSession(configuration: .ephemeral), keychain: EmptyTokenStore()),
-            defaults: defaults, roomStore: store, endpointKeyStore: PreviewEndpointKeyStore(),
-            roomServiceFactory: { _ in GenesisClockRoomService(ticket: ticket) },
-            alarmScheduler: RecordingAlarmScheduler(),
-            googleIdentityProvider: RecordingGoogleIdentityProvider(),
-            now: { TestFixtures.anchor.addingTimeInterval(5) }, uptime: { 100 }
-        )
     }
 
     /// A room record renames the task of a terminal genesis timer. Core
@@ -2677,7 +2803,8 @@ struct IrohReplicationTests {
             )
         )
         let scheduler = RecordingAlarmScheduler()
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: scheduler,
@@ -2751,7 +2878,8 @@ struct IrohReplicationTests {
                 hlcCounter: 0
             )
         )
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler(),
@@ -3156,7 +3284,8 @@ struct IrohReplicationTests {
                 payload: .timer(finish)
             )
         ], roomID: roomID)
-        let model = AppModel(
+        let model = try isolatedModel(
+            api: stubAPI(suiteName),
             defaults: defaults,
             roomStore: store,
             alarmScheduler: RecordingAlarmScheduler(),

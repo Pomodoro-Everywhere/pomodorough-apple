@@ -2,8 +2,9 @@
 import SwiftUI
 import UIKit
 
-/// One phase of a horizontal swipe. Travel is the negated horizontal
-/// translation in points, the sign SwipeToDeleteMetrics.exposure takes.
+/// One phase of a horizontal swipe. Travel is the translation toward the
+/// reading trailing edge in points, the sign SwipeToDeleteMetrics.exposure
+/// takes.
 enum HorizontalSwipeEvent: Equatable {
     case changed(travel: CGFloat)
     case ended(travel: CGFloat, projectedTravel: CGFloat)
@@ -16,6 +17,7 @@ enum HorizontalSwipeEvent: Equatable {
 /// row claims every drag on iOS 18 and later, which stopped the task board
 /// from scrolling under a finger that landed on a row (R54-AU04).
 struct HorizontalSwipeGesture: UIGestureRecognizerRepresentable {
+    let layoutDirection: LayoutDirection
     let onSwipe: (HorizontalSwipeEvent) -> Void
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
@@ -31,12 +33,16 @@ struct HorizontalSwipeGesture: UIGestureRecognizerRepresentable {
     // Window coordinates: the row's offset follows the finger, so its own
     // space would feed the exposure back into the translation.
     func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        let travel = -recognizer.translation(in: nil).x
+        let travel = SwipeToDeleteMetrics.trailingTravel(
+            physicalDistance: recognizer.translation(in: nil).x, layoutDirection: layoutDirection
+        )
         switch recognizer.state {
         case .changed:
             onSwipe(.changed(travel: travel))
         case .ended:
-            let velocity = -recognizer.velocity(in: nil).x
+            let velocity = SwipeToDeleteMetrics.trailingTravel(
+                physicalDistance: recognizer.velocity(in: nil).x, layoutDirection: layoutDirection
+            )
             onSwipe(.ended(
                 travel: travel,
                 projectedTravel: SwipeToDeleteMetrics.projectedTravel(travel: travel, velocity: velocity)

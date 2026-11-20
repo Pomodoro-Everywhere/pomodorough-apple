@@ -40,6 +40,35 @@ final class PomodoroughRoomJoinSafetyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 5))
     }
 
+    // IOS18-06: a pasted invite grows the field to ten lines, which pushed
+    // "Validate and join" under the keyboard until the sheet was scrolled.
+    func testValidateAndJoinStaysAboveTheKeyboardWithALongInvite() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        defer { app.terminate() }
+        app.launch()
+        XCTAssertTrue(app.buttons["Start focus"].waitForExistence(timeout: 10))
+        openJoinSheet(app)
+        let field = app.textViews["Room invite"].exists ? app.textViews["Room invite"] : app.textFields["Room invite"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10))
+        field.typeText("pomodorough1." + String(repeating: "abcdefghij", count: 40))
+        let join = app.buttons["Validate and join"]
+        XCTAssertTrue(join.waitForExistence(timeout: 5))
+        XCTAssertTrue(join.isEnabled)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "ios18-06-join-keyboard"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        XCTAssertTrue(join.isHittable, "the join action is visible while typing")
+        XCTAssertLessThanOrEqual(
+            join.frame.maxY, keyboard.frame.minY + 1,
+            "the join action \(join.frame) sits above the keyboard \(keyboard.frame)"
+        )
+    }
+
     private func makeApplication() -> XCUIApplication {
         let app = silentTestApplication()
         app.launchArguments = [

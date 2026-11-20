@@ -26,19 +26,35 @@ struct JoinIrohRoomView: View {
             .navigationTitle("Join room")
             .inlineNavigationTitleIfSupported()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isJoining)
-                }
+                ToolbarItem(placement: .cancellationAction) { cancelButton }
             }
 #if os(iOS)
             .interactiveDismissDisabled(isJoining)
 #endif
         }
+#if os(iOS)
+        // IOS27-02: the sheet always draws the navy railway backdrop, so the
+        // bar uses the dark scheme in both appearances. In light mode the
+        // system title was black on navy (about 1.3:1).
+        .environment(\.colorScheme, .dark)
+#endif
         .modifier(ErrorMessageAlert(model: model, host: .joinRoomSheet))
 #if os(macOS)
         .frame(minWidth: 520, minHeight: 460)
 #endif
+    }
+
+    private var cancelButton: some View {
+        Button { dismiss() } label: {
+#if os(iOS)
+            // IOS27-02: the accent tint is 3.7:1 on the navy bar glass.
+            Text("Cancel")
+                .foregroundStyle(PomodoroughTheme.porcelain.opacity(isJoining ? 0.4 : 1))
+#else
+            Text("Cancel")
+#endif
+        }
+        .disabled(isJoining)
     }
 
     private var content: some View {
@@ -51,8 +67,6 @@ struct JoinIrohRoomView: View {
                         .foregroundStyle(PomodoroughTheme.sky)
                         .fixedSize(horizontal: false, vertical: true)
                     inviteField
-                    joinButton
-                    joinErrorView
                     Text("Invite contains room secret and peer addresses. Treat it as sensitive. Endpoint secret key never leaves this device.")
                         .font(.footnote)
                         .foregroundStyle(PomodoroughTheme.steel)
@@ -62,7 +76,26 @@ struct JoinIrohRoomView: View {
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
             }
+            .scrollDismissesKeyboard(.interactively)
+            // IOS18-06: the invite field grows to ten lines, which pushed
+            // "Validate and join" under the keyboard. A bottom inset rides
+            // the keyboard's safe area, so the action stays visible.
+            .safeAreaInset(edge: .bottom, spacing: 0) { joinActions }
         }
+    }
+
+    private var joinActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            joinButton
+            joinErrorView
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .frame(maxWidth: 620)
+        .frame(maxWidth: .infinity)
+        // Matches the bottom of RailwayBackdrop, so scrolled text never
+        // shows through the action.
+        .background(PomodoroughTheme.platform)
     }
 
     private var heading: some View {
@@ -81,7 +114,7 @@ struct JoinIrohRoomView: View {
     }
 
     private var inviteField: some View {
-        TextField("pomodorough1.…", text: $inviteText, axis: .vertical)
+        TextField("pomodorough1.…", text: $inviteText, prompt: invitePrompt, axis: .vertical)
             .lineLimit(4...10)
             .font(.callout.monospaced())
             .textFieldStyle(.plain)
@@ -90,7 +123,20 @@ struct JoinIrohRoomView: View {
             .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 14))
             .accessibilityLabel("Room invite")
             .accessibilityHint("Paste complete invite beginning with pomodorough1 dot")
+#if os(iOS)
+            // IOS27-10: an invite is an exact token; capitals or spelling
+            // fixes would corrupt it.
+            .textInputAutocapitalization(.never)
+#endif
+            .autocorrectionDisabled()
             .onChange(of: inviteText) { joinError = nil }
+    }
+
+    /// IOS27-08: the field stays porcelain in both appearances, so the
+    /// placeholder uses the light-surface grey (about 8.5:1) instead of the
+    /// system placeholder (about 1.7:1).
+    private var invitePrompt: Text {
+        Text("pomodorough1.…").foregroundStyle(PomodoroughTheme.secondaryTextOnLightSurface)
     }
 
     private var joinButton: some View {

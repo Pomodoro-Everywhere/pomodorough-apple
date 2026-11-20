@@ -24,32 +24,6 @@ struct TimerScreen: View {
         horizontal == .regular && vertical == .regular
     }
 
-    /// Active division frames from measured reserved regions, in the
-    /// GeometryReader coordinate space. Uses the region frame verbatim:
-    /// the system split arrangement constrains content to the regions
-    /// this frame defines, so the probe and the layout share one boundary.
-    /// Physical positions stay fixed across layout directions because the
-    /// fold does not move. The compiler gate keeps the older CI SDK
-    /// buildable; runtime availability preserves the ordinary adaptive
-    /// layout on iOS 18 through 27.0.
-    static func measuredDivisions(in proxy: GeometryProxy) -> [CGRect] {
-        #if os(iOS) && compiler(>=6.4)
-        if #available(iOS 27.1, *) {
-            return proxy.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed)
-                .filter(\.isActive)
-                .map(\.frame)
-        }
-        #endif
-        return []
-    }
-
-    /// Measured hinge from container size plus active divisions.
-    /// GeometryReader re-evaluates on fold, rotation, and multitasking
-    /// changes, so Book pose arrives without cached state.
-    static func measuredHinge(in proxy: GeometryProxy) -> TimerHingeLayout {
-        TimerHingeLayout(containerSize: proxy.size, divisions: measuredDivisions(in: proxy))
-    }
-
     /// Floor for the phone-landscape card height: short landscape
     /// screens (SE/12 mini, ~375pt) keep a usable dial instead of
     /// collapsing to the raw geometry remainder.
@@ -120,7 +94,7 @@ struct TimerScreen: View {
                 size: layoutDecisionSize(in: geometry),
                 usesAccessibleLayout: dynamicTypeSize.isAccessibilitySize
             )
-            let hinge = Self.measuredHinge(in: geometry)
+            let hinge = TimerHingeLayout.measured(in: geometry)
             timerStack(layout: layout, hinge: hinge, geometry: geometry)
                 .animation(reduceMotion ? nil : .default, value: layout)
             #if DEBUG && os(iOS)

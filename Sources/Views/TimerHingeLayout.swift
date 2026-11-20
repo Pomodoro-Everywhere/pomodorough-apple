@@ -9,6 +9,32 @@ struct TimerHingeLayout: Equatable {
     var containerSize: CGSize
     var divisions: [CGRect]
 
+    /// Active division frames from measured reserved regions, in the
+    /// GeometryReader coordinate space. Uses the region frame verbatim:
+    /// the system split arrangement constrains content to the regions
+    /// this frame defines, so the probe and the layout share one boundary.
+    /// Physical positions stay fixed across layout directions because the
+    /// fold does not move. The compiler gate keeps the older CI SDK
+    /// buildable; runtime availability preserves the ordinary adaptive
+    /// layout on iOS 18 through 27.0.
+    static func measuredDivisions(in proxy: GeometryProxy) -> [CGRect] {
+        #if os(iOS) && compiler(>=6.4)
+        if #available(iOS 27.1, *) {
+            return proxy.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed)
+                .filter(\.isActive)
+                .map(\.frame)
+        }
+        #endif
+        return []
+    }
+
+    /// Measured hinge from container size plus active divisions.
+    /// GeometryReader re-evaluates on fold, rotation, and multitasking
+    /// changes, so Book pose arrives without cached state.
+    static func measured(in proxy: GeometryProxy) -> TimerHingeLayout {
+        TimerHingeLayout(containerSize: proxy.size, divisions: measuredDivisions(in: proxy))
+    }
+
     static func isVertical(_ frame: CGRect) -> Bool {
         frame.width > 0 && frame.height > 0 && frame.height > frame.width
     }

@@ -70,3 +70,78 @@ struct RenderedContrast {
         return histogram
     }
 }
+
+/// Reads screenshot pixels inside a frame, given in app points, against a
+/// colour predicate on 0...255 sRGB channels.
+enum RenderedPixels {
+    /// One horizontal run of pixel columns that each hold a matching pixel.
+    struct ColumnRun {
+        let width: Int
+        let height: Int
+    }
+
+    @MainActor
+    static func count(
+        in frame: CGRect,
+        of screenshot: XCUIScreenshot,
+        app: XCUIApplication,
+        matching predicate: (Int, Int, Int) -> Bool
+    ) throws -> Int {
+        let region = try sRGBBytes(in: frame, of: screenshot, app: app)
+        return stride(from: 0, to: region.bytes.count, by: 4).count { offset in
+            predicate(Int(region.bytes[offset]), Int(region.bytes[offset + 1]), Int(region.bytes[offset + 2]))
+        }
+    }
+
+    /// Runs of neighbouring pixel columns that hold matching pixels, left to
+    /// right. A monospaced label draws one run per letter.
+    @MainActor
+    static func columnRuns(
+        in frame: CGRect,
+        of screenshot: XCUIScreenshot,
+        app: XCUIApplication,
+        matching predicate: (Int, Int, Int) -> Bool
+    ) throws -> [ColumnRun] {
+        let region = try sRGBBytes(in: frame, of: screenshot, app: app)
+        let rowCount = region.bytes.count / (region.width * 4)
+        var runs: [ColumnRun] = []
+        var current: (width: Int, top: Int, bottom: Int)?
+        for column in 0..<region.width {
+            let rows = (0..<rowCount).filter { row in
+                let offset = (row * region.width + column) * 4
+                return predicate(Int(region.bytes[offset]), Int(region.bytes[offset + 1]), Int(region.bytes[offset + 2]))
+            }
+            if let top = rows.first, let bottom = rows.last {
+                current = ((current?.width ?? 0) + 1, min(current?.top ?? top, top), max(current?.bottom ?? bottom, bottom))
+            } else if let run = current {
+                runs.append(ColumnRun(width: run.width, height: run.bottom - run.top + 1))
+                current = nil
+            }
+        }
+        if let run = current { runs.append(ColumnRun(width: run.width, height: run.bottom - run.top + 1)) }
+        return runs
+    }
+
+    @MainActor
+    private static func sRGBBytes(
+        in frame: CGRect,
+        of screenshot: XCUIScreenshot,
+        app: XCUIApplication
+    ) throws -> (bytes: [UInt8], width: Int) {
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        let crop = CGRect(x: frame.minX * scale, y: frame.minY * scale,
+            width: frame.width * scale, height: frame.height * scale).integral
+        let region = try XCTUnwrap(image.cropping(to: crop))
+        var bytes = [UInt8](repeating: 0, count: region.width * region.height * 4)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        try bytes.withUnsafeMutableBytes { storage in
+            let context = try XCTUnwrap(CGContext(data: storage.baseAddress,
+                width: region.width, height: region.height, bitsPerComponent: 8,
+                bytesPerRow: region.width * 4, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+            context.draw(region, in: CGRect(x: 0, y: 0, width: region.width, height: region.height))
+        }
+        return (bytes, region.width)
+    }
+}

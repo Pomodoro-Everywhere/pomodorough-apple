@@ -21,6 +21,6 @@ struct AppVersionFooter: View {
     var body: some View {
         Text(AppVersionInfo.current)
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(PomodoroughTheme.secondaryText)
     }
 }

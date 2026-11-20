@@ -98,6 +98,32 @@ def has_tagged_primary_destination(source: str, title: str, tab: str) -> bool:
     return re.search(pattern, source) is not None
 
 
+def macos_navigation_failures(main_container: str, app: str, commands: str) -> list[str]:
+    """MAC-01 and MAC-02: every section, Pattern included, is a toolbar
+    destination with a menu command, and Settings (Command-comma) opens
+    Pattern in the window instead of an inspector that resizes it. With no
+    focused window (menu bar only), the commands open the main window."""
+    failures: list[str] = []
+    for title, tab in (("Timer", "timer"), ("Tasks", "tasks"), ("Pattern", "pattern"),
+                       ("Arrivals", "history"), ("Network", "network")):
+        require(has_tagged_primary_destination(main_container, title, tab),
+                f"macOS {title} primary destination missing", failures)
+    require(".inspector(" not in main_container, "macOS Pattern must not open as an inspector", failures)
+    require("setFrame(" not in main_container, "macOS navigation must not resize the window", failures)
+    require(".focusedSceneValue(\\.macOSDestination" in main_container,
+            "macOS window does not publish its sections to the menu commands", failures)
+    require(".commands { MacOSAppCommands(model: model, sectionRequests: sectionRequests) }" in app,
+            "macOS menu commands are not installed", failures)
+    require("CommandGroup(replacing: .appSettings)" in commands, "macOS Settings command missing", failures)
+    require("shortcut: MacOSSectionCommands.settingsShortcut" in commands,
+            "macOS Settings command lacks Command-comma", failures)
+    require('openMainWindow: { openWindow(id: "main") }' in commands
+            and ".adoptsRequestedSection(into: destinationState)" in main_container,
+            "macOS section commands do nothing without a focused window", failures)
+    require('CommandMenu("Timer")' in commands, "macOS Timer menu missing", failures)
+    return failures
+
+
 def require(condition: bool, message: str, failures: list[str]) -> None:
     if not condition:
         failures.append(message)
@@ -639,6 +665,13 @@ def main() -> int:
             ".primaryRouteAccountToolbar(model: model)" in read(f"Sources/Views/{screen}"),
             f"mobile primary route lacks Account toolbar: {screen}", failures,
         )
+    # IOS27-22: list screens keep their content off an active fold; Timer
+    # splits its own card around it.
+    for screen in ("TasksScreen.swift", "ServicePatternScreen.swift", "HistoryScreen.swift"):
+        require(
+            ".avoidsDisplayDivisions()" in read(f"Sources/Views/{screen}"),
+            f"primary route lays content across the fold: {screen}", failures,
+        )
 
     modern_tabs = read("Sources/Views/ModernTabs.swift")
     legacy_tabs = read("Sources/Views/LegacyTabs.swift")
@@ -649,14 +682,11 @@ def main() -> int:
         require(tabs.count('"Arrivals"') == 1, f"{name} Arrivals route mismatch", failures)
         require('"Network"' not in tabs, f"{name} must not add Network as a fifth mobile tab", failures)
 
-    main_container = read("Sources/Views/MainContainer.swift")
-    require(
-        has_tagged_primary_destination(main_container, "Network", "network"),
-        "macOS Network primary destination missing",
-        failures,
-    )
-    require('Button("Settings"' in main_container, "macOS Settings action missing", failures)
-    require('.accessibilityValue("Pattern")' in main_container, "macOS Settings must name Pattern", failures)
+    failures.extend(macos_navigation_failures(
+        read("Sources/Views/MainContainer.swift"),
+        read("Sources/PomodoroughApp.swift"),
+        read("Sources/Views/MacOSAppCommands.swift"),
+    ))
 
     pattern = read("Sources/Views/ServicePatternCard.swift")
     task_picker = read("Sources/Views/TimerTaskPicker.swift")
@@ -675,8 +705,19 @@ def main() -> int:
     require('Picker("Next focus task"' not in task_picker, "focus task picker must not split active/next", failures)
     require('Text("Active timer task")' not in task_picker, "focus task must not duplicate the active assignment label", failures)
     guarantee = "subject to the operating system's delivery policy"
-    require(guarantee in permission, "pre-permission completion guarantee disclosure missing", failures)
-    require(guarantee in account, "persistent completion guarantee disclosure missing", failures)
+    # IOS18-04: the disclosure copy depends on the alert paths the OS offers,
+    # so both screens read it from TimerAlertCopy, whose every summary keeps
+    # the delivery-policy guarantee.
+    alert_copy = read("Sources/Views/TimerAlertCopy.swift")
+    require(alert_copy.count(guarantee) == 4, "timer alert summaries must keep the delivery-policy disclosure", failures)
+    require(
+        guarantee in permission or "TimerAlertCopy.current.introductionSummary" in permission,
+        "pre-permission completion guarantee disclosure missing", failures,
+    )
+    require(
+        guarantee in account or "TimerAlertCopy.current.accountSummary" in account,
+        "persistent completion guarantee disclosure missing", failures,
+    )
     require("https://pomodorough.egigoka.me/privacy" in account,
             "contractual privacy policy link missing", failures)
 

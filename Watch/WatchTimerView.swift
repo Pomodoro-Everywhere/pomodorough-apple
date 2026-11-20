@@ -7,7 +7,6 @@ struct WatchTimerView: View {
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var confirmingFinish = false
-    @ScaledMetric(relativeTo: .body) private var countdownSize: CGFloat = 58
 
     private let timerYellow = Color(red: 245 / 255, green: 208 / 255, blue: 91 / 255)
 
@@ -18,6 +17,7 @@ struct WatchTimerView: View {
                     accessibleTimer(snapshot)
                 } else {
                     VStack(spacing: 4) {
+                        if !sync.isReachable { WatchConnectionNotice() }
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             dial(snapshot, at: context.date)
                         }
@@ -31,14 +31,6 @@ struct WatchTimerView: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
-        .overlay(alignment: .topLeading) {
-            Circle()
-                .fill(sync.isReachable ? Color.green : Color.gray)
-                .frame(width: 5, height: 5)
-                .padding(.leading, 10)
-                .padding(.top, 4)
-                .accessibilityLabel(sync.isReachable ? "iPhone connected" : "iPhone unreachable, showing last synced timer")
-        }
         .onAppear { sync.requestSync() }
         .alert("Timer control", isPresented: Binding(
             get: { sync.commandError != nil },
@@ -62,11 +54,7 @@ struct WatchTimerView: View {
                     .font(.title2)
                     .foregroundStyle(timerYellow)
                     .accessibilityHidden(true)
-                Text("Open Pomodorough on iPhone")
-                    .font(.headline)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.center)
+                WatchPhoneUnavailableMessage()
                 Button("Try again") { sync.requestSync() }
                     .buttonStyle(.bordered)
             }
@@ -80,6 +68,7 @@ struct WatchTimerView: View {
     private func accessibleTimer(_ snapshot: WatchTimerSnapshot) -> some View {
         ScrollView {
             VStack(spacing: 8) {
+                if !sync.isReachable { WatchConnectionNotice() }
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     dial(snapshot, at: context.date)
                 }
@@ -102,41 +91,57 @@ struct WatchTimerView: View {
         let status = snapshot.isPaused ? "Paused" : snapshot.isRunning ? "" : "Ready"
 
         return GeometryReader { geometry in
+            let layout = WatchDialLayout(available: geometry.size)
             ZStack {
-                Circle()
-                    .stroke(timerYellow.opacity(0.12), lineWidth: 4)
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(Color(red: 0.88, green: 0.29, blue: 0.24).opacity(0.8),
-                            style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                VStack(spacing: 3) {
-                    Text(phaseTitle)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                ring(progress: progress)
+                VStack(spacing: 0) {
+                    dialCaption(phaseTitle, font: .caption.weight(.medium), in: layout.caption)
                     Text(formatted(remaining))
-                        .font(.system(size: countdownSize, weight: .bold, design: .rounded))
+                        // The ring bounds the digits at every text size, so
+                        // their size comes from the ring, not from Dynamic
+                        // Type. Long countdowns shrink to stay whole.
+                        .font(.system(size: layout.countdown.height, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(timerYellow)
+                        // WCH-03: an unreachable phone dims the cached countdown.
+                        .opacity(sync.isReachable ? 1 : 0.6)
                         .lineLimit(1)
-                        // The largest text sizes scale the digits far past
-                        // the ring, so they may shrink further to stay whole.
-                        .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 0.2 : 0.5)
-                        .layoutPriority(1)
-                    Text(status)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
+                        .minimumScaleFactor(0.2)
+                        .frame(width: layout.countdown.width, height: layout.countdown.height)
+                    dialCaption(status, font: .caption2, in: layout.caption)
                 }
-                .padding(.horizontal, 12)
             }
-            .padding(6)
+            .frame(width: layout.diameter, height: layout.diameter)
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(phaseTitle), \(status.isEmpty ? "Running" : status)")
         .accessibilityValue("\(formatted(remaining)) remaining")
+    }
+
+    /// Both strokes sit inside the dial's frame, so WatchDialLayout's inner
+    /// diameter is the space the text may use.
+    private func ring(progress: Double) -> some View {
+        ZStack {
+            Circle()
+                .inset(by: WatchDialLayout.ringLineWidth / 2)
+                .stroke(timerYellow.opacity(0.12), lineWidth: 4)
+            Circle()
+                .inset(by: WatchDialLayout.ringLineWidth / 2)
+                .trim(from: 0, to: progress)
+                .stroke(Color(red: 0.88, green: 0.29, blue: 0.24).opacity(0.8),
+                        style: StrokeStyle(lineWidth: WatchDialLayout.ringLineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+    }
+
+    private func dialCaption(_ text: String, font: Font, in size: CGSize) -> some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.4)
+            .frame(width: size.width, height: size.height)
     }
 
     @ViewBuilder
@@ -161,20 +166,17 @@ struct WatchTimerView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WatchControlButtonStyle(shape: Capsule(), fill: timerYellow.opacity(0.15)))
             .foregroundStyle(timerYellow)
-            .background(timerYellow.opacity(0.15), in: Capsule())
 
             if snapshot.isRunning || snapshot.isPaused {
                 Button("Finish timer", systemImage: "checkmark") {
                     confirmingFinish = true
                 }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .frame(width: 44, height: 44)
-                .background(.white.opacity(0.12), in: Circle())
+                .buttonStyle(WatchControlButtonStyle(shape: Circle(), fill: .white.opacity(0.12)))
                 .confirmationDialog("Finish this timer?", isPresented: $confirmingFinish, titleVisibility: .visible) {
                     Button("Finish timer") { sync.send(.finish(timerId: snapshot.timerId)) }
                     Button("Cancel", role: .cancel) {}

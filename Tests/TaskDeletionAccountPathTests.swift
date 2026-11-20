@@ -189,7 +189,7 @@ struct TaskDeletionAccountPathTests {
             try #require(model.requestTaskDeletion(id: fixture.task.id, title: fixture.task.title))
             model.requestIrohRoomLeave()
 
-            await model.confirmIrohRoomLeave()
+            await model.confirmIrohRoomLeave()?.value
 
             #expect(model.pendingTaskDeletion.entry == nil)
             #expect(model.pendingTaskDeletion.marker == nil)

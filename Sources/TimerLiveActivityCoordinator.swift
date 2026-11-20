@@ -25,15 +25,23 @@ final class TimerLiveActivityCoordinator {
     private var dismissedTimerID: String?
     private let logger = Logger(subsystem: "me.egigoka.pomodorough", category: "LiveActivity")
 
-    func synchronize(timer: CanonicalTimer?, taskTitle: String?, canStart: Bool) {
+    func synchronize(
+        timer: CanonicalTimer?,
+        taskTitle: String?,
+        startConditions: TimerLiveActivityStartConditions
+    ) {
         let previous = tail
         tail = Task {
             await previous?.value
-            await reconcile(timer: timer, taskTitle: taskTitle, canStart: canStart)
+            await reconcile(timer: timer, taskTitle: taskTitle, startConditions: startConditions)
         }
     }
 
-    private func reconcile(timer: CanonicalTimer?, taskTitle: String?, canStart: Bool) async {
+    private func reconcile(
+        timer: CanonicalTimer?,
+        taskTitle: String?,
+        startConditions: TimerLiveActivityStartConditions
+    ) async {
         pruneDismissedTracking()
         let desired = resolveDesiredTimer(from: timer)
         let (matching, endedTracked) = await takeMatchingActivity(keeping: desired?.id, trackedID: trackedActivityID)
@@ -41,21 +49,13 @@ final class TimerLiveActivityCoordinator {
         guard let desired else { return }
         let state = TimerActivityAttributes.ContentState(timer: desired, taskTitle: taskTitle)
         let content = ActivityContent(state: state, staleDate: state.isPaused ? nil : state.endsAt)
-        guard let matching else {
-            if canStart && ActivityAuthorizationInfo().areActivitiesEnabled {
-                do {
-                    trackedActivityID = try Activity.request(
-                        attributes: TimerActivityAttributes(timerID: desired.id),
-                        content: content,
-                        pushType: nil
-                    ).id
-                    trackedTimerID = desired.id
-                } catch {
-                    // A denied Live Activity must never prevent timer or alarm operation.
-                    logger.error("Could not start timer Live Activity: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
-                    Self.startFailed(error)
-                }
-            }
+        let step = TimerLiveActivityPolicy.step(
+            for: desired,
+            matchingActivityExists: matching != nil,
+            conditions: startConditions
+        )
+        guard step == .update, let matching else {
+            if step == .start { requestActivity(for: desired, content: content) }
             return
         }
         let activityID = matching.id // local first: storing actor state before the await merges regions (Swift 6)
@@ -64,6 +64,25 @@ final class TimerLiveActivityCoordinator {
             await matching.update(content)
         }
         trackedActivityID = activityID
+    }
+
+    private func requestActivity(
+        for timer: CanonicalTimer,
+        content: ActivityContent<TimerActivityAttributes.ContentState>
+    ) {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        do {
+            trackedActivityID = try Activity.request(
+                attributes: TimerActivityAttributes(timerID: timer.id),
+                content: content,
+                pushType: nil
+            ).id
+            trackedTimerID = timer.id
+        } catch {
+            // A denied Live Activity must never prevent timer or alarm operation.
+            logger.error("Could not start timer Live Activity: \(DiagnosticPrivacy.publicSummary(error), privacy: .public)")
+            Self.startFailed(error)
+        }
     }
 
     private func pruneDismissedTracking() {
@@ -77,13 +96,12 @@ final class TimerLiveActivityCoordinator {
     }
 
     private func resolveDesiredTimer(from timer: CanonicalTimer?) -> CanonicalTimer? {
-        guard let timer else { return nil }
-        let active = timer.status == .running || timer.status == .paused
-        if !active || timer.remaining(at: .now) <= 0
-            || hasNativeAlarm(timer.id) || dismissedTimerID == timer.id {
-            return nil
-        }
-        return timer
+        TimerLiveActivityPolicy.presentedTimer(
+            timer,
+            now: .now,
+            dismissedTimerID: dismissedTimerID,
+            hasNativeAlarm: { hasNativeAlarm($0) }
+        )
     }
 
     // NOTE: nonisolated on purpose — ActivityKit is fully nonisolated and Activity is
@@ -167,6 +185,7 @@ struct TimerLiveActivityModifier: ViewModifier {
             .onChange(of: model.canonicalTimer, initial: true) { synchronize() }
             .onChange(of: taskTitle) { synchronize() }
             .onChange(of: scenePhase) { synchronize() }
+            .onChange(of: model.timerControlUsedInProcess) { synchronize() }
             .task {
                 if #available(iOS 26.0, *) {
                     for await _ in AlarmManager.shared.alarmUpdates {
@@ -182,7 +201,10 @@ struct TimerLiveActivityModifier: ViewModifier {
         coordinator.synchronize(
             timer: model.canonicalTimer,
             taskTitle: taskTitle,
-            canStart: scenePhase == .active
+            startConditions: TimerLiveActivityStartConditions(
+                isSceneActive: scenePhase == .active,
+                timerControlUsedInProcess: model.timerControlUsedInProcess
+            )
         )
     }
 

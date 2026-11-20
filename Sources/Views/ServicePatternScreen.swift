@@ -4,15 +4,9 @@ struct ServicePatternScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: AppModel
-    var showsNavigationTitle = true
 
-    @ViewBuilder
     var body: some View {
-        if showsNavigationTitle {
-            content.navigationTitle("Pattern")
-        } else {
-            content
-        }
+        content.navigationTitle("Pattern")
     }
 
     private var content: some View {
@@ -25,7 +19,7 @@ struct ServicePatternScreen: View {
                         MenuBarTimerPicker()
                         Text("Total includes today’s completed Pomodoros and the current focus session.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(PomodoroughTheme.secondaryText)
                     }
                     .padding(18)
                     .background(.background, in: .rect(cornerRadius: 22))
@@ -41,6 +35,7 @@ struct ServicePatternScreen: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        .avoidsDisplayDivisions()
         .background(TimerBackdrop())
         .inlineNavigationTitleIfSupported()
         .primaryRouteAccountToolbar(model: model)

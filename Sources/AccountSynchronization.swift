@@ -693,7 +693,7 @@ private extension AccountSynchronization {
         state.autoStartBreaks = output.baseAutoStartBreaks
         state.selectedTaskID = output.baseSelectedTaskId.flatMap(UUID.init(uuidString:))
         state.canonicalSelectedTask = CanonicalSelectedTask(taskID: state.selectedTaskID)
-        state.storeCanonicalHead(wallMs: response.serverHlcWallMs, counter: response.serverHlcCounter)
+        state.storeCanonicalHead(response.canonicalHead)
         state.pruneNeverSentProofToPending()
         // Core v2 projectionPending is the authoritative safe subset used for
         // output.timer/history. Local safeProjection* mirrors Core

@@ -195,12 +195,16 @@ struct TimerTaskPicker: View {
         .accessibilityHint("Applies to the current running focus timer and the next timer.")
     }
 
-    @ViewBuilder
+    /// IOS27-18: an inline picker, so the open menu checks the current
+    /// task. Plain buttons drew no selection mark.
     private var menuOptions: some View {
-        Button("No task") { model.selectedTaskID = nil }
-        ForEach(model.tasks) { task in
-            Button(task.title) { model.selectedTaskID = task.id }
+        Picker("Focus task", selection: $model.selectedTaskID) {
+            Text("No task").tag(UUID?.none)
+            ForEach(model.tasks) { task in
+                Text(task.title).tag(Optional(task.id))
+            }
         }
+        .pickerStyle(.inline)
     }
 
     private var menuLabel: some View {

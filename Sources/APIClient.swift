@@ -390,7 +390,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             authenticated: authenticated,
             reportsMissingRoute: reportsMissingRoute
         )
-        return try JSONDecoder.api.decode(Response.self, from: result.data)
+        return try JSONDecoder.apiResponse(Response.self, from: result.data)
     }
 
     private func sendTimed<Response: Decodable & Sendable>(
@@ -429,7 +429,7 @@ actor APIClient: LogoutRevoking, LogoutSessionDetaching {
             throw AppError.invalidResponse
         }
         return TimedHTTPResponse(
-            value: try JSONDecoder.api.decode(Response.self, from: result.data),
+            value: try JSONDecoder.apiResponse(Response.self, from: result.data),
             requestWall: requestWall,
             requestUptime: requestUptime,
             responseUptime: responseUptime

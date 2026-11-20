@@ -117,7 +117,7 @@ struct MenuBarTimerMenu: View {
                 Button("Stop sound", systemImage: "speaker.slash", action: model.stopSound)
             }
         }
-        .disabled(model.sessionState == .restoring || model.isWorkspaceMutationBlocked || model.needsPermissionIntroduction)
+        .disabled(!model.acceptsTimerMenuCommands)
         Divider()
         MenuBarTimerPicker()
         Text("Total includes today’s completed Pomodoros and the current focus session.")

@@ -938,6 +938,13 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
     let serverTime: Date
     let serverHlcWallMs: Int64
     let serverHlcCounter: Int64
+    let canonicalHlc: CoreHLC?
+
+    /// Receiver rule (R55-C14): the ordered-operation pair when the server sends
+    /// it, otherwise `serverHlc*` from an older server.
+    var canonicalHead: CoreHLC {
+        canonicalHlc ?? CoreHLC(wallMs: serverHlcWallMs, counter: serverHlcCounter)
+    }
 
     private init(
         acknowledgements: [Acknowledgement],
@@ -954,7 +961,8 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
         selectedTaskId: String?,
         serverTime: Date,
         serverHlcWallMs: Int64,
-        serverHlcCounter: Int64
+        serverHlcCounter: Int64,
+        canonicalHlc: CoreHLC?
     ) {
         self.acknowledgements = acknowledgements.map(TimerAcknowledgement.init)
         self.taskAcknowledgements = taskAcknowledgements.map {
@@ -981,6 +989,7 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
         self.serverTime = serverTime
         self.serverHlcWallMs = serverHlcWallMs
         self.serverHlcCounter = serverHlcCounter
+        self.canonicalHlc = canonicalHlc
     }
 
     init(_ response: SyncResponse) {
@@ -999,7 +1008,8 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
             selectedTaskId: response.selectedTaskId,
             serverTime: response.serverTime,
             serverHlcWallMs: response.serverHlcWallMs,
-            serverHlcCounter: response.serverHlcCounter
+            serverHlcCounter: response.serverHlcCounter,
+            canonicalHlc: response.canonicalHlc
         )
     }
 
@@ -1019,7 +1029,8 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
             selectedTaskId: response.selectedTaskId,
             serverTime: response.serverTime,
             serverHlcWallMs: response.serverHlcWallMs,
-            serverHlcCounter: response.serverHlcCounter
+            serverHlcCounter: response.serverHlcCounter,
+            canonicalHlc: response.canonicalHlc
         )
     }
 
@@ -1028,6 +1039,7 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
         case autoStartAcknowledgements, selectedTaskAcknowledgements, revision
         case canonicalTimer, history, tasks, durationsMs, autoStartBreaks
         case selectedTaskId, serverTime, serverHlcWallMs, serverHlcCounter
+        case canonicalHlcWallMs, canonicalHlcCounter
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1055,6 +1067,8 @@ struct CoreReconcileCanonicalResponse: Encodable, Equatable, Sendable {
         try values.encode(serverTime, forKey: .serverTime)
         try values.encode(serverHlcWallMs, forKey: .serverHlcWallMs)
         try values.encode(serverHlcCounter, forKey: .serverHlcCounter)
+        try values.encodeIfPresent(canonicalHlc?.wallMs, forKey: .canonicalHlcWallMs)
+        try values.encodeIfPresent(canonicalHlc?.counter, forKey: .canonicalHlcCounter)
     }
 }
 

@@ -35,7 +35,7 @@ struct HistoryScreen: View {
                                 .listRowBackground(Rectangle().fill(.background))
                         }
                     } header: {
-                        Text("\(model.history.count) arrivals")
+                        historyHeader
                     }
                 }
                 .listStyle(.plain)
@@ -43,17 +43,32 @@ struct HistoryScreen: View {
                 .refreshable { await model.refreshForPull() }
             }
         }
+        .avoidsDisplayDivisions()
         .background(TimerBackdrop())
         .navigationTitle("Arrivals")
         .inlineNavigationTitleIfSupported()
-        .toolbar {
-            if !model.history.isEmpty {
-                ToolbarItem(placement: .primaryAction) {
-                    completedFocusBreakdownControl
-                }
+        .primaryRouteAccountToolbar(model: model)
+    }
+
+    // IOS27-14, IOS18-05: the breakdown control used to be a second
+    // primary toolbar item. Next to the sync chip and Account it did not
+    // fit a 375 pt bar or the largest text sizes, so the system folded it
+    // or Account into "More" and pushed the title off centre. It now sits
+    // with the arrivals count above the list, where it can wrap.
+    private var historyHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(model.history.count) arrivals")
+                    .foregroundStyle(PomodoroughTheme.secondaryText)
+                Spacer(minLength: 8)
+                completedFocusBreakdownControl
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(model.history.count) arrivals")
+                    .foregroundStyle(PomodoroughTheme.secondaryText)
+                completedFocusBreakdownControl
             }
         }
-        .primaryRouteAccountToolbar(model: model)
     }
 
     /// Empty-state top offset follows the visible height — 12% of the
@@ -94,16 +109,17 @@ struct HistoryScreen: View {
         Group {
             if let showCompletedFocusBreakdown {
                 Button(action: showCompletedFocusBreakdown) {
-                    completedFocusBreakdownLabel
+                    completedFocusBreakdownTarget
                 }
             } else {
                 NavigationLink {
                     CompletedFocusBreakdownScreen(model: model)
                 } label: {
-                    completedFocusBreakdownLabel
+                    completedFocusBreakdownTarget
                 }
             }
         }
+        .textCase(nil)
         .accessibilityLabel("View focus breakdown")
         .accessibilityValue(Self.breakdownAccessibilityValue(completed: completedRunCount, runs: model.history.count))
         .accessibilityHint("Shows completed focus time by task")
@@ -124,6 +140,15 @@ struct HistoryScreen: View {
 
     private var completedRunCount: Int {
         model.history.count { $0.phase == .focus && $0.status == "completed" }
+    }
+
+    /// The label padded to the minimum touch target, now that it is no
+    /// longer a toolbar item that the bar sizes.
+    private var completedFocusBreakdownTarget: some View {
+        completedFocusBreakdownLabel
+            .multilineTextAlignment(.leading)
+            .frame(minHeight: 44)
+            .contentShape(.rect)
     }
 
     var completedFocusBreakdownLabel: some View {

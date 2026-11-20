@@ -28,7 +28,7 @@ struct SectionHeading: View {
                 .background(PomodoroughTheme.platform, in: .capsule)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title.localizedUppercase).font(.headline)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                Text(subtitle).font(.caption).foregroundStyle(PomodoroughTheme.secondaryText)
             }
     }
 }

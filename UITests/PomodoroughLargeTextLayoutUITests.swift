@@ -40,4 +40,41 @@ final class PomodoroughLargeTextLayoutUITests: XCTestCase {
             "the delete button starts the next line, not the far edge: title \(title.frame), delete \(delete.frame)"
         )
     }
+
+    // IOS27-15: at XXXL a phone row split Finish and Cancel into hyphenated
+    // "Fin-ish" and "Can-cel" buttons of different heights. They now stack
+    // when both labels do not fit on one line, and still share a row at the
+    // default size.
+    func testFinishAndCancelStackAtAccessibilityXXXL() {
+        let (finish, cancel) = runningFinishAndCancelFrames(contentSize: "UICTContentSizeCategoryAccessibilityXXXL")
+        XCTAssertGreaterThanOrEqual(cancel.minY, finish.maxY - 1, "Cancel \(cancel) sits under Finish \(finish)")
+        XCTAssertEqual(cancel.width, finish.width, accuracy: 1)
+        XCTAssertEqual(cancel.height, finish.height, accuracy: 1)
+    }
+
+    func testFinishAndCancelShareARowAtDefaultSize() {
+        let (finish, cancel) = runningFinishAndCancelFrames(contentSize: "UICTContentSizeCategoryL")
+        XCTAssertEqual(cancel.midY, finish.midY, accuracy: 1, "Cancel \(cancel) sits beside Finish \(finish)")
+        XCTAssertGreaterThan(cancel.minX, finish.maxX - 1)
+    }
+
+    private func runningFinishAndCancelFrames(contentSize: String) -> (finish: CGRect, cancel: CGRect) {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = launchResetTestApplication(contentSize: contentSize)
+        defer { app.terminate() }
+        let start = app.buttons["Start focus"]
+        for _ in 0..<6 where !start.isHittable { app.swipeUp() }
+        start.tap()
+        let finish = app.buttons["Finish timer"]
+        let cancel = app.buttons["Cancel timer"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 10))
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        for _ in 0..<6 where !(finish.isHittable && cancel.isHittable) { app.swipeUp() }
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "ios27-15-finish-cancel-\(contentSize)"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        return (finish.frame, cancel.frame)
+    }
 }

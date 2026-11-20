@@ -2451,6 +2451,95 @@ struct UnitPositiveTests {
         }
 #endif
     }
+
+    // The task list order is SharedCore's decision. The room projection must
+    // keep the order SharedCore returns, whatever rule produced it.
+    @Test func roomProjectionKeepsSharedCoreTaskListOrder() throws {
+        let naturalOrder = try ["apple", "Banana", "Bulk task 2", "Bulk task 10"].map {
+            try #require(FocusTask(title: $0))
+        }
+        for coreOrder in [naturalOrder, naturalOrder.reversed()] {
+            let genesis = Self.roomGenesis(tasks: coreOrder)
+            let state = try IrohRoomProjection.roomState(
+                try Self.roomWorkspace(genesis: genesis),
+                genesis: genesis,
+                operations: [],
+                collected: try IrohRoomProjection.ProjectionOperations(genesis: genesis),
+                output: Self.coreProjectionOutput(tasks: coreOrder)
+            )
+            #expect(state.tasks.map(\.title) == coreOrder.map(\.title))
+        }
+    }
+
+    @Test func roomProjectionReturnsTheBundledSharedCoreTaskListOrder() throws {
+        let tasks = try ["Bulk task 10", "apple", "Bulk task 2", "Banana"].map {
+            try #require(FocusTask(title: $0))
+        }
+        let genesis = Self.roomGenesis(tasks: tasks)
+        let date = Date(timeIntervalSince1970: 1_000)
+        let coreOutput = try SharedCore.bundled().applyProjection(CoreProjectionInput(
+            base: CoreProjectionBase(
+                canonicalTimer: nil, history: [], tasks: tasks, durationsMs: .defaults,
+                autoStartBreaks: false, selectedTaskId: nil
+            ),
+            pending: CoreProjectionPending(
+                commands: [], taskOperations: [], durationOperations: [],
+                autoStartOperations: [], selectedTaskOperations: []
+            ),
+            now: date
+        ))
+        let state = try IrohRoomProjection.project(try Self.roomWorkspace(genesis: genesis), at: date)
+
+        #expect(Set(coreOutput.tasks) == Set(tasks))
+        #expect(state.tasks == coreOutput.tasks)
+    }
+
+    private static func roomGenesis(tasks: [FocusTask]) -> IrohGenesis {
+        IrohGenesis(
+            canonicalTimer: nil, history: [], tasks: tasks, durationsMs: .defaults,
+            autoStartBreaks: false, hlcWallMs: 0, hlcCounter: 0
+        )
+    }
+
+    private static func roomWorkspace(genesis: IrohGenesis) throws -> IrohRoomWorkspace {
+        let returnState = PersistedTimerState.fresh()
+        let record = IrohOperationRecord(
+            domain: .genesis,
+            deviceId: returnState.deviceId,
+            payload: .genesis(genesis)
+        )
+        let secret = Data(0...31)
+        return IrohRoomWorkspace(
+            roomID: try IrohProtocolV1.roomID(for: secret),
+            roomSecret: secret,
+            roomName: nil,
+            returnState: returnState,
+            roomState: returnState,
+            peers: [],
+            records: [try IrohStoredRecord(
+                record: record,
+                digest: try record.digest(),
+                canonicalData: try record.canonicalBytes()
+            )],
+            conflict: nil,
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
+    private static func coreProjectionOutput(tasks: [FocusTask]) -> CoreProjectionOutput {
+        CoreProjectionOutput(
+            canonicalTimer: nil,
+            history: [],
+            tasks: tasks,
+            durationsMs: .defaults,
+            autoStartBreaks: false,
+            selectedTaskId: nil,
+            timerOutcomes: [:],
+            winningOperationIds: CoreProjectionWinningOperationIDs(
+                tasks: [:], durations: [:], autoStart: nil, selectedTask: nil
+            )
+        )
+    }
 }
 
 private let keychainTokens = TokenPair(

@@ -31,7 +31,7 @@ struct TaskSummaryRow: View {
     private var stackedRow: some View {
         HStack(spacing: TaskBoardColumns.spacing) {
             VStack(alignment: .leading, spacing: 6) {
-                titleRow(lineLimit: nil)
+                titleRow
                 Text("\(summary.finishedPomodoros) pomodoros · \(TaskTimeText.shortMinutes(spentMinutes))")
                     .accessibilityLabel(summaryAccessibilityLabel)
             }
@@ -63,7 +63,10 @@ struct TaskSummaryRow: View {
 
     private var columnRow: some View {
         HStack(spacing: TaskBoardColumns.spacing) {
-            titleRow(lineLimit: 2)
+            // IOS27-21: no line limit. A two-line cap cut long titles off
+            // on the open Duo and iPad, the only places this layout shows,
+            // and no other screen there shows the whole title.
+            titleRow
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: TaskBoardColumns.spacing) {
                 Text("\(summary.finishedPomodoros)")
@@ -89,11 +92,10 @@ struct TaskSummaryRow: View {
         }
     }
 
-    private func titleRow(lineLimit: Int?) -> some View {
+    private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(summary.task.title)
                 .font(.body.weight(.semibold))
-                .lineLimit(lineLimit)
 #if os(macOS)
                 .onTapGesture(count: 2) { rename?() }
 #endif

@@ -10,7 +10,7 @@ class CompletedFocusChartIdentityTests(unittest.TestCase):
     def test_chart_and_list_consume_the_same_entries(self):
         source = SOURCE.read_text()
         self.assertIn("let entries = CompletedFocusChartEntry.entries(for: summaries)", source)
-        for caller in ("chart(entries)", "taskList(entries)", "Chart(entries)", "ForEach(entries)"):
+        for caller in ("chart(entries, height:", "taskList(entries)", "Chart(entries)", "ForEach(entries)"):
             self.assertIn(caller, source)
         self.assertIn("var id: String { summary.id }", source)
         self.assertIn('.foregroundStyle(by: .value("Task", entry.id))', source)
@@ -26,8 +26,14 @@ class CompletedFocusChartIdentityTests(unittest.TestCase):
         self.assertEqual(source.count('Text("\\(entry.index + 1)")'), 2)
         self.assertIn(".chartLegend(.hidden)", source)
         self.assertIn("Text(summary.taskTitle)", source)
-        self.assertIn(".accessibilityLabel(Self.accessibilityLabel(for: entry.summary))", source)
-        self.assertIn(".accessibilityValue(Self.accessibilityValue(for: entry.summary))", source)
+        # IOS27-17: sectors are no longer separate VoiceOver elements; the
+        # numbered task list reads each slice and the chart is one element.
+        self.assertNotIn(".accessibilityLabel(Self.accessibilityLabel(for: entry.summary))", source)
+        self.assertNotIn(".accessibilityValue(Self.accessibilityValue(for: entry.summary))", source)
+        chart = source[source.index("private func chart("):source.index("private func chartContent(")]
+        self.assertIn(".accessibilityHidden(true)", chart)
+        self.assertIn(".accessibilityElement()", chart)
+        self.assertIn('.accessibilityLabel("Completed focus time by task")', chart)
 
     def test_list_rows_speak_task_title_and_value(self):
         # Without the explicit label, the combined row speaks its child text

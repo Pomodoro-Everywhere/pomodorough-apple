@@ -8,19 +8,7 @@ struct LandscapeDialFace: View {
     let timeText: String
     var completedFocusCount = 0
 
-    @ViewBuilder
     var body: some View {
-        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_DIAL"] == "1" {
-            dialShell
-        } else {
-            dialShell.accessibilityRepresentation {
-                TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
-                LongBreakProgressIndicator(completedToday: completedFocusCount)
-            }
-        }
-    }
-
-    private var dialShell: some View {
         GeometryReader { geometry in
             readout(size: geometry.size)
         }
@@ -48,6 +36,26 @@ struct LandscapeDialFace: View {
         let labelFont = Font.system(size: labelSize, weight: .bold, design: .monospaced)
         return VStack(spacing: labelSize * 0.35) {
             Spacer(minLength: 0)
+            countdown(size: size, labelFont: labelFont, spacing: labelSize * 0.35)
+            HStack(spacing: labelSize * 0.75) {
+                // Read as part of the timer element's value.
+                Text(status.localizedUppercase)
+                    .font(labelFont)
+                    .foregroundStyle(PomodoroughTheme.sky)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .accessibilityHidden(true)
+                LongBreakProgressIndicator(completedToday: completedFocusCount, font: labelFont)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(min(size.width, size.height) * 0.08)
+        .frame(width: size.width, height: size.height)
+    }
+
+    private func countdown(size: CGSize, labelFont: Font, spacing: CGFloat) -> some View {
+        VStack(spacing: spacing) {
             Text(phase.title.localizedUppercase)
                 .font(labelFont)
                 .foregroundStyle(PomodoroughTheme.accent(for: phase))
@@ -67,19 +75,8 @@ struct LandscapeDialFace: View {
                 .lineLimit(1)
                 .foregroundStyle(PomodoroughTheme.ticket)
                 .accessibilityIdentifier("AP08-countdown-digits")
-            HStack(spacing: labelSize * 0.75) {
-                Text(status.localizedUppercase)
-                    .font(labelFont)
-                    .foregroundStyle(PomodoroughTheme.sky)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                LongBreakProgressIndicator(completedToday: completedFocusCount, font: labelFont)
-            }
-
-            Spacer(minLength: 0)
         }
-        .padding(min(size.width, size.height) * 0.08)
-        .frame(width: size.width, height: size.height)
+        .timerAccessibilityElement(phase: phase, status: status, timeText: timeText)
     }
 
     /// Digits fill the face from either dimension: tall faces are capped

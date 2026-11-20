@@ -46,7 +46,7 @@ struct DurationRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(phase.routeLabel.localizedUppercase)
                         .font(.caption2.monospaced().bold())
-                        .foregroundStyle(selected ? PomodoroughTheme.ticket : .secondary)
+                        .foregroundStyle(selected ? PomodoroughTheme.ticket : PomodoroughTheme.secondaryText)
                     Text(phase.title).font(.headline)
                 }
                 Spacer(minLength: 0)

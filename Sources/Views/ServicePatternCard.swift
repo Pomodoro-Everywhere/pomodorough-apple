@@ -35,7 +35,7 @@ struct ServicePatternCard: View {
                 ? String(localized: "Starts the break after the current focus automatically. Short after focus. Long every fourth completed focus.")
                 : String(localized: "Short after focus. Long every fourth completed focus."))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PomodoroughTheme.secondaryText)
                 .accessibilityHidden(true)
         }
         .padding(18)

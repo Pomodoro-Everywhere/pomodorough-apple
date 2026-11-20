@@ -107,6 +107,8 @@ Available shared schemes:
 | --- | --- |
 | `Pomodorough-iOS` | iPhone and iPad application plus unit, integration, and accessibility UI tests |
 | `Pomodorough-macOS` | Native Mac application plus unit/integration tests |
+| `Pomodorough-macOS-Commands` | Mac menu command and shortcut tests that run without an app host |
+| `Pomodorough-watchOS` | Apple Watch application plus layout unit tests and accessibility UI tests |
 
 The generated project is checked in for convenience. Run `xcodegen generate`
 after changing `project.yml`.

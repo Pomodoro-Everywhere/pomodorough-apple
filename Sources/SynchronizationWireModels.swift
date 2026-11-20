@@ -133,7 +133,7 @@ struct BootstrapResolveRequest: Codable, Equatable, Sendable {
     }
 }
 
-struct SyncResponse: Decodable, Sendable {
+struct SyncResponse: CarriesCanonicalHeadPair, Sendable {
     let acknowledgements: [Acknowledgement]
     let taskAcknowledgements: [TaskAcknowledgement]
     let durationAcknowledgements: [DurationAcknowledgement]
@@ -149,12 +149,15 @@ struct SyncResponse: Decodable, Sendable {
     let serverTime: Date
     let serverHlcWallMs: Int64
     let serverHlcCounter: Int64
+    /// Canonical head pair; nil when an older server omits it.
+    let canonicalHlc: CoreHLC?
 
     private enum CodingKeys: String, CodingKey {
         case acknowledgements, taskAcknowledgements, durationAcknowledgements, autoStartAcknowledgements
         case selectedTaskAcknowledgements, durationsMs, autoStartBreaks, selectedTaskId
         case revision, canonicalTimer
         case history, tasks, serverTime, serverHlcWallMs, serverHlcCounter
+        case canonicalHlcWallMs, canonicalHlcCounter
     }
 
     init(from decoder: Decoder) throws {
@@ -183,6 +186,10 @@ struct SyncResponse: Decodable, Sendable {
         serverTime = try values.decode(Date.self, forKey: .serverTime)
         serverHlcWallMs = try values.decode(Int64.self, forKey: .serverHlcWallMs)
         serverHlcCounter = try values.decode(Int64.self, forKey: .serverHlcCounter)
+        canonicalHlc = try CanonicalHeadReceiverRule.decode(
+            from: values, wallKey: .canonicalHlcWallMs, counterKey: .canonicalHlcCounter,
+            server: CoreHLC(wallMs: serverHlcWallMs, counter: serverHlcCounter)
+        )
     }
 
     var hasValidCanonicalSnapshot: Bool {
@@ -196,7 +203,7 @@ struct SyncResponse: Decodable, Sendable {
     }
 }
 
-struct BootstrapResponse: Decodable, Sendable {
+struct BootstrapResponse: CarriesCanonicalHeadPair, Sendable {
     let acknowledgements: [Acknowledgement]
     let taskAcknowledgements: [TaskAcknowledgement]
     let durationAcknowledgements: [DurationAcknowledgement]
@@ -212,12 +219,15 @@ struct BootstrapResponse: Decodable, Sendable {
     let serverTime: Date
     let serverHlcWallMs: Int64
     let serverHlcCounter: Int64
+    /// Canonical head pair; nil when an older server omits it.
+    let canonicalHlc: CoreHLC?
 
     private enum CodingKeys: String, CodingKey {
         case acknowledgements, taskAcknowledgements, durationAcknowledgements, autoStartAcknowledgements
         case selectedTaskAcknowledgements, durationsMs, autoStartBreaks, selectedTaskId
         case revision, canonicalTimer
         case history, tasks, serverTime, serverHlcWallMs, serverHlcCounter
+        case canonicalHlcWallMs, canonicalHlcCounter
     }
 
     init(from decoder: Decoder) throws {
@@ -249,6 +259,10 @@ struct BootstrapResponse: Decodable, Sendable {
         serverTime = try values.decode(Date.self, forKey: .serverTime)
         serverHlcWallMs = try values.decode(Int64.self, forKey: .serverHlcWallMs)
         serverHlcCounter = try values.decode(Int64.self, forKey: .serverHlcCounter)
+        canonicalHlc = try CanonicalHeadReceiverRule.decode(
+            from: values, wallKey: .canonicalHlcWallMs, counterKey: .canonicalHlcCounter,
+            server: CoreHLC(wallMs: serverHlcWallMs, counter: serverHlcCounter)
+        )
     }
 
     var hasValidCanonicalSnapshot: Bool {
@@ -259,6 +273,48 @@ struct BootstrapResponse: Decodable, Sendable {
             durations: durationsMs,
             selectedTaskId: selectedTaskId
         )
+    }
+}
+
+/// Receiver rule for the canonical HLC head (R55-C14 contract).
+///
+/// `canonicalHlcWallMs`/`canonicalHlcCounter` cover only operations the server
+/// ordered into the workspace. `serverHlc*` also covers the server's physical
+/// clock, so installing it as the head hides a never-sent operation queued while
+/// the request was in flight. An older server omits the pair; the caller then
+/// keeps `serverHlc*` as the head. A malformed pair rejects the whole response,
+/// exactly as a malformed `serverHlc*` does. A key with an explicit `null` value
+/// counts as present, so `null` fails closed instead of reading as absent. The
+/// literal form (no `5.0`, `1e0` or `-0`) is checked on the raw body by
+/// `CanonicalHeadLiteralRule` before decoding.
+enum CanonicalHeadReceiverRule {
+    static func decode<Key: CodingKey>(
+        from values: KeyedDecodingContainer<Key>,
+        wallKey: Key,
+        counterKey: Key,
+        server: CoreHLC
+    ) throws -> CoreHLC? {
+        let hasWall = values.contains(wallKey)
+        guard hasWall == values.contains(counterKey) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: hasWall ? counterKey : wallKey, in: values,
+                debugDescription: "canonicalHlcWallMs and canonicalHlcCounter must be present together."
+            )
+        }
+        guard hasWall else { return nil }
+        let head = CoreHLC(
+            wallMs: try values.decode(Int64.self, forKey: wallKey),
+            counter: try values.decode(Int64.self, forKey: counterKey)
+        )
+        guard WireBounds.containsUnsigned(head.wallMs),
+              WireBounds.containsUnsigned(head.counter),
+              (head.wallMs, head.counter) <= (server.wallMs, server.counter) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: wallKey, in: values,
+                debugDescription: "Canonical HLC head must be a safe non-negative pair not above serverHlc."
+            )
+        }
+        return head
     }
 }
 

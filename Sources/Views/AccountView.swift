@@ -1,4 +1,3 @@
-import GoogleSignInSwift
 import SwiftUI
 import UserNotifications
 
@@ -25,21 +24,7 @@ struct AccountView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-#if os(iOS)
-                networkSection
-#endif
-                completionGuaranteeSection
-                identitySection
-                if model.hasPendingAccountDeletionRecovery {
-                    accountDeletionRecoverySection
-                }
-                lineStatusSection
-                if model.isSignedIn {
-                    signOutSection
-                    accountManagementSection
-                }
-            }
+            accountSections
             .navigationTitle("Account")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .confirmationDialog("Sign out of Pomodorough?", isPresented: $confirmsSignOut) {
@@ -74,6 +59,26 @@ struct AccountView: View {
 #endif
     }
 
+    private var accountSections: some View {
+        List {
+#if os(iOS)
+            networkSection
+#endif
+            completionGuaranteeSection
+            identitySection
+            if model.hasPendingAccountDeletionRecovery {
+                accountDeletionRecoverySection
+            }
+            lineStatusSection
+            if model.isSignedIn {
+                signOutSection
+                accountManagementSection
+            }
+        }
+        // IOS27-08: row values in the pinned secondary grey.
+        .labeledContentStyle(.secondaryValue)
+    }
+
     @ViewBuilder
     private var identitySection: some View {
         if let user = model.user {
@@ -88,7 +93,7 @@ struct AccountView: View {
                     .clipShape(.circle)
                     VStack(alignment: .leading) {
                         Text(user.name).font(.headline)
-                        Text(user.email).font(.subheadline).foregroundStyle(.secondary)
+                        Text(user.email).font(.subheadline).foregroundStyle(PomodoroughTheme.secondaryText)
                     }
                 }
                 .accessibilityRepresentation {
@@ -100,15 +105,14 @@ struct AccountView: View {
                 Label("Timer works without internet", systemImage: "iphone")
                     .accessibilityLabel("On-device mode")
                     .accessibilityValue("Timer works without internet")
-                GoogleSignInButton(action: model.signIn)
-                    .frame(maxWidth: 280)
-                    .disabled(model.isWorking)
-                    .accessibilityHint("Signs in to sync your timer across devices")
-                if model.isWorking { ProgressView("Opening Google") }
+                GoogleSignInPrompt(isOpening: model.isWorking, signIn: model.signIn)
             } header: {
-                Text("On-device mode").accessibilityHidden(true)
+                Text("On-device mode")
+                    .foregroundStyle(PomodoroughTheme.secondaryText)
+                    .accessibilityHidden(true)
             } footer: {
                 Text("Sign in only if you want to sync this timer and its history across devices.")
+                    .foregroundStyle(PomodoroughTheme.secondaryText)
                     .accessibilityHidden(true)
             }
         }
@@ -129,7 +133,7 @@ struct AccountView: View {
             if model.hasOversizedSavedSyncClaim {
                 SavedSyncClaimRecovery(model: model)
             }
-            Button("Sync now", systemImage: "arrow.triangle.2.circlepath") {
+            SyncNowRow(availability: syncNowAvailability) {
                 Task {
                     if model.replicationMode == .iroh {
                         await model.syncIrohNow()
@@ -138,21 +142,36 @@ struct AccountView: View {
                     }
                 }
             }
-            .disabled(syncNowDisabled)
         } header: {
-            Text("Line status").accessibilityHidden(true)
+            Text("Line status")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
+                .accessibilityHidden(true)
         }
     }
 
     private var lineStatusAccessibilityValue: String {
-        "Sync \(model.syncLabel), device \(model.deviceMark), \(model.completedFocusCount) completed focus runs"
+        Self.lineStatusAccessibilityValue(
+            syncLabel: model.syncLabel, deviceMark: model.deviceMark, completedFocusCount: model.completedFocusCount
+        )
     }
 
-    private var syncNowDisabled: Bool {
-        model.replicationMode == .offline
-            || (model.replicationMode == .centralized && !model.isSignedIn)
-            || model.isSyncing
-            || model.isHistoryResolutionBlocking
+    /// IOS27-17: a plain String interpolation is verbatim and spoke
+    /// "1 completed focus runs". Each part now comes from the catalog, and
+    /// the count part has its own plural entry.
+    static func lineStatusAccessibilityValue(
+        syncLabel: String, deviceMark: String, completedFocusCount: Int
+    ) -> String {
+        let runs = String(localized: "\(completedFocusCount) completed focus runs")
+        return String(localized: "Sync \(syncLabel), device \(deviceMark), \(runs)")
+    }
+
+    private var syncNowAvailability: SyncNowAvailability {
+        SyncNowAvailability(
+            replicationMode: model.replicationMode,
+            isSignedIn: model.isSignedIn,
+            isSyncing: model.isSyncing,
+            isHistoryResolutionBlocking: model.isHistoryResolutionBlocking
+        )
     }
 
     private var signOutSection: some View {
@@ -161,6 +180,7 @@ struct AccountView: View {
                 .disabled(model.isWorking)
         } footer: {
             Text("Pending changes are stored on this device until they can sync.")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
         }
     }
 
@@ -172,14 +192,16 @@ struct AccountView: View {
             .disabled(model.isWorking)
         } header: {
             Text("Account deletion recovery")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
         } footer: {
             Text("Account data remains quarantined until deletion and local cleanup can be confirmed.")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
         }
     }
 
     private var completionGuaranteeSection: some View {
         Section {
-            Text("Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.")
+            Text(TimerAlertCopy.current.accountSummary)
                 .fixedSize(horizontal: false, vertical: true)
             LabeledContent("Timer alerts", value: timerAlertStatusLabel)
                 .accessibilityIdentifier("account.timer-alerts-status")
@@ -212,6 +234,7 @@ struct AccountView: View {
             }
         } header: {
             Text("Timer alert limits")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
                 .accessibilityIdentifier("account.timer-alert-limits")
         }
         .task { await refreshTimerAlertStatus() }
@@ -285,8 +308,10 @@ struct AccountView: View {
             .disabled(model.isWorking)
         } header: {
             Text("Privacy and account")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
         } footer: {
             Text("Account deletion permanently removes your cloud timer, task, history, and session data. Type DELETE to confirm.")
+                .foregroundStyle(PomodoroughTheme.secondaryText)
         }
     }
 }

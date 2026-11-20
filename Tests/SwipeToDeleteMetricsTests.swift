@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Pomodorough
 
@@ -67,6 +68,16 @@ struct SwipeToDeleteMetricsTests {
         #expect(outcome(velocity: 20) == .closed)
         #expect(outcome(velocity: 300) == .open)
         #expect(outcome(velocity: 5000) == .open, "a flick never deletes")
+    }
+
+    /// IOS18-03: window translation is physical, while the row offset and
+    /// its trailing Delete mirror in right-to-left layouts. A swipe toward
+    /// the reading leading edge uncovers Delete in both directions.
+    @Test func swipeTowardReadingLeadingEdgeUncoversDelete() {
+        #expect(SwipeToDeleteMetrics.trailingTravel(physicalDistance: -60, layoutDirection: .leftToRight) == 60)
+        #expect(SwipeToDeleteMetrics.trailingTravel(physicalDistance: 60, layoutDirection: .leftToRight) == -60)
+        #expect(SwipeToDeleteMetrics.trailingTravel(physicalDistance: 60, layoutDirection: .rightToLeft) == 60)
+        #expect(SwipeToDeleteMetrics.trailingTravel(physicalDistance: -60, layoutDirection: .rightToLeft) == -60)
     }
 
     @Test func unmeasuredRowNeverDeletes() {

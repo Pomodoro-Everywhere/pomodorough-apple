@@ -328,9 +328,7 @@ struct TimerIntent: Codable, Equatable, Sendable {
 }
 
 struct CanonicalTimer: Codable, Equatable, Sendable {
-    enum Status: String, Codable, Sendable {
-        case running, paused, completed, cancelled, superseded
-    }
+    typealias Status = CanonicalTimerStatus
 
     let id: String
     let taskId: String?

@@ -42,10 +42,27 @@ schemes:
         POMODOROUGH_SILENCE_AUDIO: "1"
       targets:
         - PomodoroughMacTests
+  Pomodorough-macOS-Commands:
+    # MAC-01: macOS menu command logic, tested without an app host so it can
+    # run on a developer Mac (the hosted macOS tests read the real profile).
+    build:
+      targets:
+        PomodoroughMacCommandTests: [test]
+    test:
+      environmentVariables:
+        POMODOROUGH_SILENCE_AUDIO: "1"
+      targets:
+        - PomodoroughMacCommandTests
   Pomodorough-watchOS:
     build:
       targets:
         Pomodorough-watchOS: all
+    test:
+      environmentVariables:
+        POMODOROUGH_SILENCE_AUDIO: "1"
+      targets:
+        - PomodoroughWatchTests
+        - PomodoroughWatchUITests
   PersistedStateCompatibility-iOS:
     build:
       targets:
@@ -72,8 +89,8 @@ settings:
   base:
     SWIFT_VERSION: 6.0
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: 0.56.2
-    CURRENT_PROJECT_VERSION: 66
+    MARKETING_VERSION: 0.57.0
+    CURRENT_PROJECT_VERSION: 67
     GOOGLE_CLIENT_ID: "614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr.apps.googleusercontent.com"
     GOOGLE_REVERSED_CLIENT_ID: "com.googleusercontent.apps.614768274539-7pql3pdu31c8fctsp5ekdc3v2ej8isnr"
 targetTemplates:
@@ -352,3 +369,48 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/PomodoroughTestHost.app/Contents/MacOS/PomodoroughTestHost
         BUNDLE_LOADER: $(TEST_HOST)
+  PomodoroughMacCommandTests:
+    # Hostless: compiles the pure command sources directly and runs in
+    # xctest, so it never starts the app or a test host.
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: MacCommandTests
+      - path: Sources/MainTab.swift
+      - path: Sources/MacOSDestinationState.swift
+      - path: Sources/MacOSCommandCatalog.swift
+      - path: Sources/MacOSSectionNavigation.swift
+      - path: Sources/CanonicalTimerStatus.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.mac.command-tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+  PomodoroughWatchTests:
+    type: bundle.unit-test
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources: [WatchTests]
+    dependencies:
+      - target: Pomodorough-watchOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.watch.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Pomodorough.app/Pomodorough
+        BUNDLE_LOADER: $(TEST_HOST)
+  PomodoroughWatchUITests:
+    # WCH-02 to WCH-04: runs on a watch simulator with no paired iPhone.
+    type: bundle.ui-testing
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources: [WatchUITests]
+    dependencies:
+      - target: Pomodorough-watchOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.egigoka.pomodorough.watch.ui-tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Pomodorough-watchOS

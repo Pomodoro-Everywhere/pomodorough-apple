@@ -1,20 +1,4 @@
-#if os(macOS)
-import AppKit
-import Observation
-#endif
 import SwiftUI
-
-#if os(macOS)
-@MainActor
-@Observable
-final class MacOSDestinationState {
-    var selectedTab = MainTab.timer
-    var taskDraft = ""
-    var networkRoomName = ""
-    var isCreatingRoom = false
-    var showsCompletedFocusBreakdown = false
-}
-#endif
 
 struct MainContainer: View {
     let model: AppModel
@@ -23,7 +7,6 @@ struct MainContainer: View {
     @State private var selectedTab = MainTab.timer
 #else
     @State private var destinationState = MacOSDestinationState()
-    @State private var showsSettings = false
     @State private var showsAccount = false
 #endif
 
@@ -89,18 +72,15 @@ struct MainContainer: View {
     private var macOSContent: some View {
         macOSDestination
             .animation(reduceMotion ? nil : .default, value: destinationState.selectedTab)
-            .inspector(isPresented: $showsSettings) {
-                ServicePatternScreen(model: model, showsNavigationTitle: false)
-                    .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
-            }
-            .navigationTitle(macOSWindowTitle)
-            .frame(minWidth: showsSettings ? 896 : 516)
+            .navigationTitle(MacOSSectionTitle.title(for: destinationState.selectedTab))
+            .focusedSceneValue(\.macOSDestination, destinationState)
+            // A section command may have opened this window with nothing focused.
+            .adoptsRequestedSection(into: destinationState)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     macOSNavigation
                 }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    settingsButton
+                ToolbarItem(placement: .primaryAction) {
                     AccountSyncToolbarButton(model: model, showsAccount: $showsAccount)
                 }
             }
@@ -147,16 +127,6 @@ struct MainContainer: View {
         }
     }
 
-    private var macOSWindowTitle: String {
-        switch destinationState.selectedTab {
-        case .timer: String(localized: "Timer")
-        case .tasks: String(localized: "Tasks")
-        case .history: String(localized: "Arrivals")
-        case .network: String(localized: "Network")
-        case .pattern: String(localized: "Pattern")
-        }
-    }
-
     private func destinationBinding<Value>(
         _ keyPath: ReferenceWritableKeyPath<MacOSDestinationState, Value>
     ) -> Binding<Value> {
@@ -166,55 +136,21 @@ struct MainContainer: View {
         )
     }
 
+    /// MAC-02: Pattern is a section like the others, in the order of
+    /// MacOSSectionCommands.sections, so it opens in the window instead of
+    /// an inspector that widened the window.
     private var macOSNavigation: some View {
         Picker("Section", selection: destinationBinding(\.selectedTab)) {
             Text("Timer").tag(MainTab.timer)
             Text("Tasks").tag(MainTab.tasks)
+            Text("Pattern").tag(MainTab.pattern)
             Text("Arrivals").tag(MainTab.history)
             Text("Network").tag(MainTab.network)
         }
         .pickerStyle(.segmented)
         .labelsHidden()
         .accessibilityLabel("Section")
-        .help("Navigate between Timer, Tasks, Arrivals, and Network")
-    }
-
-    private var settingsButton: some View {
-        Button("Settings", systemImage: "slider.horizontal.3") {
-            toggleSettings()
-        }
-        .accessibilityValue("Pattern")
-        .help("Settings, Pattern")
-    }
-
-    private func toggleSettings() {
-        let willShowSettings = !showsSettings
-        guard willShowSettings,
-              let window = NSApp.currentEvent?.window
-                ?? NSApp.keyWindow
-                ?? NSApp.mainWindow
-                ?? NSApp.windows.first(where: \.isVisible),
-              window.frame.width < 896 else {
-            withAnimation(reduceMotion ? nil : .default) {
-                showsSettings = willShowSettings
-            }
-            return
-        }
-
-        var targetFrame = window.frame
-        targetFrame.size.width = 896
-        if let visibleFrame = window.screen?.visibleFrame,
-           targetFrame.maxX > visibleFrame.maxX {
-            targetFrame.origin.x = max(visibleFrame.minX, visibleFrame.maxX - targetFrame.width)
-        }
-
-        let duration = window.animationResizeTime(targetFrame)
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: duration)) {
-            showsSettings = true
-        }
-        DispatchQueue.main.async {
-            window.setFrame(targetFrame, display: true, animate: !self.reduceMotion)
-        }
+        .help("Navigate between Timer, Tasks, Pattern, Arrivals, and Network")
     }
 #endif
 }

@@ -218,7 +218,7 @@ struct R54AP01SignOutOwnershipFenceTests {
     func signOutRevokesLeaveSuspendedInServiceStop() async throws {
         try await expectSuspendedRoomTransitionRevoked { model in
             model.requestIrohRoomLeave()
-            await model.confirmIrohRoomLeave()
+            await model.confirmIrohRoomLeave()?.value
         }
     }
 
@@ -255,7 +255,7 @@ struct R54AP01SignOutOwnershipFenceTests {
             #expect(recorded.value.filter { !$0.contains("sign-out stage=") }.isEmpty)
             let stops = fixture.service.stopCount
             model.requestIrohRoomLeave()
-            await model.confirmIrohRoomLeave()
+            await model.confirmIrohRoomLeave()?.value
             await model.setReplicationMode(.offline)
             #expect(fixture.service.stopCount == stops)
             try fixture.expectRoomKept(model, roomID: roomID)

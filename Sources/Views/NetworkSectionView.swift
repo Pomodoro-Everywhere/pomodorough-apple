@@ -54,11 +54,11 @@ struct NetworkSectionView: View {
             "Leave this Iroh room?",
             isPresented: Binding(
                 get: { model.isIrohRoomLeaveConfirmationPresented },
-                set: { if !$0 { model.cancelIrohRoomLeave() } }
+                set: { if !$0 { model.dismissIrohRoomLeaveConfirmation() } }
             )
         ) {
             Button("Leave room", role: .destructive) {
-                Task { await model.confirmIrohRoomLeave() }
+                model.confirmIrohRoomLeave()
             }
             Button("Cancel", role: .cancel) { model.cancelIrohRoomLeave() }
         } message: {
@@ -116,13 +116,27 @@ struct NetworkSectionView: View {
             modeButton(
                 .centralized,
                 symbol: "cloud",
-                detail: model.isSignedIn
-                    ? "Existing HTTPS account synchronization."
-                    : "Sign in with Google to use cloud synchronization."
+                detail: cloudDetail
             )
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Replication mode")
+    }
+
+    /// IOS27-12: a selected but signed-out Cloud line says that it waits for
+    /// sign-in, so it never reads as syncing next to a "Signed out" status.
+    private var cloudDetail: String {
+        if model.isSignedIn { return String(localized: "Existing HTTPS account synchronization.") }
+        if model.replicationMode == .centralized {
+            return String(localized: "Selected, waiting for sign-in. Sign in with Google to start cloud sync. The timer keeps working on this device.")
+        }
+        return String(localized: "Sign in with Google to use cloud synchronization.")
+    }
+
+    private func modeAccessibilityValue(_ mode: ReplicationMode) -> String {
+        guard model.replicationMode == mode else { return String(localized: "Not selected") }
+        if mode == .centralized && !model.isSignedIn { return String(localized: "Selected, signed out") }
+        return String(localized: "Selected")
     }
 
     private func modeButton(
@@ -165,7 +179,7 @@ struct NetworkSectionView: View {
         .buttonStyle(.plain)
         .disabled(mode == .iroh && !model.hasIrohRoom)
         .accessibilityLabel(mode.title)
-        .accessibilityValue(selected ? String(localized: "Selected") : String(localized: "Not selected"))
+        .accessibilityValue(modeAccessibilityValue(mode))
         .accessibilityHint(detail)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: selected)
     }
@@ -223,20 +237,12 @@ struct NetworkSectionView: View {
                     }
                     .tint(PomodoroughTheme.ticket)
                 }
-                let actionLayout = dynamicTypeSize.isAccessibilitySize
-                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
-                    : AnyLayout(HStackLayout())
-                actionLayout {
-                    Button("Join another room", systemImage: "arrow.triangle.branch") { join() }
-                        .buttonStyle(.bordered)
-                    if model.replicationMode == .iroh {
-                        Button("Leave room", role: .destructive) {
-                            model.requestIrohRoomLeave()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(model.isLeavingIrohRoom)
-                    }
-                }
+                RoomMembershipActions(
+                    canLeave: model.replicationMode == .iroh,
+                    isLeaving: model.isLeavingIrohRoom,
+                    join: { join() },
+                    leave: { model.requestIrohRoomLeave() }
+                )
             }
         } else {
             VStack(alignment: .leading, spacing: 12) {
@@ -244,9 +250,13 @@ struct NetworkSectionView: View {
                     .font(.caption.monospaced().bold())
                     .foregroundStyle(PomodoroughTheme.ticket)
                 roomCreationForm()
-                Button("Join with invite", systemImage: "rectangle.and.text.magnifyingglass") { join() }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
+                Button { join() } label: {
+                    // IOS27-18: the label fills the 44 pt touch minimum;
+                    // the bordered capsule alone was 36 pt tall.
+                    Label("Join with invite", systemImage: "rectangle.and.text.magnifyingglass")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
             }
         }
     }
@@ -255,13 +265,19 @@ struct NetworkSectionView: View {
         VStack(alignment: .leading, spacing: 12) {
             TextField(
                 replacingConflict ? "Replacement room name (optional)" : "Room name (optional)",
-                text: roomName
+                text: roomName,
+                prompt: roomNamePrompt(replacingConflict: replacingConflict)
             )
-            .textFieldStyle(.roundedBorder)
-            // The system label colour, not `.primary`: inside this card the
+            .textFieldStyle(.plain)
+            .padding(.horizontal)
+            // IOS27-18: the rounded-border field was 34 pt tall and cannot
+            // grow; this field meets the 44 pt touch minimum.
+            .frame(minHeight: 44)
+            // The track colour, not `.primary`: inside this card the
             // hierarchical primary is porcelain, which is invisible on the
-            // white field of the light appearance.
-            .foregroundStyle(Color.primary)
+            // porcelain field.
+            .foregroundStyle(PomodoroughTheme.track)
+            .background(PomodoroughTheme.porcelain, in: .rect(cornerRadius: 10))
             .accessibilityHint("Optional, up to 64 characters. Room name is display-only.")
             Button {
                 let name = roomName.wrappedValue
@@ -287,6 +303,14 @@ struct NetworkSectionView: View {
             .foregroundStyle(PomodoroughTheme.platformDeep)
             .disabled(isCreating.wrappedValue || roomName.wrappedValue.unicodeScalars.count > 64)
         }
+    }
+
+    /// IOS27-08: the field is porcelain in both appearances, so the
+    /// placeholder uses the light-surface grey (about 8.5:1) instead of the
+    /// system placeholder (about 1.7:1).
+    private func roomNamePrompt(replacingConflict: Bool) -> Text {
+        let title: LocalizedStringKey = replacingConflict ? "Replacement room name (optional)" : "Room name (optional)"
+        return Text(title).foregroundStyle(PomodoroughTheme.secondaryTextOnLightSurface)
     }
 
     private func invitePanel(_ invite: String) -> some View {

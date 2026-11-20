@@ -218,6 +218,48 @@
         }
       }
     },
+    "%lld completed focus runs": {
+      "variations": {
+        "plural": {
+          "zero": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld completed focus runs⟧"
+            }
+          },
+          "one": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld completed focus run⟧"
+            }
+          },
+          "two": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld completed focus runs⟧"
+            }
+          },
+          "few": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld completed focus runs⟧"
+            }
+          },
+          "many": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld completed focus runs⟧"
+            }
+          },
+          "other": {
+            "stringUnit": {
+              "state": "translated",
+              "value": "‏⟦%lld completed focus runs⟧"
+            }
+          }
+        }
+      }
+    },
     "%lld completed pomodoros, %@": {
       "variations": {
         "plural": {
@@ -1310,6 +1352,12 @@
         "value": "‏⟦Exchanging changes⟧"
       }
     },
+    "Existing HTTPS account synchronization.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Existing HTTPS account synchronization.⟧"
+      }
+    },
     "FINISHED": {
       "stringUnit": {
         "state": "translated",
@@ -1676,6 +1724,12 @@
         "value": "‏⟦Navigate between Timer, Tasks, Arrivals, and Network⟧"
       }
     },
+    "Navigate between Timer, Tasks, Pattern, Arrivals, and Network": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Navigate between Timer, Tasks, Pattern, Arrivals, and Network⟧"
+      }
+    },
     "Network": {
       "stringUnit": {
         "state": "translated",
@@ -1964,6 +2018,12 @@
         "value": "‏⟦Pomodorough Cloud⟧"
       }
     },
+    "Pomodorough requests an operating-system notification for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Pomodorough requests an operating-system notification for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.⟧"
+      }
+    },
     "Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
       "stringUnit": {
         "state": "translated",
@@ -1974,6 +2034,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.⟧"
+      }
+    },
+    "Pomodorough requests an operating-system notification when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Pomodorough requests an operating-system notification when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.⟧"
       }
     },
     "Privacy and account": {
@@ -2088,6 +2154,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Reset⟧"
+      }
+    },
+    "Resolve the history choice first.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Resolve the history choice first.⟧"
       }
     },
     "Resolving history": {
@@ -2234,6 +2306,18 @@
         "value": "‏⟦Selected⟧"
       }
     },
+    "Selected, signed out": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Selected, signed out⟧"
+      }
+    },
+    "Selected, waiting for sign-in. Sign in with Google to start cloud sync. The timer keeps working on this device.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Selected, waiting for sign-in. Sign in with Google to start cloud sync. The timer keeps working on this device.⟧"
+      }
+    },
     "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable.": {
       "stringUnit": {
         "state": "translated",
@@ -2244,6 +2328,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Sends an alert and plays a sound until you dismiss it or start another timer.⟧"
+      }
+    },
+    "Sends an alert when a focus run or break ends, including while Pomodorough is not open. Delivery is controlled by iOS.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sends an alert when a focus run or break ends, including while Pomodorough is not open. Delivery is controlled by iOS.⟧"
       }
     },
     "Server resolved a duration change.": {
@@ -2304,6 +2394,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Settings, Pattern⟧"
+      }
+    },
+    "Settings…": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Settings…⟧"
       }
     },
     "Share invite": {
@@ -2426,6 +2522,18 @@
         "value": "‏⟦Sign in to sync across devices⟧"
       }
     },
+    "Sign in with Google to sync.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sign in with Google to sync.⟧"
+      }
+    },
+    "Sign in with Google to use cloud synchronization.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sign in with Google to use cloud synchronization.⟧"
+      }
+    },
     "Sign out": {
       "stringUnit": {
         "state": "translated",
@@ -2454,6 +2562,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Sign-out paused because local data could not be saved.⟧"
+      }
+    },
+    "Signed out": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Signed out⟧"
       }
     },
     "Signs in to sync your timer across devices": {
@@ -2526,6 +2640,18 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Sync⟧"
+      }
+    },
+    "Sync %@, device %@, %@": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sync %@, device %@, %@⟧"
+      }
+    },
+    "Sync is already running.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Sync is already running.⟧"
       }
     },
     "Sync needs attention": {
@@ -2726,6 +2852,12 @@
         "value": "‏⟦This device has %lld completed entries. Your account has %lld. Timers, tasks, or settings may also differ.⟧"
       }
     },
+    "This device keeps the timer on its own. Choose a network to sync.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦This device keeps the timer on its own. Choose a network to sync.⟧"
+      }
+    },
     "This device's timer, history, tasks, settings, and queued changes will be replaced by account data.": {
       "stringUnit": {
         "state": "translated",
@@ -2850,6 +2982,12 @@
       "stringUnit": {
         "state": "translated",
         "value": "‏⟦Total includes today’s completed Pomodoros and the current focus session.⟧"
+      }
+    },
+    "Touch and hold a task to rename it.": {
+      "stringUnit": {
+        "state": "translated",
+        "value": "‏⟦Touch and hold a task to rename it.⟧"
       }
     },
     "Type DELETE": {

@@ -383,6 +383,36 @@ class LocalizationContractTests(unittest.TestCase):
         self.assertTrue(checker.has_tagged_primary_destination(source, "Network", "network"))
         self.assertFalse(checker.has_tagged_primary_destination(source, "Network", "history"))
 
+    def test_macos_navigation_offers_pattern_and_menu_commands(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        main_container = (root / "Sources/Views/MainContainer.swift").read_text(encoding="utf-8")
+        app = (root / "Sources/PomodoroughApp.swift").read_text(encoding="utf-8")
+        commands = (root / "Sources/Views/MacOSAppCommands.swift").read_text(encoding="utf-8")
+        self.assertEqual(checker.macos_navigation_failures(main_container, app, commands), [])
+
+    def test_macos_navigation_rejects_settings_inspector_without_commands(self) -> None:
+        main_container = '''
+        Picker("Section", selection: $selectedTab) {
+            Text("Timer").tag(MainTab.timer)
+            Text("Tasks").tag(MainTab.tasks)
+            Text("Arrivals").tag(MainTab.history)
+            Text("Network").tag(MainTab.network)
+        }
+        .inspector(isPresented: $showsSettings) { ServicePatternScreen(model: model) }
+        window.setFrame(targetFrame, display: true, animate: true)
+        '''
+        failures = checker.macos_navigation_failures(main_container, ".windowResizability(.contentMinSize)", "")
+        self.assertIn("macOS Pattern primary destination missing", failures)
+        self.assertIn("macOS Pattern must not open as an inspector", failures)
+        self.assertIn("macOS navigation must not resize the window", failures)
+        self.assertIn("macOS window does not publish its sections to the menu commands", failures)
+        self.assertIn("macOS menu commands are not installed", failures)
+        self.assertIn("macOS Settings command missing", failures)
+        self.assertIn("macOS Settings command lacks Command-comma", failures)
+        self.assertIn("macOS Timer menu missing", failures)
+        self.assertIn("macOS section commands do nothing without a focused window", failures)
+        self.assertNotIn("macOS Network primary destination missing", failures)
+
     def test_shipping_catalog_rejects_non_english_locales(self) -> None:
         catalog = {
             "sourceLanguage": "en",

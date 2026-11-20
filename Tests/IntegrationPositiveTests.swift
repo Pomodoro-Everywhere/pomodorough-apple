@@ -913,7 +913,10 @@ struct IntegrationPositiveTests {
         #expect(restored.sessionState == .localOnly)
         #expect(restored.canonicalTimer?.status == .running)
         #expect(restored.pendingCommandCount == 1)
-        #expect(restored.syncLabel == "On device")
+        // IOS27-12: a fresh install selects Cloud with no account, so the
+        // status names the missing sign-in rather than "On device".
+        #expect(restored.replicationMode == .centralized)
+        #expect(restored.syncLabel == "Signed out")
     }
 
     #if os(iOS) || os(macOS)

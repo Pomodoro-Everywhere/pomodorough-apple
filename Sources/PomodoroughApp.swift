@@ -12,6 +12,7 @@ struct PomodoroughApp: App {
     @StateObject private var menuBarClock = MenuBarTimerClock()
     @AppStorage(MenuBarTimerDisplay.defaultsKey, store: DefaultStorageLocation.defaults)
     private var menuBarDisplay = MenuBarTimerDisplay.current
+    @State private var sectionRequests = MacOSSectionRequests()
 #endif
 
     init() {
@@ -34,6 +35,8 @@ struct PomodoroughApp: App {
             RootView(model: model)
 #if os(iOS)
                 .modifier(TimerLiveActivityModifier(model: model))
+#else
+                .environment(sectionRequests)
 #endif
                 .task {
                     model.setSceneActive(scenePhase == .active)
@@ -66,6 +69,7 @@ struct PomodoroughApp: App {
         .defaultSize(width: 920, height: 760)
         .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
+        .commands { MacOSAppCommands(model: model, sectionRequests: sectionRequests) }
 #endif
 #if os(macOS)
         MenuBarExtra {

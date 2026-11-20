@@ -1111,7 +1111,11 @@ final class LoopbackHTTPServer: @unchecked Sendable {
     }
 
     init(response: @escaping @Sendable (Data) -> LoopbackHTTPResponse) throws {
-        listener = try NWListener(using: .tcp, on: .any)
+        // Bind the loopback address only, so the stub never listens on a
+        // network interface. The client dials 127.0.0.1 (baseURL).
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        listener = try NWListener(using: parameters)
         let started = DispatchSemaphore(value: 0)
         let startup = StartupState()
 

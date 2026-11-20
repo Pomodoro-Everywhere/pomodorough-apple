@@ -54,13 +54,13 @@ struct HistoryRow: View {
             Text(item.phase.title).font(.headline)
             Text(taskContext)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PomodoroughTheme.secondaryText)
             HStack {
                 Text(item.statusText)
                 if let date = item.date { Text(date, format: .dateTime.month(.abbreviated).day().hour().minute()) }
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(PomodoroughTheme.secondaryText)
         }
     }
 

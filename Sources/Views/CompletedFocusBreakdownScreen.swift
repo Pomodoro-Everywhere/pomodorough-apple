@@ -26,16 +26,24 @@ struct CompletedFocusBreakdownScreen: View {
         PomodoroughTheme.danger
     ]
 
-    /// Chart height follows the container width so SE through iPad each
-    /// get a proportional pie inside the scrolling parent. Bounded so
-    /// narrow phones stay legible and wide screens never stretch the pie.
+    /// Chart height follows the visible container so SE through iPad each
+    /// get a proportional pie inside the scrolling parent. Width alone made
+    /// a landscape phone's pie taller than the screen (IOS27-20), so the
+    /// shorter of the width-derived height and a share of the visible
+    /// height wins. The floor keeps narrow phones legible but never lifts
+    /// the pie above that visible share; the cap stops wide screens
+    /// stretching it.
     static let chartAspectRatio: CGFloat = 1.35
+    static let chartVisibleHeightShare: CGFloat = 0.8
     static let chartMinHeight: CGFloat = 220
     static let chartMaxHeight: CGFloat = 380
 
-    static func chartHeight(forWidth width: CGFloat) -> CGFloat {
-        guard width > 0 else { return chartMinHeight }
-        return min(max(width / chartAspectRatio, chartMinHeight), chartMaxHeight)
+    static func chartHeight(for container: CGSize) -> CGFloat {
+        guard container.width > 0, container.height > 0 else { return 0 }
+        let visibleCap = container.height * chartVisibleHeightShare
+        let fitted = min(container.width / chartAspectRatio, visibleCap)
+        let floor = min(chartMinHeight, visibleCap)
+        return min(max(fitted, floor), chartMaxHeight)
     }
 
     /// Numbered-slice badge fill per position; the label partner comes
@@ -59,20 +67,28 @@ struct CompletedFocusBreakdownScreen: View {
                         .accessibilityValue("Finish a focus timer to see its time here.")
                 }
             } else {
-                ScrollView {
-                    VStack(spacing: 24) {
-                        totals(summaries)
-                        chart(entries)
-                        taskList(entries)
-                    }
-                    .padding()
-                    .frame(maxWidth: 680)
-                    .frame(maxWidth: .infinity)
-                }
+                breakdown(summaries, entries: entries)
             }
         }
         .navigationTitle("Completed focus")
         .inlineNavigationTitleIfSupported()
+    }
+
+    private func breakdown(
+        _ summaries: [CompletedFocusSummary], entries: [CompletedFocusChartEntry]
+    ) -> some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: 24) {
+                    totals(summaries)
+                    chart(entries, height: Self.chartHeight(for: proxy.size))
+                    taskList(entries)
+                }
+                .padding()
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+            }
+        }
     }
 
     private func totalPomodoros(in summaries: [CompletedFocusSummary]) -> Int {
@@ -104,11 +120,23 @@ struct CompletedFocusBreakdownScreen: View {
         }
     }
 
-    private func chart(_ entries: [CompletedFocusChartEntry]) -> some View {
+    // IOS27-17: each sector used to be its own VoiceOver element. Charts
+    // gave them frames wider than the screen, and they repeated the task
+    // list below, which already reads each slice's title, count and time.
+    // Charts keeps its sector elements under accessibilityElement(children:
+    // .ignore), so the chart is hidden and one element with the chart's own
+    // frame stands in for it.
+    private func chart(_ entries: [CompletedFocusChartEntry], height: CGFloat) -> some View {
         chartContent(entries)
-            .aspectRatio(Self.chartAspectRatio, contentMode: .fit)
-            .frame(minHeight: Self.chartMinHeight, maxHeight: Self.chartMaxHeight)
-            .accessibilityLabel("Completed focus time by task")
+            .accessibilityHidden(true)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .overlay {
+                Color.clear
+                    .accessibilityElement()
+                    .accessibilityLabel("Completed focus time by task")
+                    .accessibilityAddTraits(.isImage)
+            }
     }
 
     private func chartContent(_ entries: [CompletedFocusChartEntry]) -> some View {
@@ -124,8 +152,6 @@ struct CompletedFocusBreakdownScreen: View {
                     .foregroundStyle(entry.labelColor)
                     .accessibilityHidden(true)
             }
-            .accessibilityLabel(Self.accessibilityLabel(for: entry.summary))
-            .accessibilityValue(Self.accessibilityValue(for: entry.summary))
         }
         .chartForegroundStyleScale(
             domain: entries.map(\.id),
@@ -160,7 +186,7 @@ struct CompletedFocusBreakdownScreen: View {
                             .font(.body.weight(.semibold))
                         Text("\(summary.completedPomodoros) completed")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(PomodoroughTheme.secondaryText)
                     }
                     Spacer(minLength: 12)
                     Text(TaskTimeText.compact(summary.timeSpentMs))

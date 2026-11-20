@@ -94,7 +94,9 @@ struct HistoryResolutionView: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.headline)
-                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                Text(detail).font(.subheadline)
+                    // IOS27-08: the card is porcelain in both appearances.
+                    .foregroundStyle(PomodoroughTheme.secondaryTextOnLightSurface)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)

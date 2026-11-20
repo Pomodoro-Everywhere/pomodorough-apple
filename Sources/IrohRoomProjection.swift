@@ -1,7 +1,8 @@
 import Foundation
 
 enum IrohRoomProjection {
-    private struct ProjectionOperations {
+    // Internal, not private, so tests can build the input of `roomState`.
+    struct ProjectionOperations {
         var knownTasks: [UUID: FocusTask]
         var commands: [CoreTimerCommand] = []
         var taskOperations: [CoreTaskOperation] = []
@@ -65,9 +66,27 @@ enum IrohRoomProjection {
         var collected = try ProjectionOperations(genesis: genesis)
         for record in operations { try collected.ingest(record) }
         let output = try applySharedProjection(genesis, pending: collected.pending, at: projectionDate)
+        return try roomState(
+            workspace,
+            genesis: genesis,
+            operations: operations,
+            collected: collected,
+            output: output
+        )
+    }
+
+    /// Builds the room state from one SharedCore projection output. The task
+    /// list keeps SharedCore's task list order; the client does not sort it.
+    /// Internal so tests can pass an output in an order no local rule produces.
+    static func roomState(
+        _ workspace: IrohRoomWorkspace,
+        genesis: IrohGenesis,
+        operations: [IrohOperationRecord],
+        collected: ProjectionOperations,
+        output: CoreProjectionOutput
+    ) throws -> PersistedTimerState {
         var timer = restoreIntentDevice(output.canonicalTimer, devices: collected.deviceByCommand)
         var history = output.history
-        var tasks = output.tasks
         timer = restoreTerminalTimer(
             timer,
             history: history,
@@ -75,7 +94,6 @@ enum IrohRoomProjection {
             genesis: genesis,
             operations: collected
         )
-        tasks.sort(by: taskPrecedes)
         history.sort(by: historyPrecedes)
         var projected = projectedState(
             workspace,
@@ -85,7 +103,7 @@ enum IrohRoomProjection {
             output: output,
             timer: timer,
             history: history,
-            tasks: tasks
+            tasks: output.tasks
         )
         if let migration = projected.irohLegacyTaskMigration {
             try migration.validate(in: workspace)
@@ -249,16 +267,6 @@ enum IrohRoomProjection {
             return IrohProtocolV1.utf8Precedes(lhs.deviceId, rhs.deviceId)
         }
         return IrohProtocolV1.utf8Precedes(lhs.id, rhs.id)
-    }
-
-    private static func taskPrecedes(_ lhs: FocusTask, _ rhs: FocusTask) -> Bool {
-        if lhs.title != rhs.title {
-            return IrohProtocolV1.utf8Precedes(lhs.title, rhs.title)
-        }
-        return IrohProtocolV1.utf8Precedes(
-            lhs.id.uuidString.lowercased(),
-            rhs.id.uuidString.lowercased()
-        )
     }
 
     private static func historyPrecedes(_ lhs: HistoryItem, _ rhs: HistoryItem) -> Bool {

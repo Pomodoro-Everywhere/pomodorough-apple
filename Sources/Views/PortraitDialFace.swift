@@ -10,20 +10,7 @@ struct PortraitDialFace: View {
     var minutes: Int = 60
     var completedFocusCount = 0
 
-    @ViewBuilder
     var body: some View {
-        if ProcessInfo.processInfo.environment["POMODOROUGH_UI_TEST_DIAL"] == "1" {
-            dialShell
-        } else {
-            dialShell
-                .accessibilityRepresentation {
-                    TimerAccessibilityElement(phase: phase, status: status, timeText: timeText)
-                    LongBreakProgressIndicator(completedToday: completedFocusCount)
-                }
-        }
-    }
-
-    private var dialShell: some View {
         GeometryReader { geometry in
             face(diameter: geometry.size.width)
         }
@@ -43,34 +30,41 @@ struct PortraitDialFace: View {
                 .padding(16)
             TickMarks(count: minutes).stroke(PomodoroughTheme.track, lineWidth: 1)
             VStack(spacing: labelSize * 0.35) {
-                Text(phase.title.localizedUppercase)
-                    .font(labelFont)
-                    .foregroundStyle(PomodoroughTheme.signalText(onFill: PomodoroughTheme.skySRGB))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                VStack {
-                    Text(timeText)
-                        .font(.system(size: diameter * 0.27, weight: .black, design: .rounded))
-                        .monospacedDigit()
-                        .minimumScaleFactor(0.48)
-                        .lineLimit(1)
-                        .foregroundStyle(PomodoroughTheme.ticket)
-                        .accessibilityIdentifier("AP08-countdown-digits")
-                }
-                .padding(diameter * 0.04)
-                .frame(width: diameter * 0.8, height: diameter * 0.42)
-                .digitalReadoutPanel(cornerRadius: 18)
-                .overlay { RoundedRectangle(cornerRadius: 18).stroke(PomodoroughTheme.porcelain.opacity(0.8), lineWidth: 2) }
-                Text(status.localizedUppercase)
-                    .font(labelFont)
-                    .foregroundStyle(PomodoroughTheme.platform)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
+                readout(diameter: diameter, labelFont: labelFont, spacing: labelSize * 0.35)
                 LongBreakProgressIndicator(completedToday: completedFocusCount, color: PomodoroughTheme.platform, font: labelFont)
             }
             .frame(width: diameter * 0.84)
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+
+    private func readout(diameter: CGFloat, labelFont: Font, spacing: CGFloat) -> some View {
+        VStack(spacing: spacing) {
+            Text(phase.title.localizedUppercase)
+                .font(labelFont)
+                .foregroundStyle(PomodoroughTheme.signalText(onFill: PomodoroughTheme.skySRGB))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            VStack {
+                Text(timeText)
+                    .font(.system(size: diameter * 0.27, weight: .black, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.48)
+                    .lineLimit(1)
+                    .foregroundStyle(PomodoroughTheme.ticket)
+                    .accessibilityIdentifier("AP08-countdown-digits")
+            }
+            .padding(diameter * 0.04)
+            .frame(width: diameter * 0.8, height: diameter * 0.42)
+            .digitalReadoutPanel(cornerRadius: 18)
+            .overlay { RoundedRectangle(cornerRadius: 18).stroke(PomodoroughTheme.porcelain.opacity(0.8), lineWidth: 2) }
+            Text(status.localizedUppercase)
+                .font(labelFont)
+                .foregroundStyle(PomodoroughTheme.platform)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+        }
+        .timerAccessibilityElement(phase: phase, status: status, timeText: timeText)
     }
 }
 

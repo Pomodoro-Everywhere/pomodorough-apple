@@ -265,6 +265,28 @@
         }
       }
     },
+    "%lld completed focus runs": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld completed focus run"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld completed focus runs"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld completed pomodoros, %@": {
       "localizations": {
         "en": {
@@ -1471,6 +1493,16 @@
         }
       }
     },
+    "Existing HTTPS account synchronization.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Existing HTTPS account synchronization."
+          }
+        }
+      }
+    },
     "FINISHED": {
       "localizations": {
         "en": {
@@ -2082,6 +2114,16 @@
         }
       }
     },
+    "Navigate between Timer, Tasks, Pattern, Arrivals, and Network": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Navigate between Timer, Tasks, Pattern, Arrivals, and Network"
+          }
+        }
+      }
+    },
     "Network": {
       "localizations": {
         "en": {
@@ -2565,6 +2607,16 @@
         }
       }
     },
+    "Pomodorough requests an operating-system notification for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pomodorough requests an operating-system notification for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy."
+          }
+        }
+      }
+    },
     "Pomodorough requests an operating-system notification or alarm for timer completion. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
       "localizations": {
         "en": {
@@ -2581,6 +2633,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy."
+          }
+        }
+      }
+    },
+    "Pomodorough requests an operating-system notification when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pomodorough requests an operating-system notification when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy."
           }
         }
       }
@@ -2771,6 +2833,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Reset"
+          }
+        }
+      }
+    },
+    "Resolve the history choice first.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resolve the history choice first."
           }
         }
       }
@@ -3015,6 +3087,26 @@
         }
       }
     },
+    "Selected, signed out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected, signed out"
+          }
+        }
+      }
+    },
+    "Selected, waiting for sign-in. Sign in with Google to start cloud sync. The timer keeps working on this device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected, waiting for sign-in. Sign in with Google to start cloud sync. The timer keeps working on this device."
+          }
+        }
+      }
+    },
     "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable.": {
       "localizations": {
         "en": {
@@ -3031,6 +3123,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sends an alert and plays a sound until you dismiss it or start another timer."
+          }
+        }
+      }
+    },
+    "Sends an alert when a focus run or break ends, including while Pomodorough is not open. Delivery is controlled by iOS.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends an alert when a focus run or break ends, including while Pomodorough is not open. Delivery is controlled by iOS."
           }
         }
       }
@@ -3131,6 +3233,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Settings, Pattern"
+          }
+        }
+      }
+    },
+    "Settings…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings…"
           }
         }
       }
@@ -3335,6 +3447,26 @@
         }
       }
     },
+    "Sign in with Google to sync.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with Google to sync."
+          }
+        }
+      }
+    },
+    "Sign in with Google to use cloud synchronization.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with Google to use cloud synchronization."
+          }
+        }
+      }
+    },
     "Sign out": {
       "localizations": {
         "en": {
@@ -3381,6 +3513,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sign-out paused because local data could not be saved."
+          }
+        }
+      }
+    },
+    "Signed out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed out"
           }
         }
       }
@@ -3502,6 +3644,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sync"
+          }
+        }
+      }
+    },
+    "Sync %@, device %@, %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync %@, device %@, %@"
+          }
+        }
+      }
+    },
+    "Sync is already running.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync is already running."
           }
         }
       }
@@ -3789,6 +3951,16 @@
         }
       }
     },
+    "This device keeps the timer on its own. Choose a network to sync.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device keeps the timer on its own. Choose a network to sync."
+          }
+        }
+      }
+    },
     "This device's timer, history, tasks, settings, and queued changes will be replaced by account data.": {
       "localizations": {
         "en": {
@@ -3950,6 +4122,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Total includes today’s completed Pomodoros and the current focus session."
+          }
+        }
+      }
+    },
+    "Touch and hold a task to rename it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Touch and hold a task to rename it."
           }
         }
       }

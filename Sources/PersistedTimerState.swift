@@ -173,7 +173,9 @@ extension PersistedTimerState {
             guard let wall = canonicalHeadWallMs, let counter = canonicalHeadCounter else {
                 return canonicalHeadWallMs == nil && canonicalHeadCounter == nil
             }
-            return WireBounds.isValidClock(wallMs: wall, counter: counter)
+            // R55-C14: the canonical pair may be any safe non-negative pair;
+            // (0, 0) is the head of a workspace with no ordered operation.
+            return WireBounds.containsUnsigned(wall) && WireBounds.containsUnsigned(counter)
         }()
         return neverSentCommandIDs.isSubset(of: commandIDs)
             && neverSentTaskOperationIDs.isSubset(of: taskIDs)

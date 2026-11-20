@@ -33,14 +33,14 @@ struct PermissionIntroductionView: View {
                 .font(.largeTitle.bold())
                 .multilineTextAlignment(.center)
                 .foregroundStyle(PomodoroughTheme.porcelain)
-            Text("Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.")
+            Text(TimerAlertCopy.current.introductionSummary)
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(PomodoroughTheme.sky)
         }
         .accessibilityRepresentation {
             Text("Hear when time is up")
-                .accessibilityValue("Pomodorough requests an operating-system notification or alarm when a focus run or break ends. Delivery requires your authorization and remains subject to the operating system's delivery policy.")
+                .accessibilityValue(TimerAlertCopy.current.introductionSummary)
         }
     }
 
@@ -50,7 +50,7 @@ struct PermissionIntroductionView: View {
             PermissionIntroductionCard(
                 icon: "bell.badge.fill",
                 title: "Notifications",
-                detail: notificationDetail,
+                detail: TimerAlertCopy.current.notificationDetail,
                 color: PomodoroughTheme.sky
             )
 #if os(iOS)
@@ -97,14 +97,6 @@ struct PermissionIntroductionView: View {
                 .foregroundStyle(PomodoroughTheme.steel)
                 .accessibilityHidden(true)
         }
-    }
-
-    private var notificationDetail: String {
-#if os(iOS)
-        String(localized: "Sends a backup alert when an interval ends. Used on older iOS versions or when alarms are unavailable.")
-#else
-        String(localized: "Sends an alert and plays a sound until you dismiss it or start another timer.")
-#endif
     }
 }
 

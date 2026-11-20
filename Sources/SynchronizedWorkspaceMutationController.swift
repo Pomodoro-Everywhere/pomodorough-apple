@@ -683,6 +683,24 @@ private extension SynchronizedWorkspaceMutationController {
     }
 }
 
+extension SynchronizedWorkspaceMutationController.Intent {
+    /// Whether only a person's timer control issues this intent: Start,
+    /// Pause, Resume, Cancel, Skip or a phase choice, and the focus task
+    /// choice. Settings and task board edits are not timer controls.
+    /// `.command` and `.commit` also carry automatic completion and
+    /// automatic breaks, so Finish reports its use in `AppModel.finish(at:)`.
+    var isTimerControl: Bool {
+        switch self {
+        case .selectPhase, .selectTask, .startTimer, .pauseTimer,
+             .resumeTimer, .cancelTimer, .clearTimer:
+            return true
+        case .setAutoStartBreaks, .setDurationMinutes, .task, .renameTask,
+             .command, .commit:
+            return false
+        }
+    }
+}
+
 extension SynchronizedWorkspaceMutationController.Requirements {
     func areSatisfied(by output: CoreProjectionOutput) -> Bool {
         timerCommandIDs.allSatisfy {

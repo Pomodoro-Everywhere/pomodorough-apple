@@ -33,6 +33,15 @@ enum SwipeToDeleteMetrics {
         return min(max(base + travel, 0), max(rowWidth, 0))
     }
 
+    /// Travel toward the reading trailing edge from a physical horizontal
+    /// distance. UIKit window coordinates do not mirror, but the row's
+    /// offset and its trailing Delete action do, so a right-to-left layout
+    /// keeps the sign: a rightward drag there uncovers Delete on the left
+    /// and the row follows the finger (IOS18-03).
+    static func trailingTravel(physicalDistance: CGFloat, layoutDirection: LayoutDirection) -> CGFloat {
+        layoutDirection == .rightToLeft ? physicalDistance : -physicalDistance
+    }
+
     /// UIScrollView's normal deceleration rate per millisecond. A flick
     /// projects as far as a scroll view would coast at this rate.
     static let decelerationRate: CGFloat = 0.998
@@ -61,13 +70,17 @@ struct SwipeToDeleteRow<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var rowWidth: CGFloat = 0
     @State private var exposure: CGFloat = 0
     @State private var isOpen = false
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            deleteAction
+            // IOS27-01: a closed row draws no action at all. The fixed-width
+            // label used to overflow the zero-width button, so dark mode
+            // showed a white "Delete" under every row's trash button.
+            if exposure > 0 { deleteAction }
             content()
                 .contentShape(.rect)
                 .offset(x: -exposure)
@@ -75,7 +88,7 @@ struct SwipeToDeleteRow<Content: View>: View {
                     guard isOpen else { return }
                     settle(.closed)
                 }
-                .gesture(HorizontalSwipeGesture(onSwipe: follow))
+                .gesture(HorizontalSwipeGesture(layoutDirection: layoutDirection, onSwipe: follow))
         }
         .clipped()
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -98,6 +111,9 @@ struct SwipeToDeleteRow<Content: View>: View {
         .buttonStyle(.plain)
         .frame(width: exposure)
         .frame(maxHeight: .infinity)
+        // The label keeps the revealed width while the drag exposes less;
+        // the clip keeps it inside the uncovered strip, not under the row.
+        .clipped()
         .accessibilityHidden(!isOpen)
     }
 

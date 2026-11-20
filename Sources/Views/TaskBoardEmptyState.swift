@@ -11,7 +11,7 @@ struct TaskBoardEmptyState: View {
                 .font(.headline)
             Text("Add a task, then assign it before starting focus.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PomodoroughTheme.secondaryText)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)

@@ -13,6 +13,14 @@ struct VoiceOverCountPluralTests {
         #expect(HistoryScreen.breakdownAccessibilityValue(completed: 0, runs: 0) == "0 completed of 0 runs")
     }
 
+    /// IOS27-17: the Account line status value spoke "1 completed focus runs".
+    @Test func accountLineStatusPluralizesCompletedFocusRuns() {
+        let one = AccountView.lineStatusAccessibilityValue(syncLabel: "Offline", deviceMark: "AB12", completedFocusCount: 1)
+        let three = AccountView.lineStatusAccessibilityValue(syncLabel: "Offline", deviceMark: "AB12", completedFocusCount: 3)
+        #expect(one == "Sync Offline, device AB12, 1 completed focus run")
+        #expect(three == "Sync Offline, device AB12, 3 completed focus runs")
+    }
+
     @Test func taskRowLabelPluralizesFinishedPomodoros() throws {
         let task = try #require(FocusTask(title: "Deep work"))
         let one = TaskDailySummary(task: task, finishedPomodoros: 1, timeSpentMs: 60_000)

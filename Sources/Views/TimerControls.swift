@@ -180,15 +180,28 @@ struct TimerControls: View {
         }
     }
 
-    /// Second row(s) under the primary control. `pairInline` keeps
-    /// Finish/Cancel side by side; false gives each its own row for
-    /// columns too narrow to show both labels.
-    @ViewBuilder
-    private func secondaryStackedButtons(glass: Bool, pairInline: Bool = true) -> some View {
-        if model.isTimerActive, pairInline {
+    /// Finish and Cancel share a row only while both labels fit on one
+    /// line. At the largest text sizes a phone row split them into
+    /// hyphenated "Fin-ish" and "Can-cel" buttons of different heights
+    /// (IOS27-15), so each then takes its own full-width row.
+    private func finishCancelPair(glass: Bool) -> some View {
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
                 finishCancelButtons(glass: glass)
             }
+            VStack(spacing: 14) {
+                finishCancelButtons(glass: glass)
+            }
+        }
+    }
+
+    /// Second row(s) under the primary control. `pairInline` keeps
+    /// Finish/Cancel side by side where both labels fit; false gives each
+    /// its own row for columns too narrow to show both labels.
+    @ViewBuilder
+    private func secondaryStackedButtons(glass: Bool, pairInline: Bool = true) -> some View {
+        if model.isTimerActive, pairInline {
+            finishCancelPair(glass: glass)
         } else if model.isTimerActive {
             finishCancelButtons(glass: glass)
         }

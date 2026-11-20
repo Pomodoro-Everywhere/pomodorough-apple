@@ -258,6 +258,11 @@ final class AppModel {
 
     private(set) var sessionState: SessionState = .restoring
     private(set) var canonicalTimer: CanonicalTimer?
+    /// IOS27-23: the person used a timer control in this process, from the
+    /// Timer screen, the menu bar, a widget link or the Watch. A timer change
+    /// that sync or automatic completion delivers leaves it false. It never
+    /// resets and is not persisted: a new launch starts with no interaction.
+    private(set) var timerControlUsedInProcess = false
     private(set) var history: [HistoryItem] = []
     private(set) var tasks: [FocusTask] = []
     private(set) var isWorking = false
@@ -279,6 +284,10 @@ final class AppModel {
     private(set) var roomInvite: String?
     private(set) var completionAlertTimerID: String?
     private(set) var isIrohRoomLeaveConfirmationPresented = false
+    /// A requested room leave that the person has neither confirmed nor
+    /// cancelled. It outlives the dialog's dismissal, so the Leave button
+    /// works whichever of dismissal and button action SwiftUI runs first.
+    private var isIrohRoomLeaveAwaitingDecision = false
     private(set) var isLeavingIrohRoom = false
     private(set) var snapshotLoadFailure: AppStatePersistenceCoordinator.SnapshotLoadFailure?
     private(set) var hasOversizedSavedSyncClaim = false
@@ -843,7 +852,9 @@ final class AppModel {
             return irohStatus.label
         }
         if replicationMode == .offline { return String(localized: "On device") }
-        if !isSignedIn { return String(localized: "On device") }
+        // IOS27-12: Cloud is the selected line but has no account, so the
+        // label names the missing sign-in instead of the on-device label.
+        if !isSignedIn { return String(localized: "Signed out") }
         if isHistoryResolutionBlocking {
             switch historyResolutionState {
             case .preflighting: return String(localized: "Checking history")
@@ -1081,6 +1092,12 @@ final class AppModel {
     @discardableResult
     func selectPhase(_ phase: TimerPhase) -> Bool {
         performWorkspaceMutation(.selectPhase(phase))
+    }
+
+    /// Selects the phase the Skip control offers.
+    @discardableResult
+    func skipSelectedPhase() -> Bool {
+        selectPhase(skipDestination)
     }
 
     @discardableResult
@@ -1867,6 +1884,7 @@ final class AppModel {
         replicationMode = .offline
         roomInvite = nil
         isIrohRoomLeaveConfirmationPresented = false
+        isIrohRoomLeaveAwaitingDecision = false
         irohStatus = .stopped
         rebuildOptimisticState()
         guard clearAccountDeletionState() else {
@@ -2106,6 +2124,9 @@ final class AppModel {
 
     @discardableResult
     func finish(at explicitDate: Date? = nil) -> Bool {
+        // Finish commits through `.command` and `.commit`, which automatic
+        // completion shares, so the person's Finish reports its use here.
+        timerControlUsedInProcess = true
         guard !isWorkspaceMutationBlocked else { return false }
         if foregroundSyncPending, needsForegroundSync {
             // AP120: no sync result exists yet, so the copy must not claim
@@ -3029,23 +3050,45 @@ final class AppModel {
         guard accountDeletionPurgeState == nil else { return }
         guard replicationMode == .iroh, !isLeavingIrohRoom else { return }
         isIrohRoomLeaveConfirmationPresented = true
+        isIrohRoomLeaveAwaitingDecision = true
     }
 
     func cancelIrohRoomLeave() {
         guard !isLeavingIrohRoom else { return }
         isIrohRoomLeaveConfirmationPresented = false
+        isIrohRoomLeaveAwaitingDecision = false
     }
 
-    func confirmIrohRoomLeave() async {
-        guard snapshotLoadFailure == nil else { return }
-        guard accountDeletionPurgeState == nil else { return }
-        guard replicationMode == .iroh,
-              isIrohRoomLeaveConfirmationPresented,
-              !isLeavingIrohRoom else { return }
+    /// The leave dialog left the screen. This hides the dialog only. The
+    /// request stays open for the Leave button's action, which SwiftUI may
+    /// run after it reports the dismissal; only Cancel, a confirmed leave or
+    /// a new request ends it.
+    func dismissIrohRoomLeaveConfirmation() {
         isIrohRoomLeaveConfirmationPresented = false
-        guard admitsWorkspaceOwnershipChange() else { return }
+    }
+
+    // IOS18-02: the dialog's dismissal used to cancel the request. The
+    // dismissal always reached the model before the Task the Leave button
+    // spawned, so the confirmation found no request and did nothing. The
+    // Leave button now calls this synchronously and the request survives
+    // the dismissal, so the order of the two no longer matters. Only the
+    // room stop is deferred.
+    @discardableResult
+    func confirmIrohRoomLeave() -> Task<Void, Never>? {
+        guard snapshotLoadFailure == nil else { return nil }
+        guard accountDeletionPurgeState == nil else { return nil }
+        guard replicationMode == .iroh,
+              isIrohRoomLeaveAwaitingDecision,
+              !isLeavingIrohRoom else { return nil }
+        isIrohRoomLeaveConfirmationPresented = false
+        isIrohRoomLeaveAwaitingDecision = false
+        guard admitsWorkspaceOwnershipChange() else { return nil }
         isLeavingIrohRoom = true
         suspendTimerCompletion()
+        return Task { await leaveConfirmedIrohRoom() }
+    }
+
+    private func leaveConfirmedIrohRoom() async {
         defer { isLeavingIrohRoom = false }
         let transition = await roomReplicationController.leaveRoom(
             environment: roomReplicationEnvironment
@@ -3214,6 +3257,7 @@ final class AppModel {
     private func performWorkspaceMutation(
         _ intent: SynchronizedWorkspaceMutationController.Intent
     ) -> Bool {
+        if intent.isTimerControl { timerControlUsedInProcess = true }
         endTaskDeletionUndoWindow(before: intent)
         do {
             guard let transition = try workspaceMutationController.plan(
