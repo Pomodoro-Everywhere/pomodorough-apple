@@ -12,6 +12,7 @@ import XCTest
 final class PomodoroughArrivalsBreakdownUITests: XCTestCase {
     private static let largestText = "UICTContentSizeCategoryAccessibilityXXXL"
     private static let defaultText = "UICTContentSizeCategoryL"
+    private static let chartLabel = "Completed focus time by task"
 
     func testBreakdownAndAccountStayOutOfMoreAtAccessibilityXXXL() {
         assertArrivalsToolbarKeepsAccount(contentSize: Self.largestText)
@@ -97,11 +98,24 @@ final class PomodoroughArrivalsBreakdownUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(chart.frame.minX, app.frame.minX - 1)
         XCTAssertLessThanOrEqual(chart.frame.maxX, app.frame.maxX + 1, "the chart \(chart.frame) fits the screen")
         // A sector element is wider than the screen and sits beside the
-        // chart element, not inside it, so look at the whole scroll view.
+        // chart element, not inside it, so look at all of the screen's own
+        // content. The scroll view's other children belong to the system:
+        // iOS 26 puts an unlabelled 'AdditionalDimmingOverlay' image wider
+        // than the screen in the scroll edge effect behind the tab bar.
         let screen = app.frame.insetBy(dx: -1, dy: 0)
-        let elements = app.scrollViews.firstMatch.descendants(matching: .any).allElementsBoundByIndex
+        let elements = breakdownContent(in: app).descendants(matching: .any).allElementsBoundByIndex
         let offscreen = elements.map(\.frame).filter { $0.minX < screen.minX || $0.maxX > screen.maxX }
         XCTAssertEqual(offscreen, [], "no element is wider than the screen: \(app.debugDescription)")
+    }
+
+    /// The scroll view's child that holds the chart: the screen's totals,
+    /// chart and task list, without the system's scroll edge effects and
+    /// scroll bars.
+    private func breakdownContent(in app: XCUIApplication) -> XCUIElement {
+        let content = app.scrollViews.firstMatch.children(matching: .any)
+            .containing(NSPredicate(format: "label == %@", Self.chartLabel)).firstMatch
+        XCTAssertTrue(content.exists, "the chart sits in the scroll view's content")
+        return content
     }
 
     private func arrivalsWithOneCompletedFocus(contentSize: String) -> XCUIApplication {
@@ -124,7 +138,7 @@ final class PomodoroughArrivalsBreakdownUITests: XCTestCase {
 
     private func chartElement(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Completed focus time by task")).firstMatch
+            .matching(NSPredicate(format: "label == %@", Self.chartLabel)).firstMatch
     }
 
     private func tapWhenReachable(_ element: XCUIElement, in app: XCUIApplication) {
